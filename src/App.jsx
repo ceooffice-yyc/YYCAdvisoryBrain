@@ -653,7 +653,7 @@ export default function App() {
       <div className="yyc-shell">
         <aside className="yyc-sidebar">
           <div className="yyc-brand">
-            <div className="yyc-brand-mark"><img src="./assets/logo.png" alt="YYC Logo" /></div>
+            <div className="yyc-brand-mark"><img src="/logo.png" alt="YYC Logo" /></div>
             <div className="yyc-brand-text">
               <div className="yyc-brand-name">{t.appTitle}</div>
               <div className="yyc-brand-sub">{t.appSub}</div>
@@ -702,7 +702,7 @@ export default function App() {
         <main className="yyc-main">
           <header className="yyc-topbar">
             <div className="yyc-brand">
-              <div className="yyc-brand-mark"><img src="./assets/logo.png" alt="YYC Logo" /></div>
+              <div className="yyc-brand-mark"><img src="/logo.png" alt="YYC Logo" /></div>
               <div className="yyc-brand-text">
                 <div className="yyc-brand-name">{t.appTitle}</div>
                 <div className="yyc-brand-sub">{t.appSub}</div>
