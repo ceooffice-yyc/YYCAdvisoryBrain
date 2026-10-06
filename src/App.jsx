@@ -1323,9 +1323,11 @@ function leverHeadingOf(p) {
   const hit = words <= 5 ? HEADING_LEVER.find(([re]) => re.test(x)) : null;
   if (hit) {
     const rest = x.slice(x.match(hit[0])[0].length);
-    if (/^[\s/&,-]*(and\s+)?(strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x;
+    if (/^[\s/&,-]*(and\s+)?(days?|strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x; // "Receivable Days", "Payable Days", "Talent Strategy"
   }
-  if (words <= 8 && /^(other\b[^.]*strateg|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg)/i.test(x)) return x;
+  if (words <= 8 && /^(other\b[^.]*strateg|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i.test(x)) return x;
+  // a short line that ends with a colon and names strategies/growth is a group heading ("Additional Cash & Growth Strategies:")
+  if (words <= 8 && /:\s*$/.test(String(p || "").trim()) && /\b(strateg(y|ies)|growth)\b/i.test(x)) return x;
   return null;
 }
 const KNOWN_HEADING = { test: (p) => !!leverHeadingOf(p) }; // keeps the old .test() call sites working
@@ -1342,7 +1344,7 @@ const HEADING_LEVER = [
   [/^(accounts )?payables?\b|^ap\b/i, "ap_days"],
   [/^(talent|people|hiring)\b/i, "talent_strategy"],
   [/^(unique )?(product )?differentiation\b|^unique product\b/i, "product_differentiation"],
-  [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg)/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
+  [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
 ];
 const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = HEADING_LEVER.find(([re]) => re.test(x)); return hit ? hit[1] : null; };
 const isTitleLike = (p) => { const t = p.trim(); return t.length <= 80 && !/\n/.test(t) && !/[.!?]$/.test(t); };
@@ -1390,33 +1392,33 @@ const KEY_STRATEGY_LABEL = /^\s*key strateg/i;
 const FIELD_LABEL_SECTION = /^\s*(problem|formula|theory|result|results|outcome|kpis?|fail|lesson|timeline|history|background|chronolog)/i;
 const normWs = (s) => String(s || "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[‐-―]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
 
-/* The impact must be the document's ORIGINAL sentence(s). If the model returned a short (<=50 words) impact that is not a
-   verbatim substring, replace it with the source sentence (or 2 consecutive sentences) it overlaps most, so small rewordings
-   never survive. A genuine >50-word rephrase is left alone. */
+/* The description and the impact must be the document's ORIGINAL words, of any length. The model sometimes condenses or
+   rewords them anyway, so after extraction the text is replaced with the run of consecutive source sentences it matches
+   best (Jaccard word overlap >= 0.5). No word limit: a 120-word paragraph is kept whole.
+   `prefixOnly` = descriptions, which always start at the first sentence of the strategy's paragraph. */
 const wordCount = (s) => String(s || "").trim().split(/\s+/).filter(Boolean).length;
-function snapToSource(impact, sourceText) {
-  const src = normWs(sourceText);
-  const sents = String(sourceText).split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 15);
-  if (wordCount(impact) > 50) return impact;
-  if (src.includes(normWs(impact))) {
-    // verbatim but maybe a fragment ("generated approximately…") → widen to the full original sentence so it keeps its subject
-    const whole = sents.find((x) => normWs(x).includes(normWs(impact)) && wordCount(x) <= 50);
-    return whole || impact;
-  }
-  const tok = (s) => new Set(normWs(s).replace(/[^\p{L}\p{N}%$.\s-]/gu, " ").split(/\s+/).filter((w) => w.length > 2));
-  const want = tok(impact);
-  if (!want.size) return impact;
+const sentencesOf = (s) => String(s || "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 1);
+const tokSet = (s) => new Set(normWs(s).replace(/[^\p{L}\p{N}%$.\s-]/gu, " ").split(/\s+/).filter((w) => w.length > 2));
+function snapToSource(modelText, sents, prefixOnly = false) {
+  const want = tokSet(modelText);
+  if (!want.size || !sents.length) return modelText;
+  // a fragment that sits inside one original sentence ("brought both cash and a strong operator") → that whole sentence
+  const mn = normWs(modelText);
+  const whole = sents.find((x) => normWs(x).includes(mn));
+  if (whole) return whole;
   let best = null, bestScore = 0;
   for (let i = 0; i < sents.length; i++) {
-    for (const cand of [sents[i], sents[i + 1] ? `${sents[i]} ${sents[i + 1]}` : null]) {
-      if (!cand || wordCount(cand) > 50) continue;
-      const have = tok(cand);
+    if (prefixOnly && i > 0) break;
+    let run = "";
+    for (let j = i; j < sents.length && j < i + 14; j++) {
+      run = run ? `${run} ${sents[j]}` : sents[j];
+      const have = tokSet(run);
       let hit = 0; want.forEach((w) => { if (have.has(w)) hit++; });
       const score = hit / (want.size + have.size - hit); // Jaccard
-      if (score > bestScore) { bestScore = score; best = cand; }
+      if (score > bestScore) { bestScore = score; best = run; }
     }
   }
-  return best && bestScore >= 0.5 ? best : impact;
+  return best && bestScore >= 0.5 ? best : modelText;
 }
 
 /* Cut the document down to its Key Strategies part in CODE (the model can't be trusted to ignore a timeline
@@ -1565,7 +1567,7 @@ ${context}
       const pclHit = (x) => { const n = normWs(stripImpactLabel(x)); return !!n && (/^\s*power\s+cash\s+link/i.test(x) || pclTexts.some((t) => t === n || t.includes(n) || n.includes(t))); };
       const imp = pclHit(l.impact) ? "" : stripImpactLabel(l.impact);
       const isNone = (x) => !x || /^(n\/?a|none|nil|not (available|stated|specified)|-+|—)\.?$/i.test(x);
-      const snapped = isNone(imp) ? "" : stripImpactLabel(snapToSource(imp, text)); // snapping can re-attach the source's own label → strip again
+      const snapped = isNone(imp) ? "" : imp; // snapped to the document's own sentences in the final stage
       l.impact = isNone(snapped) ? "N/A" : snapped;
       const key =`${l.lever}|${normWs(l.claim_en).slice(0, 40)}`;
       if (seenLev.has(key)) continue;
@@ -1607,6 +1609,19 @@ ${context}
   // description can never be mistaken for the "Volume" heading
   const paraStarts = (() => { const out = []; let cur = 0; for (const p of bodyParas) { const n = normWs(p); const i = nBody.indexOf(n, cur); if (i >= 0) { out.push({ pos: i, n, p }); cur = i + n.length; } } return out; })();
   const heads = paraStarts.map((x) => ({ pos: x.pos, text: leverHeadingOf(x.p) })).filter((x) => x.text);
+  // the strategy's own paragraph + the label / follow-up paragraphs under it, up to the next strategy or heading
+  const regionOf = (l) => {
+    const pos = locateClaim(nBody, l.claim_en, heads, l.lever, paraStarts);
+    const k = paraStarts.findIndex((x) => x.pos === pos);
+    if (k < 0) return null;
+    const paras = [paraStarts[k].p];
+    for (let q = k + 1; q < paraStarts.length; q++) {
+      const pq = paraStarts[q].p;
+      if (leverHeadingOf(pq) || (TITLE_COLON.test(pq) && !LABEL_PARA.test(pq))) break;
+      paras.push(pq);
+    }
+    return paras;
+  };
   merged.levers = merged.levers
     .filter((l) => !FIELD_LABEL_SECTION.test(l.section || ""))
     .map((l) => ({ ...l, section: relabel(l.section) }))
@@ -1618,6 +1633,27 @@ ${context}
     })
     // lever follows the heading (Pricing → price even if the strategy reads like differentiation; "Other…" headings → others)
     .map((l) => { const fixed = leverFromHeading(l.section); return fixed && fixed !== l.lever ? { ...l, lever: fixed } : l; })
+    // description + impact = the document's ORIGINAL sentences (no length limit), whatever the model made of them
+    .map((l) => {
+      const paras = regionOf(l);
+      if (!paras) return l;
+      const { name, desc } = splitClaim(l.claim_en);
+      const descSents = sentencesOf(paras[0].replace(TITLE_COLON.test(paras[0]) ? /^[^:\n]{2,299}?:\s+/ : /^$/, ""));
+      const impSents = [...descSents, ...paras.slice(1).filter((q) => !/^power\s+cash\s+link\s*[:：]/i.test(q)).flatMap((q) => sentencesOf(stripImpactLabel(q)))];
+      // the document's own labelled impact paragraph ("Actual Impact:", "Impact:", "Financial Impact:", "Result:") is used whole and unchanged;
+      // only when there is none do we fall back to matching the model's impact to the nearest original sentence(s)
+      const labelled = paras.slice(1).filter((q) => /^(actual\s+impacts?|impacts?|financial\s+impact|results?)\b[^:：\n]{0,30}[:：]/i.test(q));
+      const impact = labelled.length
+        ? labelled.map((q) => stripImpactLabel(q)).join(" ")
+        : (l.impact && l.impact !== "N/A" ? stripImpactLabel(snapToSource(l.impact, impSents)) : l.impact);
+      // description = the WHOLE original paragraph, minus the sentence(s) that went into the impact box — never shortened
+      const impN = impact && impact !== "N/A" ? normWs(impact) : "";
+      const descFull = descSents.filter((sn) => !impN || !impN.includes(normWs(sn)));
+      // a one-sentence strategy whose "impact" swallowed the entire description is just a description: keep the full original sentence, impact = N/A
+      const swallowed = !descFull.length && descSents.length && !labelled.length;
+      const newDesc = name ? (swallowed ? descSents.join(" ") : descFull.length ? descFull.join(" ") : snapToSource(desc, descSents, true)) : l.claim_en;
+      return { ...l, claim_en: name ? `${name}: ${newDesc}` : newDesc, impact: swallowed ? "N/A" : (impact || "N/A") };
+    })
     // enforce the "verbatim" rule: drop a quote the model paraphrased or invented
     .map((l) => (l.quote && !src.includes(normWs(l.quote)) ? { ...l, quote: "" } : l))
     // keep the document's own order (recovered strategies are appended last by the coverage check)
@@ -1689,10 +1725,8 @@ Each record is shown to the reader as:   **strategy_name**: description   follow
   • NEVER use a "Power Cash Link:" line, and never use reasoning about why it should help ("may", "can", "potentially", "this lowers…" explanations written as theory) as the impact.
   • If the document gives NO actual impact for this strategy, set impact to exactly "N/A". Do NOT substitute the Power Cash Link, do NOT invent one, do NOT leave it empty.
   An outcome clause at the end of a description sentence is the IMPACT, not part of the description: put it in "impact" and keep it out of "description". Start the impact at the beginning of the sentence so it reads on its own and keeps its subject (e.g. "It generated approximately US$2 million in its first full year.", not "generated approximately…").
-- IMPACT = THE ORIGINAL SENTENCE(S), NOT YOUR OWN WORDS. Find the sentence(s) in the document that state the actual impact and paste them character-for-character (same words, order, numbers, punctuation, quotation marks). Do not paraphrase, merge sentences, reorder, add words or trim words from a sentence that is 50 words or fewer. Only when the impact text in the document is MORE than 50 words may you rephrase it (at most 50 words, keeping the numbers and names).
-- For BOTH description and impact, COUNT THE WORDS of the document's text first:
-    • 50 words or fewer → copy it EXACTLY — same words, same order, same numbers, no rewording, no shortening.
-    • more than 50 words → you MUST condense it to at most 50 words (do not paste long paragraphs), using the document's own wording and keeping every number and name that matters.
+- EXACT COPY, NO LENGTH LIMIT. "description" and "impact" must be the document's ORIGINAL text, word for word: same words, same order, same numbers, same punctuation and quotation marks. This applies however long the text is — a 25-word sentence and a 120-word paragraph are both pasted in full. NEVER shorten, summarise, condense, paraphrase, reword, merge sentences, reorder, or add words of your own. The only thing you may leave out is text that belongs in the other field (the outcome sentence(s) go to "impact", not "description") and the "Power Cash Link" lines (never used). If you are tempted to shorten because the text is long, do not — copy it whole.
+- Impact = the original outcome sentence(s) only, starting at the beginning of a sentence so it keeps its subject (e.g. "It generated approximately US$2 million in its first full year.", not "generated approximately…").
 - Never add facts that are not in the document, and never merge text from different strategies.
 
 ═══ 4. DOCUMENT FORMATS (learn both before extracting) ═══
@@ -1710,7 +1744,7 @@ FORMAT A — LONG CASE STUDY. Narrative part, then an "Analysis" / "Power Cash L
     (ii)  Title alone on one line, description on the NEXT line/paragraph (table-like)   e.g. "Combine Multiple Needs in One Offering" then its description
     (iii) Short noun-phrase titles, e.g. "Find-A-Bear identification system" then its description
   Every such title inside an in-scope heading (Pricing … Talent Strategy, Other Strategies) is a strategy — even short ones and ones that repeat a title used under another lever.
-    (iv)  OUTLINE: a short title line (no colon) followed by several short lines or bullets — e.g. "Avoid 50:50 ownership" then lines about the ownership split; "Divide roles clearly" then "Roy: …" / "Ryan: …". The title is ONE strategy; the lines under it are that strategy's description (condense to the word limit). Do NOT make a separate record from each bullet ("Roy: …", "Ryan: …", "Equity was not given for free…").
+    (iv)  OUTLINE: a short title line (no colon) followed by several short lines or bullets — e.g. "Avoid 50:50 ownership" then lines about the ownership split; "Divide roles clearly" then "Roy: …" / "Ryan: …". The title is ONE strategy; the lines under it are that strategy's description (copy their own words, in order — do not summarise). Do NOT make a separate record from each bullet ("Roy: …", "Ryan: …", "Equity was not given for free…").
   The SAME title under TWO different lever headings (e.g. "Simplify the Manufacturing Experience" under Cost of Goods Sold AND under Overhead) is NOT a duplicate: the descriptions explain different lever effects, so output one record under EACH heading.
 
 FORMAT B — SUMMARY CARD with labelled fields:
@@ -1719,16 +1753,16 @@ FORMAT B — SUMMARY CARD with labelled fields:
   ONLY the "Key Strategy" field is a strategy. One Key Strategy sentence = ONE record, even if it has several clauses (keep its focus areas in the claim, e.g. "...focused on rebooking and utilization"). Problem and Formula/Theory are context only. For this format: strategy_name = a SHORT title of at most 6 words taken from the Key Strategy wording (e.g. "Buy-and-improve acquisition engine") — NOT the whole sentence; description = the rest of the Key Strategy sentence, WITHOUT repeating the title (e.g. "funded by external partners, focused on rebooking and utilization; exit at high multiple"); impact = the Result field (WORDING RULE applies). "section" is the company/case heading — never a field label like "Key Strategy" or "Result".
 
 ═══ 5. LEVER DEFINITIONS AND HEADING SYNONYMS ═══
-Heading → lever: Pricing/Price → price · Sales/Customers/Demand → volume · COGS/Cost of Goods Sold/Margin → cogs · Overhead(s)/Fixed costs → overheads · Receivables/Accounts Receivable/Collections/AR/Credit control → ar_days · Inventory/Stock → inventory_days · Payables/Accounts Payable/AP/Supplier terms → ap_days · Talent/People/Hiring/Culture → talent_strategy · Product/Brand/Design/Differentiation → product_differentiation · "Other Strategies (Used to Grow the Business)" or any other key strategy → others
+Heading → lever: Pricing/Price → price · Sales/Customers/Demand → volume · COGS/Cost of Goods Sold/Margin → cogs · Overhead(s)/Fixed costs → overheads · Receivables/Accounts Receivable/Collections/AR/Credit control/Receivable Days → ar_days · Inventory/Stock → inventory_days · Payables/Accounts Payable/AP/Supplier terms/Payable Days → ap_days · Talent/People/Hiring/Culture → talent_strategy · Product/Brand/Design/Differentiation → product_differentiation · "Other Strategies (Used to Grow the Business)" or any other key strategy (e.g. Additional Strategies) → others
 
 CASH LEVERS (Alan Miltz framework — when the text discusses cash-flow mechanics):
 - price: pricing strategy, discounts, price sensitivity, value-based pricing, revenue per unit
 - volume: sales volume, customer count, traffic, repeat purchases, cross-sell, market expansion
-- cogs: cost of goods sold, gross margin, unit cost, supplier cost, wastage, warranty recovery
-- overheads: fixed costs, rent/lease, payroll, staff headcount, occupancy, admin expenses
+- cogs: cost of goods sold, gross margin, unit cost, supplier cost, wastage, warranty recovery, cost of goods sold/direct sold
+- overheads: fixed costs, rent/lease, payroll, staff headcount, occupancy, admin expenses, receivable days
 - ar_days: receivables, DSO, collections, credit terms, unpaid invoices, cash collection discipline
 - inventory_days: stock levels, turnover, stock turns, obsolescence, holding days, WIP
-- ap_days: payables, supplier payment terms, creditor days, negotiated payment windows
+- ap_days: payables, supplier payment terms, creditor days, negotiated payment windows, payable days
 
 NON-CASH STRATEGIC LEVERS (do NOT force these into cash levers):
 - talent_strategy: hiring, training, retention, culture, succession, incentives, employee capability
@@ -1743,9 +1777,9 @@ NON-CASH STRATEGIC LEVERS (do NOT force these into cash levers):
 3. COVERAGE — walk the in-scope material top to bottom and do not stop early. Every named key strategy under every in-scope heading needs its record, including the LAST in-scope headings (Talent Strategy, Other Strategies). Before answering, compare your levers against strategy_titles: every title must have at least one record, and every in-scope title in the material must be in strategy_titles.
 4. Prefer specificity: "Increase price by 5% in FY22" beats "pricing matters".
 5. "section" is the HEADING the strategy sits under (e.g. "Overhead", "Talent Strategy", "Other Strategies Used to Grow the Business") — NEVER the strategy's own title — and must exactly match a heading in your sections array. The lever follows that heading STRICTLY (Overhead → overheads, Volume → volume, Pricing → price…), whatever the strategy sounds like: a unique-selling-point, brand-value or community strategy listed under "Pricing" is a price record, not product_differentiation; an influencer or e-commerce strategy under "Volume" is a volume record. Do not re-file a strategy to "others" just because you find it interesting. Use "others" only under Other Strategies or when no lever heading fits.
-6. Follow the WORDING RULE strictly: exact copy for text of 50 words or fewer; condense only when longer than 50 words. The impact in particular must be the document's original sentence(s), rephrased ONLY if they exceed 50 words.
+6. Follow the WORDING RULE strictly: description and impact are always the document's exact original words, whatever their length — never shortened, summarised or reworded.
 7. strategy_name and description are ALWAYS present. (Chinese fields are disabled for now — do not output them.)
-8. Maximum: 12 sections, 25 lever records for this part (strategy_titles: as many as the material has). Keep section summaries to 1-2 sentences, but NEVER drop or merge named strategies to save space — completeness of records matters more than brevity.${parts > 1 ? `
+8. Maximum: 12 sections, 30 lever records for this part (strategy_titles: as many as the material has). Keep section summaries to 1-2 sentences, but NEVER drop or merge named strategies to save space — completeness of records matters more than brevity.${parts > 1 ? `
 9. This material is PART ${part} of ${parts} of one document. Extract only what appears in this part; do not invent or repeat content from other parts. Title/industry fields: best reading from this part.` : ""}
 
 PROVIDED TITLE: ${title || "(none)"}
