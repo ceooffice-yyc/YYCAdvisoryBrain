@@ -43,7 +43,7 @@ const btnP = (disabled) => ({
 });
 const btnG = { ...btnBase, padding: "9px 15px", fontSize: 13, fontWeight: 600, border: `1px solid ${P.lineDark}`, background: P.card, color: P.sub };
 
-const LEVERS = ["price", "volume", "cogs", "overheads", "ar_days", "inventory_days", "ap_days", "talent_strategy", "product_differentiation", "others"];
+const LEVERS = ["price", "volume", "cogs", "overheads", "ar_days", "inventory_days", "ap_days", "talent_strategy", "product_differentiation", "acquisition_expansion_valuation", "others"];
 
 /* Records are always listed in lever order (price → volume → cogs → overheads → ar_days → inventory_days → ap_days →
    talent → product differentiation → others). Stable: records of the same lever keep their existing (document) order. */
@@ -52,11 +52,23 @@ const sortByLever = (arr) => (arr || [])
   .sort((a, b) => a.k - b.k || a.i - b.i)
   .map((x) => x.r);
 
-const OTHER_CATS =["legal_ip", "partnerships", "regulatory", "moat", "expansion", "financing", "tech_systems", "operations", "risk_lessons", "misc"];
+const OTHER_CATS = ["legal_regulatory_ip", "business_model_execution", "financing_capital", "operations_process", "partnerships_alliances", "shareholder_governance", "uncategorized"];
+const LEGACY_OTHER_CATEGORY = {
+  legal_ip: "legal_regulatory_ip", regulatory: "legal_regulatory_ip",
+  partnerships: "partnerships_alliances", financing: "financing_capital",
+  operations: "operations_process", tech_systems: "business_model_execution",
+  moat: "business_model_execution", risk_lessons: "uncategorized", misc: "uncategorized",
+};
 
 function normalizeOther(r) {
+  const category = LEGACY_OTHER_CATEGORY[r.other_category] || r.other_category;
+  if (r.lever === "others" && r.other_category === "expansion") {
+    const migrated = { ...r, lever: "acquisition_expansion_valuation" };
+    delete migrated.other_category; delete migrated.related_to;
+    return migrated;
+  }
   if (r.lever !== "others") { const rest = { ...r }; delete rest.other_category; delete rest.related_to; return rest; }
-  return { ...r, other_category: OTHER_CATS.includes(r.other_category) ? r.other_category : "misc", related_to: String(r.related_to || "").trim() };
+  return { ...r, other_category: OTHER_CATS.includes(category) ? category : "uncategorized", related_to: String(r.related_to || "").trim() };
 }
 
 /* claim_en is always stored as "Strategy name: description". The name is shown in bold, the
@@ -227,14 +239,18 @@ const T = {
     levers: {
       price: "Price", volume: "Volume", cogs: "COGS", overheads: "Overheads",
       ar_days: "AR days", inventory_days: "Inventory days", ap_days: "AP days",
-      talent_strategy: "Talent Strategies", product_differentiation: "Product Differentiation", others: "Others",
+      talent_strategy: "Talent Strategies", product_differentiation: "Product Differentiation",
+      acquisition_expansion_valuation: "Acquisition, Expansion & Valuation", others: "Others",
     },
     docTypes: { case_study: "Case study", playbook: "Playbook", framework: "Framework", notes: "Key notes" },
     otherCats: {
-      legal_ip: "Legal & IP", partnerships: "Partnerships & Alliances", regulatory: "Regulatory & Compliance",
-      moat: "Competitive Moat", expansion: "Acquisitions & Expansion", financing: "Financing & Capital",
-      tech_systems: "Technology & Systems", operations: "Operations & Process", risk_lessons: "Risks & Lessons Learned",
-      misc: "Uncategorised",
+      legal_regulatory_ip: "Legal, Regulatory & IP",
+      business_model_execution: "Business Model / Execution",
+      financing_capital: "Financing & Capital",
+      operations_process: "Operations & Process (SOPs)",
+      partnerships_alliances: "Partnerships & Alliances",
+      shareholder_governance: "Shareholder Governance",
+      uncategorized: "Uncategorized",
     },
     otherCat: "Category", relatedTo: "Related to",
     relatedToPh: "What it relates to (e.g. trademark enforcement against copycats)",
@@ -388,6 +404,34 @@ function tokenizeQuery(qstr) {
     for (let k = 0; k + 1 < run.length; k++) cjk.push(run.slice(k, k + 2));
   });
   return [...new Set([...latin, ...cjk])];
+}
+
+// BM25 (Okapi) ranking for the local knowledge base. The corpus is small enough
+// to index in the browser; it does not require a hosted search or vector service.
+function bm25Rank(query, documents, textOf) {
+  const terms = tokenizeQuery(query);
+  if (!terms.length || !documents.length) return [];
+  const tokenized = documents.map((item) => tokenizeQuery(textOf(item)));
+  const avgLength = tokenized.reduce((sum, tokens) => sum + tokens.length, 0) / tokenized.length || 1;
+  const documentFrequency = new Map();
+  tokenized.forEach((tokens) => new Set(tokens).forEach((token) => documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1)));
+  const k1 = 1.2;
+  const b = 0.75;
+  const scored = documents.map((item, i) => {
+    const tokens = tokenized[i];
+    const frequencies = new Map();
+    tokens.forEach((token) => frequencies.set(token, (frequencies.get(token) || 0) + 1));
+    let score = 0;
+    terms.forEach((term) => {
+      const tf = frequencies.get(term) || 0;
+      if (!tf) return;
+      const df = documentFrequency.get(term) || 0;
+      const idf = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
+      score += idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * tokens.length / avgLength)));
+    });
+    return { item, score };
+  });
+  return scored.sort((a, b) => b.score - a.score).filter((x) => x.score > 0);
 }
 
 function claimSimilarity(a, b) {
@@ -575,7 +619,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const t = T[lang];
+  const t = useMemo(() => ({
+    ...T[lang],
+    levers: {
+      ...T[lang].levers,
+      ...Object.fromEntries((config?.customLevers || []).map((lever) => [lever.id, lever.name])),
+    },
+  }), [lang, config]);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
   const exitBlocked = isAdmin && (adminLocked || confirm !== null || previewDoc !== null);
 
@@ -905,6 +955,7 @@ function GlobalStyles() {
       .yyc-lever-pill.is-empty { background: transparent; color: ${P.faint}; border: 1px dashed ${P.lineDark}; }
       .yyc-doc-actions { display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
       .yyc-doc:hover .yyc-doc-actions { opacity: 1; }
+      .yyc-lever-group-head .yyc-doc-actions { opacity: 1; }
       @media (max-width: 899px) { .yyc-doc-actions { opacity: 1; } }
       .yyc-icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; cursor: pointer; }
       .yyc-icon-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
@@ -1034,6 +1085,9 @@ function GlobalStyles() {
       .yyc-btn-secondary:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
       .yyc-input { ${Object.entries(S.input).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 10px ;}
       .yyc-input:focus { border-color: ${P.crimson}; box-shadow: ${P.focus}; }
+      .yyc-edit-record-modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+      .yyc-edit-record-field { margin-top: 16px; }
+      .yyc-edit-record-textarea { resize: none; min-height: 108px; line-height: 1.55; }
       .yyc-chat-scroll::-webkit-scrollbar, .yyc-content::-webkit-scrollbar, .yyc-sidebar::-webkit-scrollbar { width: 10px; }
       .yyc-chat-scroll::-webkit-scrollbar-thumb, .yyc-content::-webkit-scrollbar-thumb, .yyc-sidebar::-webkit-scrollbar-thumb { background: ${P.lineDark}; border-radius: 999px; border: 3px solid ${P.paper}; }
       .yyc-chat-scroll::-webkit-scrollbar-thumb:hover { background: ${P.faint}; }
@@ -1052,7 +1106,7 @@ function CommandPalette({ t, index, isAdmin, onClose, onTab, onDoc, onLever }) {
     ...Object.entries(t.tabs)
       .filter(([k]) => k !== "gap" || isAdmin)
       .map(([k, label]) => ({ type: "tab", id: k, label, sub: "", badge: t.kbarPage })),
-    ...LEVERS.map((l) => ({ type: "lever", id: l, label: t.levers[l], sub: "", badge: t.kbarLever })),
+    ...Object.keys(t.levers).map((l) => ({ type: "lever", id: l, label: t.levers[l], sub: "", badge: t.kbarLever })),
     ...index.map((d) => ({
       type: "doc", id: d.id, label: d.title,
       sub: `${t.docTypes[d.doc_type] || d.doc_type}${d.industry ? " · " + d.industry : ""}`,
@@ -1177,7 +1231,7 @@ function AdminGate({ t, config, onOk, onClose }) {
   );
 }
 
-function LeverRecordCard({ record, meta, t, lang, onOpenPicker }) {
+function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, onEdit, onDelete }) {
   const isZh = lang === "zh";
   const claim = isZh
     ? (record.claim_zh || record.claim_en)
@@ -1223,6 +1277,12 @@ function LeverRecordCard({ record, meta, t, lang, onOpenPicker }) {
           {sub ? `${main} · ${sub}` : main}
           {record.section ? ` · ${record.section}` : ""}
         </div>
+        {isAdmin && (
+          <div className="yyc-doc-actions" style={{ opacity: 1 }} onClick={(e) => e.stopPropagation()}>
+            <button className="yyc-icon-btn" onClick={() => onEdit(record)} title={t.edit}><Icon name="edit" size={13} /></button>
+            <button className="yyc-icon-btn is-danger" onClick={() => onDelete(record)} title={t.del}><Icon name="trash" size={13} /></button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1257,7 +1317,7 @@ function LeverPickerModal({ t, currentLever, counts, onSelect, onClose, onOpenSo
               </span>
             </button>
           )}
-          {LEVERS.map((l) => {
+          {Object.keys(t.levers).map((l) => {
             const n = counts[l] || 0;
             const active = l === currentLever;
             return (
@@ -1344,6 +1404,7 @@ const HEADING_LEVER = [
   [/^(accounts )?payables?\b|^ap\b/i, "ap_days"],
   [/^(talent|people|hiring)\b/i, "talent_strategy"],
   [/^(unique )?(product )?differentiation\b|^unique product\b/i, "product_differentiation"],
+  [/^(m\s*&\s*a|mergers?\s*(and|&)\s*acquisitions?|acquisitions?|acquisition\s*&\s*expansion|expansion\s*&\s*valuation|valuation|post[- ]merger integration|business combinations?)\b/i, "acquisition_expansion_valuation"],
   [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
 ];
 const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = HEADING_LEVER.find(([re]) => re.test(x)); return hit ? hit[1] : null; };
@@ -1522,7 +1583,7 @@ function locateClaim(nBody, claim, heads, modelLever, paraStarts) {
   return all.find((p) => { const h = headOf(p); return h && leverFromHeading(h.text) === modelLever; }) ?? all[0];
 }
 
-async function extractDocument(text, title) {
+async function extractDocument(text, title, customLevers = []) {
   const { context, body: rawBody } = scopeMaterial(text);
   const bodyParas = normalizeParas(rawBody);
   const body = bodyParas.join("\n\n");
@@ -1575,7 +1636,7 @@ ${context}
     }
   };
   for (let k = 0; k < chunks.length; k++) {
-    ingest(await askAI(buildExtractionPrompt(chunks[k], title, k + 1, chunks.length), 3000));
+    ingest(await askAI(buildExtractionPrompt(chunks[k], title, k + 1, chunks.length, customLevers), 3000));
   }
 
   /* COVERAGE GUARANTEE — the model sometimes quietly skips a strategy (esp. ones with only a Power Cash Link and no
@@ -1590,7 +1651,7 @@ ${context}
     const byHeading = new Map();
     missing.forEach((p) => { const h = p.heading || ""; byHeading.set(h, [...(byHeading.get(h) || []), p.text]); });
     const recText = [...byHeading].map(([h, ps]) => `${h ? h + "\n\n" : ""}${ps.join("\n\n")}`).join("\n\n");
-    ingest(await askAI(buildExtractionPrompt(recText, title, chunks.length + 1, chunks.length + 1), 3000));
+    ingest(await askAI(buildExtractionPrompt(recText, title, chunks.length + 1, chunks.length + 1, customLevers), 3000));
   }
   const src = normWs(text);
   // "Key Strategy" is the field that HOLDS the strategy, so a record filed under it is valid — it just needs a real
@@ -1684,8 +1745,12 @@ async function parseDocxFile(f) {
   };
 }
 
-function buildExtractionPrompt(capped, title, part = 1, parts = 1) {
+function buildExtractionPrompt(capped, title, part = 1, parts = 1, customLevers = []) {
   return `You are the ingestion engine of YYC's internal advisory knowledge base (Malaysian accounting & advisory firm). Analyse the material below and return ONLY a JSON object, no markdown fences, no commentary.
+${customLevers.length ? `
+CUSTOM LEVER CATEGORIES (when a strategy clearly matches a custom definition, use that custom id even if it would otherwise fall into the broad "others" bucket. Keep using built-in levers when they fit better.):
+${customLevers.map((l) => `- ${l.id}: ${l.name}. Definition: ${l.description}. Example: ${l.example || "none"}`).join("\n")}
+` : ""}
 
 ═══ 1. OUTPUT SHAPE ═══
 {
@@ -1781,6 +1846,7 @@ NON-CASH STRATEGIC LEVERS (do NOT force these into cash levers):
 7. strategy_name and description are ALWAYS present. (Chinese fields are disabled for now — do not output them.)
 8. Maximum: 12 sections, 30 lever records for this part (strategy_titles: as many as the material has). Keep section summaries to 1-2 sentences, but NEVER drop or merge named strategies to save space — completeness of records matters more than brevity.${parts > 1 ? `
 9. This material is PART ${part} of ${parts} of one document. Extract only what appears in this part; do not invent or repeat content from other parts. Title/industry fields: best reading from this part.` : ""}
+${customLevers.length ? `CUSTOM CATEGORY OVERRIDE: When a strategy clearly matches one of the custom category definitions above, set lever to that custom id. Custom categories take precedence over the broad "others" category when their definition matches. Do not force a custom category when a built-in cash or non-cash category is a better fit.` : ""}
 
 PROVIDED TITLE: ${title || "(none)"}
 
@@ -1792,6 +1858,7 @@ function KnowledgePanel({
   t, lang, isAdmin, index, levers, refreshKB, openPreview, flash, config, setConfig, setConfirm, setAdminLocked,
   paletteLever, clearPaletteLever,
 }) {
+  const leverKeys = Object.keys(t.levers);
   const [mode, setMode] = useState("list");
   const [stage, setStage] = useState("");                 // single-upload progress stage
   const [bulkItems, setBulkItems] = useState([]);         // [{id,name,title,text,html,status,extraction}]
@@ -1814,6 +1881,7 @@ function KnowledgePanel({
   const [extraction, setExtraction] = useState(null);
   const [editDoc, setEditDoc] = useState(null);
   const [editLevers, setEditLevers] = useState([]);
+  const [editLeverRecord, setEditLeverRecord] = useState(null);
   const [newPass, setNewPass] = useState("");
   const [search, setSearch] = useState("");
   const [leverFilter, setLeverFilter] = useState("all");
@@ -1829,6 +1897,8 @@ function KnowledgePanel({
   const [subCat, setSubCat] = useState("all");
   const [pickerRecord, setPickerRecord] = useState(null);
   const [statPicker, setStatPicker] = useState(false);
+  const [showLeverManager, setShowLeverManager] = useState(false);
+  const [leverDraft, setLeverDraft] = useState({ name: "", description: "", example: "" });
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -1836,11 +1906,13 @@ function KnowledgePanel({
     const locked =
       mode === "edit" || mode === "review" || mode === "add" ||
       busy ||
+      showLeverManager ||
+      editLeverRecord !== null ||
       pickerRecord !== null ||
       statPicker;
     setAdminLocked(locked);
     return () => setAdminLocked(false);
-  }, [mode, busy, pickerRecord, statPicker, setAdminLocked]);
+  }, [mode, busy, showLeverManager, editLeverRecord, pickerRecord, statPicker, setAdminLocked]);
 
   const onFile = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -1879,7 +1951,7 @@ function KnowledgePanel({
       const it = items[i];
       setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "extracting" } : x)));
       try {
-        const j = await extractDocument(it.text, it.title);
+        const j = await extractDocument(it.text, it.title, config?.customLevers || []);
         setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "done", extraction: j, error: "" } : x)));
       } catch (e) {
         const msg = describeAIError(e, t);
@@ -1906,7 +1978,7 @@ function KnowledgePanel({
     if (!it || bulkRunning) return;
     setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "extracting" } : x)));
     try {
-      const j = await extractDocument(it.text, it.title);
+      const j = await extractDocument(it.text, it.title, config?.customLevers || []);
       setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "done", extraction: j, error: "" } : x)));
       setErrMsg("");
     } catch (e) {
@@ -1932,7 +2004,7 @@ function KnowledgePanel({
     setBusy(true); setErrMsg(""); setStage("analyze");
     const stageTimer = setTimeout(() => setStage("levers"), 7000); // presentational: one AI call, staged for confidence
     try {
-      const j = await extractDocument(text, title);
+      const j = await extractDocument(text, title, config?.customLevers || []);
       setExtraction(j);
       setMode("review");
     } catch (e) { setErrMsg(describeAIError(e, t)); }
@@ -1970,7 +2042,7 @@ function KnowledgePanel({
       await sset("kb:index", idx);
       const allLevers = (await sget("kb:levers")) || [];
       (extraction.levers || []).forEach((lr) => {
-        if (LEVERS.includes(lr.lever) && !lr.skip) {
+        if (leverKeys.includes(lr.lever) && !lr.skip) {
           const { skip, ...clean } = lr;
           allLevers.push(normalizeOther({ id: uid(), doc_id: id, doc_title: doc.title, ...clean }));
         }
@@ -2013,6 +2085,33 @@ function KnowledgePanel({
     setMode("edit");
   };
 
+  const saveLeverRecord = async () => {
+    if (!editLeverRecord) return;
+    setBusy(true); setErrMsg("");
+    try {
+      const allLevers = (await sget("kb:levers")) || [];
+      const updated = allLevers.map((record) => record.id === editLeverRecord.id
+        ? normalizeOther({ ...record, ...editLeverRecord })
+        : record);
+      await sset("kb:levers", updated);
+      await refreshKB();
+      setEditLeverRecord(null);
+      flash(t.saved);
+    } catch { setErrMsg(t.loadErr); }
+    setBusy(false);
+  };
+
+  const deleteLeverRecord = (record) => {
+    setConfirm({
+      message: t.delConfirm,
+      onConfirm: async () => {
+        const allLevers = (await sget("kb:levers")) || [];
+        await sset("kb:levers", allLevers.filter((item) => item.id !== record.id));
+        await refreshKB();
+      },
+    });
+  };
+
   const saveEdit = async () => {
     setBusy(true); setErrMsg("");
     try {
@@ -2033,7 +2132,7 @@ function KnowledgePanel({
       await sset("kb:index", idx);
       const others = ((await sget("kb:levers")) || []).filter((l) => l.doc_id !== editDoc.id);
       const mine = editLevers
-        .filter((l) => LEVERS.includes(l.lever) && ((l.claim_en || "").trim() || (l.claim_zh || "").trim()))
+        .filter((l) => leverKeys.includes(l.lever) && ((l.claim_en || "").trim() || (l.claim_zh || "").trim()))
         .map((l) => normalizeOther({ ...l, doc_title: editDoc.title }));
       await sset("kb:levers", [...others, ...mine]);
       await refreshKB();
@@ -2048,6 +2147,87 @@ function KnowledgePanel({
     const cfg = { ...config, adminPass: newPass.trim() };
     await sset("kb:config", cfg); setConfig(cfg); setNewPass(""); flash(t.passChanged);
   };
+
+  const persistCustomLever = async (draft) => {
+    const current = config?.customLevers || [];
+    const normalizedName = draft.name.trim().toLowerCase();
+    const duplicate = current.find((item) => item.id !== draft.id && item.name.trim().toLowerCase() === normalizedName);
+    if (duplicate || Object.entries(T.en.levers).some(([key, name]) => key !== draft.id && name.toLowerCase() === normalizedName)) {
+      setErrMsg("A lever with this name already exists.");
+      return;
+    }
+    const slug = normalizedName.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "custom";
+    const item = { ...draft, id: draft.id || `custom_${slug}_${uid()}`, name: draft.name.trim(), description: draft.description.trim(), example: draft.example.trim() };
+    const customLevers = draft.id
+      ? current.map((entry) => entry.id === draft.id ? item : entry)
+      : [...current, item];
+    const cfg = { ...config, customLevers };
+    await sset("kb:config", cfg);
+    setConfig(cfg);
+    setLeverDraft({ name: "", description: "", example: "" });
+    setErrMsg("");
+    flash("Lever category saved");
+  };
+
+  const validateAndSaveLever = async () => {
+    const draft = { ...leverDraft, name: leverDraft.name.trim(), description: leverDraft.description.trim(), example: leverDraft.example.trim() };
+    if (!draft.name || !draft.description || !draft.example) {
+      setErrMsg("Enter a name, definition, and example before validating.");
+      return;
+    }
+    setBusy(true); setErrMsg("");
+    try {
+      const existingCategories = Object.fromEntries(Object.entries(t.levers).filter(([key]) => key !== draft.id));
+      const result = await askAI(`Review this proposed knowledge-base lever category. Judge whether its name, definition, and example are coherent and useful for classifying business strategies, and whether its scope is distinct enough from the existing categories. Return JSON only: {"valid": true|false, "reason": "short explanation"}. Existing categories: ${JSON.stringify(existingCategories)}. Proposed category: ${JSON.stringify({ name: draft.name, description: draft.description, example: draft.example })}`, 350);
+      if (result.valid === true) {
+        await persistCustomLever(draft);
+      } else {
+        const reason = String(result.reason || "The AI could not confirm that this category is clear and distinct.");
+        setConfirm({
+          message: `${reason}\n\nDo you want to save this category anyway? Please confirm again.`,
+          onConfirm: () => persistCustomLever(draft),
+        });
+      }
+    } catch (e) { setErrMsg(describeAIError(e, t)); }
+    setBusy(false);
+  };
+
+  const leverManagerView = showLeverManager && isAdmin ? (
+    <div className="yyc-modal-backdrop" onClick={() => !busy && setShowLeverManager(false)}>
+      <div className="yyc-modal yyc-edit-record-modal" style={{ width: 680, maxWidth: "100%", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12}}>
+          <div>
+            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin settings</div>
+            <h2 style={{ margin: "4px 0 0", fontSize: 20 , color: "#4a0707", fontWeight: "bolder"}}>New Lever Category Creation</h2>
+          </div>
+          <button className="yyc-icon-btn" onClick={() => setShowLeverManager(false)} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10}}>
+          {(config?.customLevers || []).map((item) => (
+            <button key={item.id} className="yyc-btn-secondary" style={{ justifyContent: "space-between", borderRadius: 10, textAlign: "left" }} onClick={() => setLeverDraft({ ...item })}>
+              <span><b>{item.name}</b><br /><small style={{ color: P.faint }}>{item.description}</small></span>
+              <Icon name="edit" size={13} />
+            </button>
+          ))}
+        </div>
+        <div style={{ marginTop: 10, paddingTop: 5, borderTop: `1px solid ${P.line}` }}>
+          <div style={{ fontSize: 14, fontWeight: 750, marginBottom: 10 }}>{leverDraft.id ? `Edit: ${leverDraft.name}` : "Create a lever category"}</div>
+          <label style={S.label}>Name</label>
+          <input className="yyc-input" value={leverDraft.name} onChange={(e) => setLeverDraft((draft) => ({ ...draft, name: e.target.value }))} placeholder="e.g. Customer Retention" />
+          <label className="yyc-edit-record-field" style={S.label}>Definition and classification guidance</label>
+          <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={leverDraft.description} onChange={(e) => setLeverDraft((draft) => ({ ...draft, description: e.target.value }))} placeholder="Describe which strategies belong in this category." />
+          <label className="yyc-edit-record-field" style={S.label}>Example strategy</label>
+          <textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={leverDraft.example} onChange={(e) => setLeverDraft((draft) => ({ ...draft, example: e.target.value }))} placeholder="Give the AI a concrete example." />
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: P.sub, marginTop: 8 }}>AI checks that the category is clear and distinct. If it flags a concern, you can review the reason and confirm whether to save anyway.</div>
+          {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 10 }}>{errMsg}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            {leverDraft.id && <button className="yyc-btn-secondary" onClick={() => setLeverDraft({ name: "", description: "", example: "" })}>New category</button>}
+            <button className="yyc-btn-primary" onClick={validateAndSaveLever} disabled={busy}>{busy ? "Checking with AI…" : leverDraft.id ? "Validate and save changes" : "Validate and create"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const importRef = useRef(null);
 
@@ -2087,7 +2267,18 @@ function KnowledgePanel({
               if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push(l); leverIds.add(l.id); }
             });
             await sset("kb:levers", curLevers);
-            /* config (incl. passcode) is deliberately NOT imported — local settings stay */
+            /* Keep local settings and passcode, but merge category definitions needed to label imported records. */
+            if (Array.isArray(parsed.config?.customLevers) && parsed.config.customLevers.length) {
+              const localConfig = (await sget("kb:config")) || config || {};
+              const customLevers = [...(localConfig.customLevers || [])];
+              const knownIds = new Set(customLevers.map((item) => item.id));
+              parsed.config.customLevers.forEach((item) => {
+                if (item?.id && item?.name && !knownIds.has(item.id)) { customLevers.push(item); knownIds.add(item.id); }
+              });
+              const mergedConfig = { ...localConfig, customLevers };
+              await sset("kb:config", mergedConfig);
+              setConfig(mergedConfig);
+            }
             await refreshKB();
             flash(t.importDone.replace("{n}", String(added)));
           } catch {
@@ -2187,6 +2378,7 @@ function KnowledgePanel({
               <Icon name="arrowLeft" size={13} /> {t.cancel}
             </button>
             <h1 className="yyc-section-title">{t.editTitle}</h1>
+            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)} style={{ marginTop: 10 }}>Manage lever categories</button>
           </div>
         </div>
 
@@ -2257,7 +2449,7 @@ function KnowledgePanel({
             <div key={l.id || i} style={{ borderTop: i ? `1px solid ${P.line}` : "none", padding: "14px 0" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <select value={l.lever} onChange={(e) => setLev(i, { lever: e.target.value })} className="yyc-input" style={{ width: 170 }}>
-                  {LEVERS.map((k) => <option key={k} value={k}>{t.levers[k]}</option>)}
+                  {leverKeys.map((k) => <option key={k} value={k}>{t.levers[k]}</option>)}
                 </select>
                 <input value={l.section || ""} onChange={(e) => setLev(i, { section: e.target.value })} placeholder={t.sections} className="yyc-input" style={{ flex: 1, minWidth: 140 }} />
                 <button onClick={() => delLev(i)} className="yyc-icon-btn is-danger"><Icon name="trash" size={13} /></button>
@@ -2285,6 +2477,7 @@ function KnowledgePanel({
           <button className="yyc-btn-primary" onClick={saveEdit} disabled={busy}>{busy ? "…" : t.saveChanges}</button>
           <button className="yyc-btn-secondary" onClick={() => { setMode("list"); setEditDoc(null); setEditLevers([]); }}>{t.cancel}</button>
         </div>
+        {leverManagerView}
       </div>
     );
   }
@@ -2322,11 +2515,13 @@ function KnowledgePanel({
           <div>
             <h1 className="yyc-section-title">{t.reviewTitle}</h1>
             <div className="yyc-section-sub">{t.reviewNote}</div>
+            {isAdmin && <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)} style={{ marginTop: 10 }}>Manage lever categories</button>}
           </div>
         </div>
 
         <div style={{ ...S.card, padding: 24 }}>
-          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: "-0.01em" }}>{extraction.title}</div>
+          <label style={S.label}>Document title</label>
+          <input className="yyc-input" value={extraction.title || ""} onChange={(e) => setExtraction((x) => ({ ...x, title: e.target.value }))} style={{ fontSize: 18, fontWeight: 750 }} />
           <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 10, fontSize: 13, color: P.sub }}>
             <span><b style={{ color: P.ink }}>{t.docType}:</b> {t.docTypes[extraction.doc_type] || extraction.doc_type}</span>
             <span><b style={{ color: P.ink }}>{t.industry}:</b> {sub ? `${main} · ${sub}` : main}</span>
@@ -2350,7 +2545,13 @@ function KnowledgePanel({
           <div style={{ fontWeight: 750, fontSize: 14, marginTop: 20, color: P.maroon }}>
             {t.leverRecords} <span style={{ color: P.faint }}>({(extraction.levers || []).length})</span>
           </div>
-          {(extraction.levers || []).map((l, i) => (
+          {(extraction.levers || []).map((l, i) => {
+            const claimParts = splitClaim(l.claim_en);
+            const updateClaim = (name, description) => {
+              const claim = name.trim() ? `${name.trim()}: ${description.trim()}` : description.trim();
+              setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, claim_en: claim } : v)) }));
+            };
+            return (
             <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", borderTop: i ? `1px solid ${P.line}` : "none", padding: "12px 0", opacity: l.skip ? 0.45 : 1 }}>
               <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "3px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
                 {leverTag(t, l)}
@@ -2359,9 +2560,22 @@ function KnowledgePanel({
                 {l.lever === "others" && l.related_to && (
                   <div style={{ fontSize: 12, color: P.sub, marginBottom: 3 }}>{t.relatedTo}: <b style={{ color: P.ink }}>{l.related_to}</b></div>
                 )}
-                <div style={{ fontSize: 13.5, lineHeight: 1.55, textDecoration: l.skip ? "line-through" : "none" }}><ClaimText text={l.claim_en} /></div>
-                <ImpactBox record={l} style={{ marginTop: 6 }} />
+                <label style={S.label}>Strategy title</label>
+                <input className="yyc-input" value={claimParts.name} onChange={(e) => updateClaim(e.target.value, claimParts.desc)} />
+                <label className="yyc-edit-record-field" style={S.label}>Description</label>
+                <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={claimParts.desc} onChange={(e) => updateClaim(claimParts.name, e.target.value)} />
+                <label className="yyc-edit-record-field" style={S.label}>Actual impact</label>
+                <textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={l.impact || ""} onChange={(e) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, impact: e.target.value } : v)) }))} />
                 <div style={{ fontSize: 12, color: P.faint, marginTop: 4 }}>{l.section}</div>
+                <select
+                  className="yyc-input"
+                  aria-label="Lever category"
+                  value={l.lever}
+                  onChange={(e) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, lever: e.target.value } : v)) }))}
+                  style={{ width: 190, marginTop: 8, fontSize: 12 }}
+                >
+                  {leverKeys.map((key) => <option key={key} value={key}>{t.levers[key]}</option>)}
+                </select>
                 {conflicts[i] && (
                   <div style={{ marginTop: 7, padding: "8px 11px", borderRadius: 8, background: P.goldSoft, border: `1px solid rgba(184,134,11,0.45)`, fontSize: 12.5, lineHeight: 1.55 }}>
                     <span style={{ fontWeight: 750, color: P.goldDark }}>⚠ {t.similarExisting} ({Math.round(conflicts[i].sim * 100)}%):</span>{" "}
@@ -2379,7 +2593,8 @@ function KnowledgePanel({
                 </button>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
@@ -2388,6 +2603,7 @@ function KnowledgePanel({
           <button className="yyc-btn-primary" onClick={saveDoc} disabled={busy}>{busy ? "…" : t.saveDoc}</button>
           <button className="yyc-btn-secondary" onClick={() => { if (bulkReviewId) { setBulkReviewId(null); setMode("bulk"); } else setMode("add"); }}>{t.discard}</button>
         </div>
+        {leverManagerView}
       </div>
     );
   }
@@ -2507,6 +2723,7 @@ function KnowledgePanel({
                 </>
               ) : (<><Icon name="spark" size={14} /> {t.extract}</>)}
             </button>
+            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)}>Manage lever categories</button>
             {busy && (
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5, fontWeight: 600 }}>
                 {[["reading", t.stageReading], ["analyze", t.stageAnalyze], ["levers", t.stageLevers]].map(([k, label]) => {
@@ -2528,13 +2745,14 @@ function KnowledgePanel({
             )}
           </div>
         </div>
+        {leverManagerView}
       </div>
     );
   }
 
   const totalRecords = levers.length;
-  const maxPerLever = Math.max(1, ...LEVERS.map((l) => levers.filter((r) => r.lever === l).length));
-  const leverCounts = LEVERS.reduce((acc, l) => {
+  const maxPerLever = Math.max(1, ...leverKeys.map((l) => levers.filter((r) => r.lever === l).length));
+  const leverCounts = leverKeys.reduce((acc, l) => {
     acc[l] = levers.filter((x) => x.lever === l).length;
     return acc;
   }, {});
@@ -2552,6 +2770,7 @@ function KnowledgePanel({
         </div>
         {isAdmin && (
           <div style={{ display: "flex", gap: 8 }}>
+            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)}>Manage lever categories</button>
             <button className="yyc-btn-secondary" onClick={() => importRef.current?.click()} title={t.importKB}>
               <Icon name="upload" size={13} /> {t.importKB}
             </button>
@@ -2565,6 +2784,8 @@ function KnowledgePanel({
           </div>
         )}
       </div>
+
+      {leverManagerView}
 
       <div className="yyc-stats">
         <div className="yyc-stat">
@@ -2607,7 +2828,7 @@ function KnowledgePanel({
             <div style={{ flex: 1 }}>
               <div className="yyc-stat-label">{t.coverage}</div>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 26, marginTop: 6 }}>
-                {LEVERS.map((l) => {
+                {leverKeys.map((l) => {
                   const n = leverCounts[l];
                   const isActive = leverFilter === l;
                   return (
@@ -2642,7 +2863,7 @@ function KnowledgePanel({
             {mainCategories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          <select className="yyc-filter-select" value={subCat} onChange={(e) => setSubCat(e.target.value)} disabled={subCategories.length === 0}>
+          <select className="yyc-filter-select" style={{ gap: 100 }} value={subCat} onChange={(e) => setSubCat(e.target.value)} disabled={subCategories.length === 0}>
             <option value="all">{t.allSubCat}</option>
             {subCategories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
@@ -2662,7 +2883,7 @@ function KnowledgePanel({
           >
             {t.allLevers}
           </button>
-          {LEVERS.map((l) => {
+          {leverKeys.map((l) => {
             const n = leverCounts[l];
             const isActive = leverFilter === l;
             return (
@@ -2718,6 +2939,9 @@ function KnowledgePanel({
                         t={t}
                         lang={lang}
                         onOpenPicker={setPickerRecord}
+                        isAdmin={isAdmin}
+                        onEdit={setEditLeverRecord}
+                        onDelete={deleteLeverRecord}
                       />
                     ))}
                   </div>
@@ -2793,6 +3017,39 @@ function KnowledgePanel({
           <span style={{ fontSize: 13, color: P.sub, fontWeight: 600 }}>{t.changePass}:</span>
           <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder={t.newPassPh} className="yyc-input" style={{ width: 200 }} />
           <button className="yyc-btn-secondary" onClick={savePass} style={{ padding: "8px 16px" }}>OK</button>
+        </div>
+      )}
+
+      {editLeverRecord && (
+        <div className="yyc-modal-backdrop" onClick={() => !busy && setEditLeverRecord(null)}>
+          <div className="yyc-modal yyc-edit-record-modal" style={{ width: 700, maxWidth: "100%", padding: 26 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 2, paddingBottom: 16, borderBottom: `1px solid ${P.line}` }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: P.crimson, letterSpacing: ".08em", textTransform: "uppercase" }}>{t.levers[editLeverRecord.lever] || editLeverRecord.lever}</div>
+                <h2 style={{ margin: "4px 0 0", fontSize: 21, letterSpacing: "-.02em", color: "#4a0707", fontWeight: "bolder"}}>{t.editTitle}</h2>
+              </div>
+              <button className="yyc-icon-btn" onClick={() => setEditLeverRecord(null)} disabled={busy} title={t.cancel}><Icon name="close" size={13} /></button>
+            </div>
+            <label style={S.label}>Lever</label>
+            <select className="yyc-input" value={editLeverRecord.lever || "price"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, lever: e.target.value }))}>
+              {leverKeys.map((lever) => <option key={lever} value={lever}>{t.levers[lever]}</option>)}
+            </select>
+            <label className="yyc-edit-record-field" style={S.label}>Strategy / claim (English)</label>
+            <textarea className="yyc-input yyc-edit-record-textarea" rows={4} value={editLeverRecord.claim_en || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, claim_en: e.target.value }))} />
+            {/* Chinese claim editing is intentionally hidden in the frontend for now.
+            <label style={{ ...S.label, marginTop: 14 }}>策略 / 内容（中文）</label>
+            <textarea className="yyc-input" rows={3} value={editLeverRecord.claim_zh || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, claim_zh: e.target.value }))} />
+            */}
+            <label className="yyc-edit-record-field" style={S.label}>Impact</label>
+            <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={editLeverRecord.impact || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, impact: e.target.value }))} />
+            <label className="yyc-edit-record-field" style={S.label}>Source section</label>
+            <input className="yyc-input" value={editLeverRecord.section || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, section: e.target.value }))} />
+            {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingTop: 16, borderTop: `1px solid ${P.line}` }}>
+              <button className="yyc-btn-secondary" onClick={() => setEditLeverRecord(null)} disabled={busy}>{t.cancel}</button>
+              <button className="yyc-btn-primary" onClick={saveLeverRecord} disabled={busy}>{busy ? "Saving…" : t.saveChanges}</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2876,6 +3133,7 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
   const [suggBusy, setSuggBusy] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const bottomRef = useRef(null);
+  const searchDocsCacheRef = useRef({ fp: "", at: 0, docs: [] });
 
   useEffect(() => {
     (async () => {
@@ -2977,29 +3235,37 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     setBusy(true);
     try {
       const qTerms = tokenizeQuery(question);
-      const scored = await Promise.all(
-        index.map(async (d) => {
-          const doc = await sget("kb:doc:" + d.id);
-          if (!doc) return null;
-          const hay = (
-            (doc.title || "") + " " + (doc.industry || "") + " " +
-            (doc.problem_signature || "") + " " +
-            (doc.sections || []).map((s) => s.heading + " " + (s.summary_en || "") + " " + (s.summary_zh || "")).join(" ") + " " +
-            (doc.full_text || "")
-          ).toLowerCase();
-          const hits = qTerms.reduce((n, w) => n + (hay.includes(w) ? 1 : 0), 0);
-          return { doc, hits };
-        })
-      );
+      // Reuse the corpus briefly so follow-up questions avoid rereading every document.
+      const docsFp = index.map((d) => d.id).sort().join(",");
+      let docs = searchDocsCacheRef.current.docs;
+      if (searchDocsCacheRef.current.fp !== docsFp || Date.now() - searchDocsCacheRef.current.at > 30000) {
+        docs = (await Promise.all(index.map((d) => sget("kb:doc:" + d.id)))).filter(Boolean);
+        searchDocsCacheRef.current = { fp: docsFp, at: Date.now(), docs };
+      }
+      const docById = new Map(docs.map((doc) => [doc.id, doc]));
+      const docText = (doc) => [doc.title, doc.industry, doc.problem_signature,
+        (doc.sections || []).map((s) => `${s.heading} ${s.summary_en || ""} ${s.summary_zh || ""}`).join(" "),
+        doc.full_text].filter(Boolean).join(" ");
+      const scored = bm25Rank(question, docs, docText).map(({ item: doc, score }) => ({ doc, score }));
+      const recordPool = (levers || []).filter((r) => docById.has(r.doc_id));
+      const rankedRecords = bm25Rank(question, recordPool, (r) => {
+        const meta = docById.get(r.doc_id);
+        return [r.lever, r.other_category, r.claim_en, r.claim_zh, r.quote, r.impact, r.section, meta?.title, meta?.industry].filter(Boolean).join(" ");
+      });
+      const requestedCount = question.match(/\b(?:top|first|show|give|provide|list)\s+(\d{1,2})\b/i);
+      const resultLimit = requestedCount ? Math.min(20, Number(requestedCount[1])) : 10;
+      const exampleIntent = /\b(example|examples|lever|strateg(?:y|ies)|volume)\b/i.test(question);
+      const selectedRecords = rankedRecords.slice(0, resultLimit).map(({ item, score }) => ({ ...item, _score: score }));
 
       const activeTagIds = taggedDocs.filter((td) => question.includes(td.title)).map((td) => td.id);
-      const valid = scored.filter(Boolean);
-      const forced = valid.filter((s) => activeTagIds.includes(s.doc.id));
-      const rest = valid
+      const forced = docs.filter((doc) => activeTagIds.includes(doc.id)).map((doc) => ({ doc, score: Infinity }));
+      const rest = scored
         .filter((s) => !activeTagIds.includes(s.doc.id))
-        .sort((a, b) => b.hits - a.hits)
-        .slice(0, Math.max(1, 3 - forced.length));
-      const ranked = [...forced, ...rest].slice(0, 4);
+        .slice(0, 6);
+      const recordDocs = exampleIntent ? selectedRecords.map((r) => docById.get(r.doc_id)).filter(Boolean) : [];
+      const ranked = [...forced, ...rest, ...recordDocs.map((doc) => ({ doc, score: 0 }))]
+        .filter((entry, i, all) => all.findIndex((other) => other.doc.id === entry.doc.id) === i)
+        .slice(0, 8);
       setTaggedDocs([]);
 
       const passagesFor = (fullText, terms, maxChars) => {
@@ -3035,15 +3301,20 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
         const sec = (d.sections || []).slice(0, 6)
           .map((s) => `  - ${s.heading}: ${(s.summary_en || "").slice(0, 160)}`).join("\n");
         /* curated lever records for this doc — highest signal per character */
-        const recs = (levers || []).filter((r) => r.doc_id === d.id).slice(0, 12)
+        const docRecords = exampleIntent ? selectedRecords.filter((r) => r.doc_id === d.id) : (levers || []).filter((r) => r.doc_id === d.id).slice(0, 5);
+        const recs = docRecords
           .map((r) => `  * [${r.lever}${r.other_category ? "/" + r.other_category : ""}] ${r.claim_en || r.claim_zh || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`).join("\n");
         const header = `### DOC id=${d.id} | title=${d.title} | type=${d.doc_type} | industry=${d.industry}`;
         const overhead = header.length + sec.length + recs.length + 60;
         const room = Math.max(0, charBudget - overhead);
-        const body = passagesFor(d.full_text || "", qTerms, Math.min(2600, room));
+        const body = passagesFor(d.full_text || "", qTerms, Math.min(1300, room));
         charBudget -= overhead + body.length;
         return `${header}\nSections:\n${sec}${recs ? `\nKey lever strategies:\n${recs}` : ""}\nText:\n${body}`;
       });
+      const matchedRecordsContext = exampleIntent ? selectedRecords.map((r, i) => {
+        const meta = docById.get(r.doc_id);
+        return `${i + 1}. [doc_id=${r.doc_id}; source=${meta?.title || "Unknown"}; lever=${r.lever}${r.other_category ? `/${r.other_category}` : ""}] ${r.claim_en || r.claim_zh || r.quote || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`;
+      }).join("\n") : "";
       const history = msgs.slice(-4)
         .map((m, k, arr) => `${m.role === "user" ? "Q" : "A"}: ${(m.text || "").slice(0, k === arr.length - 1 ? 900 : 300)}`).join("\n");
 
@@ -3071,6 +3342,7 @@ Rules:
 - closest: when answerable=false, set it to the single most related document with its relevance (0-100) and a short reason in the question's language; when answerable=true set it to null.
 - ANSWER LANGUAGE: ${answerLang}. Mandatory — write the ENTIRE answer in ${answerLang}, regardless of the documents' language or any @DocumentTitle text in the question (titles are references, not language signals).
 - Be concise and practical — the reader is a YYC advisor preparing for a client conversation.
+- For requests for examples, strategies, or levers, list up to ${resultLimit} distinct matching lever records when that many are present in the retrieved records. Use one bullet per record and include its source document title. Do not stop after two examples. If fewer are available, return all available matching records.
 - If it's a greeting message like 'hi', 'hello', 'how are you', reply in short like 'Hi! How can I help you?'
 - Treat keyword-style queries as valid questions: a fragment like "volume in Build-A-Bear" or "Gymshark 价格" means "summarize everything the documents say about that topic for that company". Do not refuse a query just because it is not phrased as a full sentence.
 
@@ -3080,11 +3352,14 @@ ${history || "(none)"}
 DOCUMENTS:
 ${ctxParts.join("\n\n")}
 
+MATCHED LEVER RECORDS (BM25-ranked across the full knowledge base; use these for example/lever requests):
+${matchedRecordsContext || "(none)"}
+
 QUESTION: ${question}`;
 
       const j = await askAI(prompt, 2500);
       const titleOf = (id) => index.find((d) => d.id === id)?.title || null;
-      const retrieved = ranked.map(({ doc, hits }) => ({ doc_id: doc.id, title: doc.title, hits }));
+      const retrieved = ranked.map(({ doc, score }) => ({ doc_id: doc.id, title: doc.title, score: Number.isFinite(score) ? Number(score.toFixed(3)) : null }));
       if (!j.answerable) {
         const closest = j.closest && titleOf(j.closest.doc_id)
           ? { ...j.closest, doc_title: titleOf(j.closest.doc_id) }
@@ -3285,7 +3560,8 @@ function ExplorerPanel({ t, lang, levers, index, openPreview }) {
   const [q, setQ] = useState("");
 
   const metaById = useMemo(() => Object.fromEntries(index.map((d) => [d.id, d])), [index]);
-  const counts = useMemo(() => LEVERS.reduce((a, l) => { a[l] = levers.filter((r) => r.lever === l).length; return a; }, {}), [levers]);
+  const leverKeys = Object.keys(t.levers);
+  const counts = useMemo(() => leverKeys.reduce((a, l) => { a[l] = levers.filter((r) => r.lever === l).length; return a; }, {}), [levers, leverKeys]);
   const cats = useMemo(
     () => Array.from(new Set(levers.map((r) => metaById[r.doc_id]?.industry_main).filter(Boolean))).sort(),
     [levers, metaById]
@@ -3329,7 +3605,7 @@ function ExplorerPanel({ t, lang, levers, index, openPreview }) {
 
       {/* lever pills */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-        {LEVERS.map((l) => {
+        {leverKeys.map((l) => {
           const active = sel === l;
           const n = counts[l] || 0;
           return (
