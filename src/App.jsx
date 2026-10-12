@@ -602,6 +602,7 @@ const Icon = ({ name, size = 16, stroke = 2, color = "currentColor", className }
 export default function App() {
   const [lang] = useState("en"); // [ZH disabled for now] was: const [lang, setLang] = useState("en");
   const [tab, setTab] = useState("kb");
+  const [kbWorking, setKbWorking] = useState(false); // an extraction / save is running inside the Knowledge Base tab
   const [isAdmin, setIsAdmin] = useState(false);
   const [config, setConfig] = useState(null);
   const [index, setIndex] = useState([]);
@@ -725,7 +726,7 @@ export default function App() {
               const active = tab === item.key;
               return (
                 <button key={item.key} className={`yyc-nav-item ${active ? "is-active" : ""}`} onClick={() => setTab(item.key)}>
-                  <Icon name={item.icon} size={16} /><span>{item.label}</span>
+                  <Icon name={item.icon} size={16} /><span>{item.label}</span>{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: "auto", width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
                 </button>
               );
             })}
@@ -792,35 +793,41 @@ export default function App() {
             </div>
           </header>
 
-          <div className="yyc-content" key={tab}>
+          <div className="yyc-content">{/* no key={tab}: re-keying rebuilt every panel on each tab change and threw away a running extraction */}
             {!ready ? (
               <div style={{ color: P.sub, padding: 40 }}>…</div>
             ) : (
               <>
-                {tab === "kb" && (
+                {/* Always mounted, only hidden: switching tabs must not discard a running extraction or an unsaved review */}
+                <div className="yyc-fade" style={{ display: tab === "kb" ? "block" : "none" }}>
                   <KnowledgePanel
+                    onWorking={setKbWorking}
                     t={t} lang={lang} isAdmin={isAdmin} index={index} levers={levers}
                     refreshKB={refreshKB} openPreview={openPreview} flash={flash}
                     config={config} setConfig={setConfig} setConfirm={setConfirm}
                     setAdminLocked={setAdminLocked}
                     paletteLever={paletteLever} clearPaletteLever={() => setPaletteLever(null)}
                   />
+                </div>
+                {tab !== "kb" && (
+                  <div className="yyc-fade" key={tab}>
+                  {tab === "chat" && (
+                    <ChatPanel
+                      t={t}
+                      lang={lang}
+                      index={index}
+                      levers={levers}
+                      openPreview={openPreview}
+                      msgs={chatMsgs}
+                      setMsgs={setChatMsgs}
+                    />
+                  )}
+                  {tab === "explorer" && (
+                    <ExplorerPanel t={t} lang={lang} levers={levers} index={index} openPreview={openPreview} />
+                  )}
+                  {tab === "gap" && isAdmin && <GapPanel t={t} flash={flash} setConfirm={setConfirm} />}
+                  </div>
                 )}
-                {tab === "chat" && (
-                  <ChatPanel
-                    t={t}
-                    lang={lang}
-                    index={index}
-                    levers={levers}
-                    openPreview={openPreview}
-                    msgs={chatMsgs}
-                    setMsgs={setChatMsgs}
-                  />
-                )}
-                {tab === "explorer" && (
-                  <ExplorerPanel t={t} lang={lang} levers={levers} index={index} openPreview={openPreview} />
-                )}
-                {tab === "gap" && isAdmin && <GapPanel t={t} flash={flash} setConfirm={setConfirm} />}
               </>
             )}
           </div>
@@ -830,7 +837,7 @@ export default function App() {
               const active = tab === item.key;
               return (
                 <button key={item.key} className={`yyc-botnav-item ${active ? "is-active" : ""}`} onClick={() => setTab(item.key)}>
-                  <Icon name={item.icon} size={18} /><span>{item.label}</span>
+                  <Icon name={item.icon} size={18} /><span>{item.label}</span>{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: 4, width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
                 </button>
               );
             })}
@@ -895,7 +902,8 @@ function GlobalStyles() {
       .yyc-topbar .yyc-brand { padding: 0; }
       .yyc-topbar-actions { display: flex; align-items: center; gap: 8px; }
       .yyc-topbar-actions .yyc-lang { width: 84px; }
-      .yyc-content { flex: 1; padding: 26px 28px; max-width: 1360px; width: 100%; margin: 0 auto; animation: yycFadeUp .3s ease-out; }
+      .yyc-content { flex: 1; padding: 26px 28px; max-width: 1360px; width: 100%; margin: 0 auto; }
+      .yyc-fade { animation: yycFadeUp .3s ease-out; } /* replays whenever a hidden panel is shown again (display none → block) */
       @media (min-width: 900px) { .yyc-content { padding: 30px 36px; } }
       @media (max-width: 899px) { .yyc-content { padding: 18px 16px 90px; } }
       @keyframes yycFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -2251,7 +2259,7 @@ ${capped}`;
 
 function KnowledgePanel({
   t, lang, isAdmin, index, levers, refreshKB, openPreview, flash, config, setConfig, setConfirm, setAdminLocked,
-  paletteLever, clearPaletteLever,
+  paletteLever, clearPaletteLever, onWorking,
 }) {
   const leverKeys = Object.keys(t.levers);
   const [mode, setMode] = useState("list");
@@ -2308,6 +2316,17 @@ function KnowledgePanel({
     setAdminLocked(locked);
     return () => setAdminLocked(false);
   }, [mode, busy, showLeverManager, editLeverRecord, pickerRecord, statPicker, setAdminLocked]);
+
+  // tell the app when something is running, and warn before the page is closed/refreshed with work in progress or an unsaved review
+  const working = busy || bulkRunning;
+  useEffect(() => { if (onWorking) onWorking(working); }, [working]);
+  useEffect(() => {
+    const unsaved = working || mode === "review" || (mode === "bulk" && bulkItems.some((x) => x.status === "done"));
+    if (!unsaved) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [working, mode, bulkItems]);
 
   const onFile = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -3079,7 +3098,7 @@ function KnowledgePanel({
       <div>
         <div className="yyc-section-head">
           <div>
-            <button className="yyc-btn-secondary" onClick={() => setMode("list")} style={{ padding: "7px 12px", marginBottom: 10 }}>
+            <button className="yyc-btn-secondary" onClick={() => setMode("list")} disabled={busy} title={busy ? "Wait for the extraction to finish" : ""} style={{ padding: "7px 12px", marginBottom: 10 }}>
               <Icon name="arrowLeft" size={13} /> {t.cancel}
             </button>
             <h1 className="yyc-section-title">{t.upload}</h1>
