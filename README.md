@@ -20,9 +20,23 @@ An internal, **closed-book** knowledge base for YYC's advisory work. Upload case
 
 Strategies are grouped in this fixed order:
 
-`price` -> `volume` → `cogs` -> `overheads` -> `ar_days` -> `inventory_days` -> `ap_days` -> `talent_strategy` -> `product_differentiation` -> `others`
+`price` -> `volume` → `cogs` -> `overheads` -> `ar_days` -> `inventory_days` -> `ap_days` -> `talent_strategy` -> `product_differentiation` -> `acquisition_expansion_valuation` -> `others`
 
-`others` records also carry a category (legal/IP, partnerships, regulatory, moat, expansion, financing, tech/systems, operations, misc) and a short "related to" note.
+`acquisition_expansion_valuation` ("Acquisition, Expansion & Valuation") is for M&A material: acquisition appetite and criteria, buy-and-build, valuation and ownership policy, post-acquisition operating model.
+
+`others` records also carry ONE category and a short "related to" note. The categories (defined once in `OTHER_CAT_DEFS` in `src/App.jsx`):
+
+| Category | What goes in it |
+|---|---|
+| Legal, Regulatory & IP | legal, regulatory and IP combined: trademark enforcement, licences, contracts, lease clauses |
+| Business Model / Execution | how the business runs and continues itself: e.g. a strict direct-to-customer model, hyper-focused positioning, doubling down on what works |
+| Financing & Capital | debt, investors/equity, self-funding and reinvestment, cash reserves |
+| Operations & Process | SOPs and operating processes |
+| Partnerships & Alliances | brand tie-ups, distribution deals, JVs, partner networks |
+| Shareholder Governance | avoid 50:50 ownership, divide roles clearly, shareholder rights |
+| Uncategorized | only when none of the above fit |
+
+The category is not left to the big extraction prompt: after extraction, one small dedicated call (`classifyOthers`) files every `others` record into exactly one category, so records that the code moved to Others (because they sit under an "Other…" heading) are never left without one.
 
 ### How a strategy is shown
 
@@ -62,6 +76,7 @@ Open **http://localhost:5173**.
 | Variable | Default | Notes |
 |---|---|---|
 | `GROQ_API_KEY` | – | **Required.** Server-side only; never shipped to the browser. |
+| `GROQ_API_KEY_2` … `GROQ_API_KEY_9` | – | Optional extra keys. When a key hits its rate limit (per-minute or per-day) the same request is retried on the next key; see *Multiple Groq keys* below. |
 | `PORT` | `8787` | Port of the Express server. |
 | `HOST` | `127.0.0.1` | Set `HOST=0.0.0.0` only to share `npm start` on your LAN. |
 
@@ -75,6 +90,25 @@ Open **http://localhost:5173**.
 
 ---
 
+
+### Multiple Groq keys
+
+The free Groq tier allows about 200k tokens/day per key (roughly 8–9 case studies). Put up to 9 keys in `.env` (or Vercel environment variables):
+
+```
+GROQ_API_KEY=gsk_...
+GROQ_API_KEY_2=gsk_...
+GROQ_API_KEY_3=gsk_...
+GROQ_API_KEY_4=gsk_...
+```
+
+(`GROQ_API_KEYS=key1,key2,key3` also works.) Behaviour, implemented in `server/groqProxy.js` and shared by the Express server and the Vercel function:
+
+- Key 1 is used first. If Groq answers **429** (per-minute or per-day limit), that key is set aside until its reset time and the **same request is retried on the next key**, so the browser only sees a rate-limit error when *every* key is limited.
+- A key that was **rejected (401/403)** is skipped for 10 minutes; a network error moves on to the next key.
+- Once a benched key has recovered it is preferred again, in order.
+- Keys stay on the server and are never logged. Each key has its own quota, so the keys should belong to different Groq accounts/organisations; several keys of one organisation share one limit.
+
 ## Deploy to Vercel
 
 The repo is Vercel-ready: the static site is built by Vite and `api/groq/chat.js` replaces the Express proxy.
@@ -84,7 +118,7 @@ There  is an **available deployed web site** that you might get reach on:
 👉 [Click here to visit YYC Advisory Brain](https://yyc-advisory-brain.vercel.app/)
 
 1. Push to GitHub and import the repo in Vercel (framework preset: **Vite**).
-2. **Project -> Settings -> Environment Variables:** add `GROQ_API_KEY` (Production + Preview).
+2. **Project -> Settings -> Environment Variables:** add `GROQ_API_KEY` (and optionally `GROQ_API_KEY_2`, `GROQ_API_KEY_3`, `GROQ_API_KEY_4`) for Production + Preview.
 3. Redeploy (a new key only applies to new deployments).
 
 Things to know when hosted:
@@ -126,6 +160,19 @@ Other Key Strategies For Growth      ← "Other…", "Strategies Used to Grow…
 
 Recognised lever headings include Pricing/Price, Volume/Sales, COGS/Cost of Goods Sold, Overhead, Inventory (days), Receivable Days / Accounts Receivable, Payable Days / Accounts Payable, Talent Strategy, Unique Product Differentiation, and "Other…"-style headings. Short summary cards (`Problem / Key Strategy / Formula / Result`) are also supported.
 
+### M&A case studies
+
+A document is treated as an **M&A document** only when it has at least two M&A section headings (it is decided by structure, never by the word "acquisition" appearing in the text, so ordinary case studies that mention an acquisition are unaffected):
+
+```
+3. Acquisition M&A Appetite  /  M&A Appetite
+4. Acquisition Criteria
+5. Post-Acquisition Strategy
+6. What <Company> Brings to Acquired Companies
+```
+
+Only those sections are read (background and the closing one-line summary are ignored). In code each strategy or criterion is first turned into one block, `Title: <all its text>`, so quote lines, list items and bullets stay inside their strategy and never become records of their own. A block without a title (for example the whole Post-Acquisition section) is named with a phrase copied word for word from the document. The "What <Company> Brings…" section always becomes **one** record. All records use the Acquisition, Expansion & Valuation lever, and a realised result (for example revenue that grew after an acquisition) goes in the impact box.
+
 ---
 
 ## How extraction works
@@ -160,6 +207,7 @@ If you see `429` in the browser console, this is the cause.
 |---|---|
 | Logo missing on Vercel | The logo lives in `public/logo.png` and is referenced as `/logo.png`. Make sure that file is committed. |
 | AI calls fail on Vercel | `GROQ_API_KEY` not set (or set but not redeployed). |
+| "Daily limit" message although you added more keys | The extra keys must be named `GROQ_API_KEY_2`, `_3`, … (or listed in `GROQ_API_KEYS`), and the server restarted / Vercel redeployed. The console shows `Groq keys loaded: N` at start-up. |
 | `npm start` page does not update | Stop the server and run `npm start` again; it serves the last build. |
 | `localhost:5173` unreachable after `npm start` | `npm start` uses **:8787**; `:5173` is dev mode only. |
 | Not reachable from another device | Use `npm run dev:lan`, allow the ports in Windows Firewall, check for Wi-Fi client isolation. |

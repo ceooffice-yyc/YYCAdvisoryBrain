@@ -2,35 +2,28 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-if (!GROQ_API_KEY) {
-  console.error('Missing GROQ_API_KEY. Set it in .env (server-side only, no VITE_ prefix) and restart.');
+const GROQ_KEYS = loadGroqKeys();
+if (!GROQ_KEYS.length) {
+  console.error('Missing GROQ_API_KEY. Set it in .env (server-side only, no VITE_ prefix) and restart. Extra keys: GROQ_API_KEY_2, GROQ_API_KEY_3, ...');
   process.exit(1);
 }
+console.log(`Groq keys loaded: ${GROQ_KEYS.length} (the next one is used automatically when one hits its rate limit)`);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 // The browser posts the same {model, messages, ...} body it used to send straight
-// to Groq. This just adds the Authorization header server-side, so the key never
-// ships in the client bundle.
+// to Groq. This adds the Authorization header server-side, so the keys never ship in the
+// client bundle, and moves on to the next key when one hits its rate limit.
 app.post('/api/groq/chat', async (req, res) => {
   try {
-    const upstream = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${GROQ_API_KEY}`,
-      },
-      body: JSON.stringify(req.body),
-    });
-    const text = await upstream.text();
-    const retryAfter = upstream.headers.get('retry-after');
+    const { status, text, retryAfter } = await forwardToGroq(req.body, { keys: GROQ_KEYS });
     if (retryAfter) res.set('retry-after', retryAfter);
-    res.status(upstream.status).type('application/json').send(text);
+    res.status(status).type('application/json').send(text);
   } catch (err) {
     console.error('Groq proxy error:', err);
     res.status(502).json({ error: 'Upstream request to Groq failed' });
