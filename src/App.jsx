@@ -2115,6 +2115,16 @@ ${context}
   return merged;
 }
 
+/* "14. YETI d" / "13. Bobbie-d" -> "YETI" / "Bobbie": drops the leading list number and a trailing lone lowercase marker letter (a draft suffix) */
+function cleanDocTitle(s) {
+  const t = String(s || "")
+    .replace(/^\s*\d+\s*[.)_-]\s*/, "")
+    .replace(/[\s_-]+[a-z]$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t || String(s || "").trim();
+}
+
 async function parseDocxFile(f) {
   const buf = await f.arrayBuffer();
   const [raw, rich] = await Promise.all([
@@ -2122,7 +2132,7 @@ async function parseDocxFile(f) {
     mammoth.convertToHtml({ arrayBuffer: buf }),
   ]);
   return {
-    title: f.name.replace(/\.docx$/i, "").replace(/[_-]+/g, " ").trim(),
+    title: cleanDocTitle(f.name.replace(/\.docx$/i, "").replace(/_+/g, " ")),
     text: raw.value || "",
     html: (rich.value || "").slice(0, 150000),
   };
@@ -2433,7 +2443,7 @@ function KnowledgePanel({
       const id = uid();
       const doc = {
         id,
-        title: extraction.title || title || "Untitled",
+        title: cleanDocTitle(extraction.title || title) || "Untitled",
         doc_type: extraction.doc_type || "notes",
         industry: extraction.industry || "General",
         industry_main: extraction.industry_main || normalizeMainCategory(extraction.industry || "General"),
