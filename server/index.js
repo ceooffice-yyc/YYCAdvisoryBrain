@@ -3,6 +3,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
+import { handleKv, kvConfigured } from './kvStore.js';
+import { authenticate } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,13 +16,17 @@ if (!GROQ_KEYS.length) {
 console.log(`Groq keys loaded: ${GROQ_KEYS.length} (the next one is used automatically when one hits its rate limit)`);
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '4mb' }));
 
 // The browser posts the same {model, messages, ...} body it used to send straight
 // to Groq. This adds the Authorization header server-side, so the keys never ship in the
 // client bundle, and moves on to the next key when one hits its rate limit.
 app.post('/api/groq/chat', async (req, res) => {
   try {
+    if (kvConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
+      const a = await authenticate(req.headers);
+      if (!a.ok) return res.status(a.status).json({ error: a.error });
+    }
     const { status, text, retryAfter } = await forwardToGroq(req.body, { keys: GROQ_KEYS });
     if (retryAfter) res.set('retry-after', retryAfter);
     res.status(status).type('application/json').send(text);
@@ -28,6 +34,14 @@ app.post('/api/groq/chat', async (req, res) => {
     console.error('Groq proxy error:', err);
     res.status(502).json({ error: 'Upstream request to Groq failed' });
   }
+});
+
+// Shared database (Supabase). Without SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY the app keeps using each browser's own storage.
+console.log(kvConfigured() ? 'Shared database + sign-in: Supabase (library data is stored online; people must sign in)' : 'Shared database: not configured (each browser keeps its own copy; see README → Supabase)');
+app.all('/api/kv', async (req, res) => {
+  const out = await handleKv({ method: req.method, query: req.query, body: req.body, headers: req.headers });
+  res.set('Cache-Control', 'no-store');
+  res.status(out.status).json(out.body);
 });
 
 // Production: serve the built SPA from the same process/origin as the API,

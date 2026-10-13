@@ -52,15 +52,67 @@ const sortByLever = (arr) => (arr || [])
   .sort((a, b) => a.k - b.k || a.i - b.i)
   .map((x) => x.r);
 
-const OTHER_CATS = ["legal_regulatory_ip", "business_model_execution", "financing_capital", "operations_process", "partnerships_alliances", "shareholder_governance", "uncategorized"];
+const OTHER_CATS_BASE = ["legal_regulatory_ip","business_model_execution","financing_capital","operations_process","partnerships_alliances","shareholder_governance"];
+const OTHER_CAT_DEFAULT_DEFS = {
+  "legal_regulatory_ip": "legal, regulatory and IP matters combined: trademark / IP protection and enforcement, licences, regulation, contracts and legal clauses (e.g. exclusive lease clauses).",
+  "business_model_execution": "the strategy for HOW the business chooses to run and continue itself: its sales / go-to-market model, positioning, strategic focus and the choices that keep the model going (e.g. a strict direct-to-customer sales model, hyper-focused positioning, doubling down on what works, staying focused instead of diversifying).",
+  "financing_capital": "how the business is funded: debt, equity or investors, capital structure, self-funding / reinvesting profit, cash reserves.",
+  "operations_process": "SOPs and operating processes: standard procedures, workflows, logistics, quality control, how work is organised and carried out.",
+  "partnerships_alliances": "brand tie-ups, distribution or supply deals, joint ventures, alliances and partner networks.",
+  "shareholder_governance": "ownership and role structure between owners: avoid 50:50 ownership, divide roles clearly, shareholder rights, governance.",
+  "uncategorized": "ONLY if none of the above fit."
+};
+/* The "Others" sub-categories are admin-editable too: config.otherCatOverrides[id] = { name, description } for the built-in ones and
+   config.customOtherCats = [{ id, name, description }] for new ones. OTHER_CATS is updated IN PLACE (custom ones sit before "uncategorized"),
+   so every place that loops over it sees the current list. With no edits the prompt text is exactly the original. */
+const OTHER_CATS = [...OTHER_CATS_BASE, "uncategorized"];
+let OTHER_CAT_OVERRIDES = {}, CUSTOM_OTHER_CATS = [];
+function setOtherCatConfig(overrides, custom) {
+  OTHER_CAT_OVERRIDES = overrides && typeof overrides === "object" ? overrides : {};
+  CUSTOM_OTHER_CATS = Array.isArray(custom) ? custom.filter((c) => c && c.id && c.name) : [];
+  OTHER_CATS.length = 0;
+  OTHER_CATS.push(...OTHER_CATS_BASE, ...CUSTOM_OTHER_CATS.map((c) => c.id), "uncategorized");
+}
+const otherCatDefinition = (id) => {
+  const c = CUSTOM_OTHER_CATS.find((x) => x.id === id);
+  if (c) return `${c.name}: ${c.description}`;
+  return String((OTHER_CAT_OVERRIDES[id] && OTHER_CAT_OVERRIDES[id].description) || "").trim() || OTHER_CAT_DEFAULT_DEFS[id];
+};
 // What each "Others" category means (shared by the extraction prompt and the classifier call, so they can never drift apart)
-const OTHER_CAT_DEFS = `  - legal_regulatory_ip = legal, regulatory and IP matters combined: trademark / IP protection and enforcement, licences, regulation, contracts and legal clauses (e.g. exclusive lease clauses).
-  - business_model_execution = the strategy for HOW the business chooses to run and continue itself: its sales / go-to-market model, positioning, strategic focus and the choices that keep the model going (e.g. a strict direct-to-customer sales model, hyper-focused positioning, doubling down on what works, staying focused instead of diversifying).
-  - financing_capital = how the business is funded: debt, equity or investors, capital structure, self-funding / reinvesting profit, cash reserves.
-  - operations_process = SOPs and operating processes: standard procedures, workflows, logistics, quality control, how work is organised and carried out.
-  - partnerships_alliances = brand tie-ups, distribution or supply deals, joint ventures, alliances and partner networks.
-  - shareholder_governance = ownership and role structure between owners: avoid 50:50 ownership, divide roles clearly, shareholder rights, governance.
-  - uncategorized = ONLY if none of the above fit.`;
+const otherCatDefs = () => OTHER_CATS.map((id) => `  - ${id} = ${otherCatDefinition(id)}`).join("\n");
+/* The 10 built-in levers are admin-editable (Admin settings > Edit built-in levers). These are the defaults; an admin override
+   (config.leverOverrides[id] = { name, description, headings }) replaces the display name, the definition the AI is given, and
+   adds extra heading words that map to the lever. With no overrides the extraction prompt is exactly what it always was. */
+const BUILTIN_LEVER_DEFAULTS = {
+  price: "pricing strategy, discounts, price sensitivity, value-based pricing, revenue per unit",
+  volume: "sales volume, customer count, traffic, repeat purchases, cross-sell, market expansion",
+  cogs: "cost of goods sold, gross margin, unit cost, supplier cost, wastage, warranty recovery (NOT receivable or payable days)",
+  overheads: "fixed costs, rent/lease, payroll, staff headcount, occupancy, admin expenses (NOT receivable or payable days — those are ar_days / ap_days)",
+  ar_days: "receivables, DSO, collections, credit terms, unpaid invoices, cash collection discipline",
+  inventory_days: "stock levels, turnover, stock turns, obsolescence, holding days, WIP",
+  ap_days: "payables, supplier payment terms, creditor days, negotiated payment windows, payable days",
+  talent_strategy: "hiring, training, retention, culture, succession, incentives, employee capability",
+  product_differentiation: "product design, IP, unique features, brand equity, customer experience, co-creation, exclusivity, service differentiation",
+  acquisition_expansion_valuation: "M&A strategy, target sourcing/screening, acquisition criteria, buy-and-build, platform/bolt-on acquisitions, deal valuation, ownership/earn-out approach, long-term ownership, and post-acquisition integration/operating model when explicitly tied to acquisitions.",
+};
+let LEVER_OVERRIDES = {}; // set from the saved config by setLeverOverrides(); read by the prompt builder and the heading matcher
+const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const splitHeadings = (s) => String(s || "").split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
+let EXTRA_HEADING_LEVER = [];
+function setLeverOverrides(ov) {
+  LEVER_OVERRIDES = ov && typeof ov === "object" ? ov : {};
+  EXTRA_HEADING_LEVER = Object.entries(LEVER_OVERRIDES).flatMap(([id, o]) =>
+    BUILTIN_LEVER_DEFAULTS[id] ? splitHeadings(o && o.headings).map((h) => [new RegExp("^" + escRe(h) + "(?![A-Za-z])", "i"), id]) : []);
+}
+const leverDefinition = (id) => String((LEVER_OVERRIDES[id] && LEVER_OVERRIDES[id].description) || "").trim() || BUILTIN_LEVER_DEFAULTS[id];
+const leverDefLine = (id) => {
+  const nm = String((LEVER_OVERRIDES[id] && LEVER_OVERRIDES[id].name) || "").trim();
+  return `- ${id}:${nm ? ` (shown to users as "${nm}")` : ""} ${leverDefinition(id)}`;
+};
+const extraHeadingNote = () => {
+  const rows = Object.entries(LEVER_OVERRIDES).filter(([id]) => BUILTIN_LEVER_DEFAULTS[id]).map(([id, o]) => [id, splitHeadings(o && o.headings)]).filter(([, h]) => h.length);
+  return rows.length ? `\nAlso: ${rows.map(([id, h]) => `${h.join(" / ")} → ${id}`).join(" · ")}` : "";
+};
 const LEGACY_OTHER_CATEGORY = {
   legal_ip: "legal_regulatory_ip", regulatory: "legal_regulatory_ip",
   partnerships: "partnerships_alliances", financing: "financing_capital",
@@ -387,15 +439,28 @@ const TYPE_COLORS = {
 
 async function sget(key, shared = true) {
   try { const r = await window.storage.get(key, shared); return r ? JSON.parse(r.value) : null; }
-  catch { return null; }
+  catch (e) {
+    if (window.storage?.remote && String(e?.message) !== "not found") throw e; // shared database unreachable: surface it, never pretend the library is empty
+    return null;
+  }
 }
 async function sset(key, val, shared = true) {
   const r = await window.storage.set(key, JSON.stringify(val), shared);
   if (!r) throw new Error("storage write failed");
 }
 async function sdel(key, shared = true) {
-  try { await window.storage.delete(key, shared); } catch { }
+  try { await window.storage.delete(key, shared); } catch (e) { if (window.storage?.remote) throw e; } // shared database: a refused delete must not look done
 }
+
+/* Nothing is hard-deleted. Every stored item (document, index entry, lever record, chat message, gap-log entry) has a status:
+   "active" (missing = active, for older data) or "deleted" (kept in storage with deleted_at, hidden everywhere in the app). */
+const isLive = (x) => !x || x.status !== "deleted";
+const live = (arr) => (Array.isArray(arr) ? arr.filter(isLive) : []);
+const me = () => (window.storage?.user && window.storage.user.email) || undefined; // signed-in user (shared database), for the audit trail
+const softDelete = (x) => ({ ...x, status: "deleted", deleted_at: Date.now(), deleted_by: me() });
+// Chat history: with the shared database it belongs to the signed-in person (kb:chat:<their user id>, readable only by them and admins);
+// without it, exactly as before in this browser's own storage.
+const chatStore = () => (window.storage?.remote ? { key: "kb:chat:" + window.storage.user.id, shared: true, cap: 500 } : { key: "kb:chatlog", shared: false, cap: 80 });
 
 const GROQ_URL = "/api/groq/chat"; // proxied server-side so the API key never reaches the browser
 const GROQ_MODEL = "openai/gpt-oss-120b";
@@ -524,7 +589,7 @@ async function askAI(userContent, maxTokens = 1500, maxRetries = 2) {
       if (useReasoningParam) body.reasoning_effort = "low";
       const res = await fetch(GROQ_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...((await window.storage?.authHeader?.()) || {}) },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -603,7 +668,7 @@ export default function App() {
   const [lang] = useState("en"); // [ZH disabled for now] was: const [lang, setLang] = useState("en");
   const [tab, setTab] = useState("kb");
   const [kbWorking, setKbWorking] = useState(false); // an extraction / save is running inside the Knowledge Base tab
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(!!(window.storage?.remote && window.storage.user?.isAdmin)); // with sign-in, admin accounts are admins as soon as they log in
   const [config, setConfig] = useState(null);
   const [index, setIndex] = useState([]);
   const [levers, setLevers] = useState([]);
@@ -611,9 +676,22 @@ export default function App() {
   const [loadErr, setLoadErr] = useState(false);
   const [previewDoc, setPreviewDoc] = useState(null);
   const [gateOpen, setGateOpen] = useState(false);
+  const signedUser = window.storage?.remote ? window.storage.user : null; // { id, email, isAdmin } when the shared database is on
+  const isGuest = !!(window.storage?.remote && !window.storage.user); // "continue as guest": may only browse the knowledge base and lever records
   const [toast, setToast] = useState("");
   const [confirm, setConfirm] = useState(null);
-  const [chatMsgs, setChatMsgs] = useState([]);
+  const [chatAll, setChatAll] = useState([]); // every message, deleted ones included
+  const chatOkRef = useRef(false);
+  const chatMsgs = useMemo(() => chatAll.filter(isLive), [chatAll]);
+  // The chat panel works on the visible messages; anything it removes (Clear chat) is kept, marked deleted
+  const setChatMsgs = useCallback((upd) => setChatAll((all) => {
+    const liveNow = all.filter(isLive);
+    const next = typeof upd === "function" ? upd(liveNow) : upd;
+    const stamped = next.map((m) => (m.id ? m : { ...m, id: uid(), status: "active", at: Date.now() }));
+    const keep = new Set(stamped.map((m) => m.id));
+    const removed = liveNow.filter((m) => !keep.has(m.id)).map(softDelete);
+    return [...all.filter((m) => !isLive(m)), ...removed, ...stamped];
+  }), []);
   const [adminLocked, setAdminLocked] = useState(false);
   const [palette, setPalette] = useState(false);
   const [paletteLever, setPaletteLever] = useState(null);
@@ -629,30 +707,57 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const t = useMemo(() => ({
-    ...T[lang],
-    levers: {
-      ...T[lang].levers,
-      ...Object.fromEntries((config?.customLevers || []).map((lever) => [lever.id, lever.name])),
-    },
-  }), [lang, config]);
+  const t = useMemo(() => {
+    setOtherCatConfig(config?.otherCatOverrides, config?.customOtherCats);
+    setLeverOverrides(config?.leverOverrides); // admin edits to the built-in levers reach the extraction prompt and heading matcher
+    const renamed = Object.fromEntries(Object.entries(config?.leverOverrides || {}).filter(([id, o]) => (BUILTIN_LEVER_DEFAULTS[id] || id === "others") && o && String(o.name || "").trim()).map(([id, o]) => [id, String(o.name).trim()]));
+    return {
+      ...T[lang],
+      levers: {
+        ...T[lang].levers,
+        ...renamed,
+        ...Object.fromEntries((config?.customLevers || []).map((lever) => [lever.id, lever.name])),
+      },
+      otherCats: {
+        ...T[lang].otherCats,
+        ...Object.fromEntries(Object.entries(config?.otherCatOverrides || {}).filter(([, o]) => o && String(o.name || "").trim()).map(([id, o]) => [id, String(o.name).trim()])),
+        ...Object.fromEntries((config?.customOtherCats || []).map((c) => [c.id, c.name])),
+      },
+    };
+  }, [lang, config]);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
+  // The bottom-left button. With sign-in it is Log in (guest) / Log out (signed in); the SERVER decides who is an admin, so there is no
+  // passcode. Without the shared database it stays "Unlock admin" with the passcode.
+  const authLabel = window.storage?.remote ? (isGuest ? "Log in" : "Log out") : (isAdmin ? t.lockAdmin : t.unlockAdmin);
+  const authBtnClick = () => {
+    if (exitBlocked) { flash(t.exitBlocked); return; }
+    if (window.storage?.remote) { if (isGuest) window.dispatchEvent(new Event("yyc-show-login")); else window.storage.signOut(); return; }
+    if (isAdmin) setIsAdmin(false); else setGateOpen(true);
+  };
   const exitBlocked = isAdmin && (adminLocked || confirm !== null || previewDoc !== null);
 
   useEffect(() => {
     (async () => {
       try {
         let cfg = await sget("kb:config");
-        if (!cfg) { cfg = { adminPass: "12345" }; await sset("kb:config", cfg); }
+        if (!cfg) {
+          if (window.storage?.remote) cfg = {}; // shared database: the server holds the admin password (default 12345 until changed)
+          else { cfg = { adminPass: "12345" }; await sset("kb:config", cfg); }
+        }
         setConfig(cfg);
-        setIndex((await sget("kb:index")) || []);
-        setLevers((await sget("kb:levers")) || []);
+        setIndex(live(await sget("kb:index")));
+        setLevers(live(await sget("kb:levers")));
         /* [ZH disabled for now — English only] restore saved UI language
         const savedLang = await sget("ui:lang", false);
         if (savedLang) setLang(savedLang);
         */
-        const savedChat = await sget("kb:chatlog", false);
-        if (Array.isArray(savedChat) && savedChat.length) setChatMsgs(savedChat);
+        try { // the chat must not stop the library from loading, and is only saved back once it has been read successfully
+          if (window.storage?.remote && !window.storage.user) throw new Error("guest: no chat"); // guests have no chat history
+          const cs = chatStore();
+          const savedChat = await sget(cs.key, cs.shared);
+          if (Array.isArray(savedChat) && savedChat.length) setChatAll(savedChat.map((m) => (m.id ? m : { ...m, id: uid(), status: "active" })));
+          chatOkRef.current = true;
+        } catch { chatOkRef.current = false; }
         setReady(true);
       } catch { setLoadErr(true); }
     })();
@@ -667,10 +772,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
-    const capped = chatMsgs.slice(-40);
-    sset("kb:chatlog", capped, false).catch(() => { });
-  }, [chatMsgs, ready]);
+    if (!ready || !chatOkRef.current) return;
+    const cs = chatStore();
+    sset(cs.key, chatAll.slice(-cs.cap), cs.shared).catch(() => { });
+  }, [chatAll, ready]);
 
   // [ZH disabled for now — English only] language switcher handler
   // const switchLang = (l) => { setLang(l); sset("ui:lang", l, false).catch(() => { }); };
@@ -681,13 +786,13 @@ export default function App() {
   }, []);
 
   const refreshKB = async () => {
-    setIndex((await sget("kb:index")) || []);
-    setLevers((await sget("kb:levers")) || []);
+    setIndex(live(await sget("kb:index")));
+    setLevers(live(await sget("kb:levers")));
   };
 
   const navItems = [
     { key: "kb", icon: "book", label: t.tabs.kb },
-    { key: "chat", icon: "chat", label: t.tabs.chat },
+    ...(isGuest ? [] : [{ key: "chat", icon: "chat", label: t.tabs.chat }]), // guests cannot use Ask the Brain
     { key: "explorer", icon: "scale", label: t.tabs.explorer },
     ...(isAdmin ? [{ key: "gap", icon: "alert", label: t.tabs.gap }] : []),
   ];
@@ -745,16 +850,18 @@ export default function App() {
             <button
               className={`yyc-admin-btn ${isAdmin ? "is-on" : ""}`}
               disabled={exitBlocked}
-              title={exitBlocked ? t.exitBlocked : (isAdmin ? t.lockAdmin : t.unlockAdmin)}
-              onClick={() => {
-                if (exitBlocked) { flash(t.exitBlocked); return; }
-                isAdmin ? setIsAdmin(false) : setGateOpen(true);
-              }}
+              title={exitBlocked ? t.exitBlocked : authLabel}
+              onClick={authBtnClick}
               style={exitBlocked ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
             >
-              <Icon name={isAdmin ? "unlock" : "lock"} size={13} />
-              {isAdmin ? t.lockAdmin : t.unlockAdmin}
+              <Icon name={window.storage?.remote ? (isGuest ? "lock" : "unlock") : (isAdmin ? "unlock" : "lock")} size={13} />
+              {authLabel}
             </button>
+            {window.storage?.remote && (
+              <div style={{ fontSize: 12, color: P.sub, margin: "8px 2px 0", lineHeight: 1.5, wordBreak: "break-all" }}>
+                {signedUser ? <>{signedUser.email}{signedUser.isAdmin ? " · admin" : ""}</> : "Guest · browse only"}
+              </div>
+            )}
             <div className="yyc-foot-note">{t.sharedNote}</div>
           </div>
         </aside>
@@ -781,14 +888,12 @@ export default function App() {
               <button
                 className={`yyc-admin-btn ${isAdmin ? "is-on" : ""}`}
                 disabled={exitBlocked}
-                title={exitBlocked ? t.exitBlocked : (isAdmin ? t.lockAdmin : t.unlockAdmin)}
-                onClick={() => {
-                  if (exitBlocked) { flash(t.exitBlocked); return; }
-                  isAdmin ? setIsAdmin(false) : setGateOpen(true);
-                }}
+                title={exitBlocked ? t.exitBlocked : authLabel}
+                onClick={authBtnClick}
                 style={exitBlocked ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
               >
-                <Icon name={isAdmin ? "unlock" : "lock"} size={13} />
+                <Icon name={window.storage?.remote ? (isGuest ? "lock" : "unlock") : (isAdmin ? "unlock" : "lock")} size={13} />
+                {window.storage?.remote ? <span style={{ marginLeft: 6 }}>{authLabel}</span> : null}
               </button>
             </div>
           </header>
@@ -823,7 +928,7 @@ export default function App() {
                     />
                   )}
                   {tab === "explorer" && (
-                    <ExplorerPanel t={t} lang={lang} levers={levers} index={index} openPreview={openPreview} />
+                    <ExplorerPanel t={t} lang={lang} levers={levers} index={index} openPreview={openPreview} isAdmin={isAdmin} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} />
                   )}
                   {tab === "gap" && isAdmin && <GapPanel t={t} flash={flash} setConfirm={setConfirm} />}
                   </div>
@@ -849,7 +954,7 @@ export default function App() {
       {gateOpen && <AdminGate t={t} config={config} onOk={() => { setIsAdmin(true); setGateOpen(false); }} onClose={() => setGateOpen(false)} />}
       {palette && (
         <CommandPalette
-          t={t} index={index} isAdmin={isAdmin}
+          t={t} index={index} isAdmin={isAdmin} isGuest={isGuest}
           onClose={() => setPalette(false)}
           onTab={(id) => setTab(id)}
           onDoc={(id) => openPreview(id)}
@@ -1113,7 +1218,7 @@ function GlobalStyles() {
   );
 }
 
-function CommandPalette({ t, index, isAdmin, onClose, onTab, onDoc, onLever }) {
+function CommandPalette({ t, index, isAdmin, isGuest, onClose, onTab, onDoc, onLever }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
@@ -1121,7 +1226,7 @@ function CommandPalette({ t, index, isAdmin, onClose, onTab, onDoc, onLever }) {
 
   const items = useMemo(() => [
     ...Object.entries(t.tabs)
-      .filter(([k]) => k !== "gap" || isAdmin)
+      .filter(([k]) => (k !== "gap" || isAdmin) && !(k === "chat" && isGuest))
       .map(([k, label]) => ({ type: "tab", id: k, label, sub: "", badge: t.kbarPage })),
     ...Object.keys(t.levers).map((l) => ({ type: "lever", id: l, label: t.levers[l], sub: "", badge: t.kbarLever })),
     ...index.map((d) => ({
@@ -1129,7 +1234,7 @@ function CommandPalette({ t, index, isAdmin, onClose, onTab, onDoc, onLever }) {
       sub: `${t.docTypes[d.doc_type] || d.doc_type}${d.industry ? " · " + d.industry : ""}`,
       badge: t.kbarDoc,
     })),
-  ], [t, index, isAdmin]);
+  ], [t, index, isAdmin, isGuest]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -1222,7 +1327,14 @@ function ConfirmModal({ message, onCancel, onConfirm }) {
 function AdminGate({ t, config, onOk, onClose }) {
   const [pass, setPass] = useState("");
   const [err, setErr] = useState(false);
-  const tryUnlock = () => { if (pass === (config?.adminPass || "12345")) onOk(); else setErr(true); };
+  const tryUnlock = async () => {
+    if (window.storage?.remote) { // shared database: the server checks the password and returns an admin session
+      let ok = false;
+      try { ok = await window.storage.login(pass); } catch { ok = false; }
+      if (ok) onOk(); else setErr(true);
+    } else if (pass === (config?.adminPass || "12345")) onOk();
+    else setErr(true);
+  };
   return (
     <div className="yyc-modal-backdrop" onClick={onClose}>
       <div className="yyc-modal" style={{ width: 400, padding: 26 }} onClick={(e) => e.stopPropagation()}>
@@ -1398,7 +1510,7 @@ function leverHeadingRaw(p) {
   if (MNA_SECTION_RE.test(x)) return x; // M&A section headings may be long ("What <Company> Brings to Acquired Companies")
   const words = wordCount(x);
   // the line must BE a heading phrase, not merely start with a lever word ("Customer pays before fulfilment" is a strategy title, not "Customers")
-  const hit = words <= 5 ? HEADING_LEVER.find(([re]) => re.test(x)) : null;
+  const hit = words <= 5 ? [...HEADING_LEVER, ...EXTRA_HEADING_LEVER].find(([re]) => re.test(x)) : null;
   if (hit) {
     const rest = x.slice(x.match(hit[0])[0].length);
     if (/^[\s/&,-]*(and\s+)?(days?|strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x; // "Receivable Days", "Payable Days", "Talent Strategy"
@@ -1444,7 +1556,7 @@ const HEADING_LEVER = [
   [/^(acquisitions?\s*,?\s*(expansion\s*|\w+\s*)?(&|and)\s*valuation|expansion\s*&\s*valuation|acquisition\s*&\s*expansion|mergers?\s*(and|&)\s*acquisitions?|m\s*&\s*a\s*$|post[- ]merger integration|business combinations?)(?![A-Za-z])/i, "acquisition_expansion_valuation"],
   [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
 ];
-const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = HEADING_LEVER.find(([re]) => re.test(x)); return hit ? hit[1] : null; };
+const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = [...HEADING_LEVER, ...EXTRA_HEADING_LEVER].find(([re]) => re.test(x)); return hit ? hit[1] : null; };
 const isTitleLike = (p) => { const t = p.trim(); return t.length <= 80 && !/\n/.test(t) && !/[.!?]$/.test(t); };
 
 function chunkMaterial(text, size = 3800) {
@@ -1780,7 +1892,7 @@ async function classifyOthers(levers) {
   const prompt = `You classify business strategies for an advisory knowledge base. File EACH strategy below into exactly ONE category, judged by what the strategy is really about.
 
 CATEGORIES:
-${OTHER_CAT_DEFS}
+${otherCatDefs()}
 
 Guidance: money coming in or being kept (debt, investors, equity sold, reinvested profit, cash reserves, conservative profit targets) = financing_capital. Contracts, leases, trademarks, IP, regulation = legal_regulatory_ip. How owners split ownership or roles (avoid 50:50, divide roles clearly) = shareholder_governance. A sales model, positioning, focus or the choice to keep the model going = business_model_execution. Written procedures and how work is organised = operations_process. Use uncategorized only when truly nothing fits.
 
@@ -2227,24 +2339,24 @@ Each record is shown as **strategy_name**: description, followed by an impact bo
 ${formatSection}
 
 ═══ 5. LEVER DEFINITIONS AND HEADING SYNONYMS ═══
-Heading → lever: Pricing/Price → price · Sales/Customers/Demand → volume · COGS/Cost of Goods Sold/Margin → cogs · Overhead(s)/Fixed costs → overheads · Receivables/Accounts Receivable/Collections/AR/Credit control/Receivable Days → ar_days · Inventory/Stock → inventory_days · Payables/Accounts Payable/AP/Supplier terms/Payable Days → ap_days · Talent/People/Hiring/Culture → talent_strategy · Product/Brand/Design/Differentiation → product_differentiation · M&A/Acquisition/Expansion/Valuation/Post-Acquisition headings and explicit acquisition strategy or screening criteria → acquisition_expansion_valuation · "Other Strategies (Used to Grow the Business)" or any other key strategy (e.g. Additional Strategies) → others
+Heading → lever: Pricing/Price → price · Sales/Customers/Demand → volume · COGS/Cost of Goods Sold/Margin → cogs · Overhead(s)/Fixed costs → overheads · Receivables/Accounts Receivable/Collections/AR/Credit control/Receivable Days → ar_days · Inventory/Stock → inventory_days · Payables/Accounts Payable/AP/Supplier terms/Payable Days → ap_days · Talent/People/Hiring/Culture → talent_strategy · Product/Brand/Design/Differentiation → product_differentiation · M&A/Acquisition/Expansion/Valuation/Post-Acquisition headings and explicit acquisition strategy or screening criteria → acquisition_expansion_valuation · "Other Strategies (Used to Grow the Business)" or any other key strategy (e.g. Additional Strategies) → others${extraHeadingNote()}
 
 CASH LEVERS (Alan Miltz framework — when the text discusses cash-flow mechanics):
-- price: pricing strategy, discounts, price sensitivity, value-based pricing, revenue per unit
-- volume: sales volume, customer count, traffic, repeat purchases, cross-sell, market expansion
-- cogs: cost of goods sold, gross margin, unit cost, supplier cost, wastage, warranty recovery (NOT receivable or payable days)
-- overheads: fixed costs, rent/lease, payroll, staff headcount, occupancy, admin expenses (NOT receivable or payable days — those are ar_days / ap_days)
-- ar_days: receivables, DSO, collections, credit terms, unpaid invoices, cash collection discipline
-- inventory_days: stock levels, turnover, stock turns, obsolescence, holding days, WIP
-- ap_days: payables, supplier payment terms, creditor days, negotiated payment windows, payable days
+${leverDefLine("price")}
+${leverDefLine("volume")}
+${leverDefLine("cogs")}
+${leverDefLine("overheads")}
+${leverDefLine("ar_days")}
+${leverDefLine("inventory_days")}
+${leverDefLine("ap_days")}
 
 NON-CASH STRATEGIC LEVERS (do NOT force these into cash levers):
-- talent_strategy: hiring, training, retention, culture, succession, incentives, employee capability
-- product_differentiation: product design, IP, unique features, brand equity, customer experience, co-creation, exclusivity, service differentiation
-- acquisition_expansion_valuation: M&A strategy, target sourcing/screening, acquisition criteria, buy-and-build, platform/bolt-on acquisitions, deal valuation, ownership/earn-out approach, long-term ownership, and post-acquisition integration/operating model when explicitly tied to acquisitions.
+${leverDefLine("talent_strategy")}
+${leverDefLine("product_differentiation")}
+${leverDefLine("acquisition_expansion_valuation")}
 - others: any key strategy that fits none of the above — e.g. legal/trademark enforcement, exclusive lease clauses, regulatory response, competitive moats, brand partnerships. A strategy whose clause mentions KPIs it focuses on (rebooking, utilization) stays ONE others record; do not split it into volume records.
   For EVERY "others" record you MUST also set other_category and related_to. Pick the ONE category that fits best:
-${OTHER_CAT_DEFS}
+${otherCatDefs()}
   related_to = 3-8 English words naming what the strategy specifically relates to.
 For M&A records, use acquisition_expansion_valuation for acquisition strategy and criteria. Use others only when the strategy is not itself an acquisition/valuation/ownership policy and another category clearly fits (e.g. a standalone shareholder governance or financing policy). Do not duplicate one strategy across lever categories.
 
@@ -2310,8 +2422,6 @@ function KnowledgePanel({
   const [subCat, setSubCat] = useState("all");
   const [pickerRecord, setPickerRecord] = useState(null);
   const [statPicker, setStatPicker] = useState(false);
-  const [showLeverManager, setShowLeverManager] = useState(false);
-  const [leverDraft, setLeverDraft] = useState({ name: "", description: "", example: "" });
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -2319,13 +2429,12 @@ function KnowledgePanel({
     const locked =
       mode === "edit" || mode === "review" || mode === "add" ||
       busy ||
-      showLeverManager ||
       editLeverRecord !== null ||
       pickerRecord !== null ||
       statPicker;
     setAdminLocked(locked);
     return () => setAdminLocked(false);
-  }, [mode, busy, showLeverManager, editLeverRecord, pickerRecord, statPicker, setAdminLocked]);
+  }, [mode, busy, editLeverRecord, pickerRecord, statPicker, setAdminLocked]);
 
   // tell the app when something is running, and warn before the page is closed/refreshed with work in progress or an unsaved review
   const working = busy || bulkRunning;
@@ -2443,6 +2552,8 @@ function KnowledgePanel({
       const id = uid();
       const doc = {
         id,
+        status: "active",
+        created_by: me(),
         title: cleanDocTitle(extraction.title || title) || "Untitled",
         doc_type: extraction.doc_type || "notes",
         industry: extraction.industry || "General",
@@ -2458,7 +2569,7 @@ function KnowledgePanel({
       await sset("kb:doc:" + id, doc);
       const idx = (await sget("kb:index")) || [];
       idx.push({
-        id, title: doc.title, doc_type: doc.doc_type,
+        id, status: "active", created_by: doc.created_by, title: doc.title, doc_type: doc.doc_type,
         industry: doc.industry, industry_main: doc.industry_main, industry_sub: doc.industry_sub,
         language: doc.language, problem_signature: doc.problem_signature,
         created: doc.created,
@@ -2468,7 +2579,7 @@ function KnowledgePanel({
       (extraction.levers || []).forEach((lr) => {
         if (leverKeys.includes(lr.lever) && !lr.skip) {
           const { skip, ...clean } = lr;
-          allLevers.push(normalizeOther({ id: uid(), doc_id: id, doc_title: doc.title, ...clean }));
+          allLevers.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
         }
       });
       await sset("kb:levers", allLevers);
@@ -2491,10 +2602,12 @@ function KnowledgePanel({
     setConfirm({
       message: t.delConfirm,
       onConfirm: async () => {
-        await sdel("kb:doc:" + docId);
-        const idx = ((await sget("kb:index")) || []).filter((d) => d.id !== docId);
+        // soft delete: the document, its index entry and its lever records stay in storage, marked deleted
+        const doc = await sget("kb:doc:" + docId);
+        if (doc && isLive(doc)) await sset("kb:doc:" + docId, softDelete(doc));
+        const idx = ((await sget("kb:index")) || []).map((d) => (d.id === docId && isLive(d) ? softDelete(d) : d));
         await sset("kb:index", idx);
-        const allLevers = ((await sget("kb:levers")) || []).filter((l) => l.doc_id !== docId);
+        const allLevers = ((await sget("kb:levers")) || []).map((l) => (l.doc_id === docId && isLive(l) ? softDelete(l) : l));
         await sset("kb:levers", allLevers);
         await refreshKB();
       },
@@ -2530,7 +2643,7 @@ function KnowledgePanel({
       message: t.delConfirm,
       onConfirm: async () => {
         const allLevers = (await sget("kb:levers")) || [];
-        await sset("kb:levers", allLevers.filter((item) => item.id !== record.id));
+        await sset("kb:levers", allLevers.map((item) => (item.id === record.id && isLive(item) ? softDelete(item) : item)));
         await refreshKB();
       },
     });
@@ -2546,7 +2659,7 @@ function KnowledgePanel({
       const idx = ((await sget("kb:index")) || []).map((d) =>
         d.id === editDoc.id
           ? {
-            id: editDoc.id, title: editDoc.title, doc_type: editDoc.doc_type,
+            id: editDoc.id, status: d.status || "active", title: editDoc.title, doc_type: editDoc.doc_type,
             industry: editDoc.industry, industry_main: editDoc.industry_main, industry_sub: editDoc.industry_sub,
             language: editDoc.language, problem_signature: editDoc.problem_signature,
             created: editDoc.created || d.created,
@@ -2554,11 +2667,15 @@ function KnowledgePanel({
           : d
       );
       await sset("kb:index", idx);
-      const others = ((await sget("kb:levers")) || []).filter((l) => l.doc_id !== editDoc.id);
+      const stored = (await sget("kb:levers")) || [];
+      const others = stored.filter((l) => l.doc_id !== editDoc.id);
       const mine = editLevers
         .filter((l) => leverKeys.includes(l.lever) && ((l.claim_en || "").trim() || (l.claim_zh || "").trim()))
-        .map((l) => normalizeOther({ ...l, doc_title: editDoc.title }));
-      await sset("kb:levers", [...others, ...mine]);
+        .map((l) => normalizeOther({ status: "active", ...l, doc_title: editDoc.title }));
+      const keptIds = new Set(mine.map((l) => l.id));
+      // records of this document that are no longer on the edit screen (removed, or emptied) stay in storage, marked deleted
+      const gone = stored.filter((l) => l.doc_id === editDoc.id && !keptIds.has(l.id)).map((l) => (isLive(l) ? softDelete(l) : l));
+      await sset("kb:levers", [...others, ...gone, ...mine]);
       await refreshKB();
       setMode("list"); setEditDoc(null); setEditLevers([]);
       flash(t.saved);
@@ -2569,89 +2686,12 @@ function KnowledgePanel({
   const savePass = async () => {
     if (!newPass.trim()) return;
     const cfg = { ...config, adminPass: newPass.trim() };
-    await sset("kb:config", cfg); setConfig(cfg); setNewPass(""); flash(t.passChanged);
-  };
-
-  const persistCustomLever = async (draft) => {
-    const current = config?.customLevers || [];
-    const normalizedName = draft.name.trim().toLowerCase();
-    const duplicate = current.find((item) => item.id !== draft.id && item.name.trim().toLowerCase() === normalizedName);
-    if (duplicate || Object.entries(T.en.levers).some(([key, name]) => key !== draft.id && name.toLowerCase() === normalizedName)) {
-      setErrMsg("A lever with this name already exists.");
-      return;
-    }
-    const slug = normalizedName.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "custom";
-    const item = { ...draft, id: draft.id || `custom_${slug}_${uid()}`, name: draft.name.trim(), description: draft.description.trim(), example: draft.example.trim() };
-    const customLevers = draft.id
-      ? current.map((entry) => entry.id === draft.id ? item : entry)
-      : [...current, item];
-    const cfg = { ...config, customLevers };
-    await sset("kb:config", cfg);
-    setConfig(cfg);
-    setLeverDraft({ name: "", description: "", example: "" });
-    setErrMsg("");
-    flash("Lever category saved");
-  };
-
-  const validateAndSaveLever = async () => {
-    const draft = { ...leverDraft, name: leverDraft.name.trim(), description: leverDraft.description.trim(), example: leverDraft.example.trim() };
-    if (!draft.name || !draft.description || !draft.example) {
-      setErrMsg("Enter a name, definition, and example before validating.");
-      return;
-    }
-    setBusy(true); setErrMsg("");
     try {
-      const existingCategories = Object.fromEntries(Object.entries(t.levers).filter(([key]) => key !== draft.id));
-      const result = await askAI(`Review this proposed knowledge-base lever category. Judge whether its name, definition, and example are coherent and useful for classifying business strategies, and whether its scope is distinct enough from the existing categories. Return JSON only: {"valid": true|false, "reason": "short explanation"}. Existing categories: ${JSON.stringify(existingCategories)}. Proposed category: ${JSON.stringify({ name: draft.name, description: draft.description, example: draft.example })}`, 350);
-      if (result.valid === true) {
-        await persistCustomLever(draft);
-      } else {
-        const reason = String(result.reason || "The AI could not confirm that this category is clear and distinct.");
-        setConfirm({
-          message: `${reason}\n\nDo you want to save this category anyway? Please confirm again.`,
-          onConfirm: () => persistCustomLever(draft),
-        });
-      }
-    } catch (e) { setErrMsg(describeAIError(e, t)); }
-    setBusy(false);
+      await sset("kb:config", cfg);
+      setConfig(window.storage?.remote ? { ...cfg, adminPass: undefined } : cfg); // the server keeps only a hash of the new password
+      setNewPass(""); flash(t.passChanged);
+    } catch (e) { setErrMsg(String(e?.message || t.loadErr)); }
   };
-
-  const leverManagerView = showLeverManager && isAdmin ? (
-    <div className="yyc-modal-backdrop" onClick={() => !busy && setShowLeverManager(false)}>
-      <div className="yyc-modal yyc-edit-record-modal" style={{ width: 680, maxWidth: "100%", padding: 24 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12}}>
-          <div>
-            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin settings</div>
-            <h2 style={{ margin: "4px 0 0", fontSize: 20 , color: "#4a0707", fontWeight: "bolder"}}>New Lever Category Creation</h2>
-          </div>
-          <button className="yyc-icon-btn" onClick={() => setShowLeverManager(false)} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10}}>
-          {(config?.customLevers || []).map((item) => (
-            <button key={item.id} className="yyc-btn-secondary" style={{ justifyContent: "space-between", borderRadius: 10, textAlign: "left" }} onClick={() => setLeverDraft({ ...item })}>
-              <span><b>{item.name}</b><br /><small style={{ color: P.faint }}>{item.description}</small></span>
-              <Icon name="edit" size={13} />
-            </button>
-          ))}
-        </div>
-        <div style={{ marginTop: 10, paddingTop: 5, borderTop: `1px solid ${P.line}` }}>
-          <div style={{ fontSize: 14, fontWeight: 750, marginBottom: 10 }}>{leverDraft.id ? `Edit: ${leverDraft.name}` : "Create a lever category"}</div>
-          <label style={S.label}>Name</label>
-          <input className="yyc-input" value={leverDraft.name} onChange={(e) => setLeverDraft((draft) => ({ ...draft, name: e.target.value }))} placeholder="e.g. Customer Retention" />
-          <label className="yyc-edit-record-field" style={S.label}>Definition and classification guidance</label>
-          <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={leverDraft.description} onChange={(e) => setLeverDraft((draft) => ({ ...draft, description: e.target.value }))} placeholder="Describe which strategies belong in this category." />
-          <label className="yyc-edit-record-field" style={S.label}>Example strategy</label>
-          <textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={leverDraft.example} onChange={(e) => setLeverDraft((draft) => ({ ...draft, example: e.target.value }))} placeholder="Give the AI a concrete example." />
-          <div style={{ fontSize: 12, lineHeight: 1.5, color: P.sub, marginTop: 8 }}>AI checks that the category is clear and distinct. If it flags a concern, you can review the reason and confirm whether to save anyway.</div>
-          {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 10 }}>{errMsg}</div>}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-            {leverDraft.id && <button className="yyc-btn-secondary" onClick={() => setLeverDraft({ name: "", description: "", example: "" })}>New category</button>}
-            <button className="yyc-btn-primary" onClick={validateAndSaveLever} disabled={busy}>{busy ? "Checking with AI…" : leverDraft.id ? "Validate and save changes" : "Validate and create"}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  ) : null;
 
   const importRef = useRef(null);
 
@@ -2674,13 +2714,13 @@ function KnowledgePanel({
             let added = 0;
             for (const doc of parsed.docs) {
               if (!doc?.id || curIds.has(doc.id)) continue; // skip duplicates by id
-              await sset("kb:doc:" + doc.id, doc);
+              await sset("kb:doc:" + doc.id, { status: "active", ...doc });
               const meta = parsed.index.find((x) => x.id === doc.id);
-              curIndex.push(meta || {
+              curIndex.push({ status: "active", ...(meta || {
                 id: doc.id, title: doc.title, doc_type: doc.doc_type,
                 industry: doc.industry, industry_main: doc.industry_main, industry_sub: doc.industry_sub,
                 language: doc.language, problem_signature: doc.problem_signature, created: doc.created,
-              });
+              }) });
               curIds.add(doc.id);
               added++;
             }
@@ -2688,25 +2728,34 @@ function KnowledgePanel({
             const curLevers = (await sget("kb:levers")) || [];
             const leverIds = new Set(curLevers.map((l) => l.id));
             (Array.isArray(parsed.levers) ? parsed.levers : []).forEach((l) => {
-              if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push(l); leverIds.add(l.id); }
+              if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push({ status: "active", ...l }); leverIds.add(l.id); }
             });
             await sset("kb:levers", curLevers);
-            /* Keep local settings and passcode, but merge category definitions needed to label imported records. */
-            if (Array.isArray(parsed.config?.customLevers) && parsed.config.customLevers.length) {
+            /* Keep local settings and passcode, but merge the category definitions needed to label imported records
+               (custom levers / sub-categories by id; edits to built-in levers / sub-categories only where nothing is set yet). */
+            const pc = parsed.config || {};
+            const hasCfg = [pc.customLevers, pc.customOtherCats].some((x) => Array.isArray(x) && x.length) || [pc.leverOverrides, pc.otherCatOverrides].some((x) => x && typeof x === "object" && Object.keys(x).length);
+            if (hasCfg) {
               const localConfig = (await sget("kb:config")) || config || {};
-              const customLevers = [...(localConfig.customLevers || [])];
-              const knownIds = new Set(customLevers.map((item) => item.id));
-              parsed.config.customLevers.forEach((item) => {
-                if (item?.id && item?.name && !knownIds.has(item.id)) { customLevers.push(item); knownIds.add(item.id); }
-              });
-              const mergedConfig = { ...localConfig, customLevers };
+              const mergeById = (mine = [], theirs = [], ok) => {
+                const out = [...mine]; const known = new Set(out.map((i) => i.id));
+                (Array.isArray(theirs) ? theirs : []).forEach((i) => { if (i?.id && ok(i) && !known.has(i.id)) { out.push(i); known.add(i.id); } });
+                return out;
+              };
+              const mergedConfig = {
+                ...localConfig,
+                customLevers: mergeById(localConfig.customLevers, pc.customLevers, (i) => i.name),
+                customOtherCats: mergeById(localConfig.customOtherCats, pc.customOtherCats, (i) => i.name),
+                leverOverrides: { ...(pc.leverOverrides || {}), ...(localConfig.leverOverrides || {}) },
+                otherCatOverrides: { ...(pc.otherCatOverrides || {}), ...(localConfig.otherCatOverrides || {}) },
+              };
               await sset("kb:config", mergedConfig);
               setConfig(mergedConfig);
             }
             await refreshKB();
             flash(t.importDone.replace("{n}", String(added)));
-          } catch {
-            setErrMsg(t.importQuotaErr); // most likely: localStorage 5MB cap exceeded
+          } catch (err) {
+            setErrMsg(window.storage?.remote ? String(err?.message || t.importErr) : t.importQuotaErr); // local storage: most likely the 5MB cap
           }
         },
       });
@@ -2791,7 +2840,7 @@ function KnowledgePanel({
     const delLev = (i) => setEditLevers((ls) => ls.filter((_, j) => j !== i));
     const addLev = () => setEditLevers((ls) => [
       ...ls,
-      { id: uid(), doc_id: editDoc.id, doc_title: editDoc.title, lever: "price", claim_en: "", claim_zh: "", impact: "", section: "" },
+      { id: uid(), status: "active", doc_id: editDoc.id, doc_title: editDoc.title, lever: "price", claim_en: "", claim_zh: "", impact: "", section: "" },
     ]);
 
     return (
@@ -2802,7 +2851,6 @@ function KnowledgePanel({
               <Icon name="arrowLeft" size={13} /> {t.cancel}
             </button>
             <h1 className="yyc-section-title">{t.editTitle}</h1>
-            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)} style={{ marginTop: 10 }}>Manage lever categories</button>
           </div>
         </div>
 
@@ -2880,7 +2928,7 @@ function KnowledgePanel({
               </div>
               {l.lever === "others" && (
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-                  <select value={OTHER_CATS.includes(l.other_category) ? l.other_category : "misc"} onChange={(e) => setLev(i, { other_category: e.target.value })} className="yyc-input" style={{ width: 210 }} title={t.otherCat}>
+                  <select value={OTHER_CATS.includes(l.other_category) ? l.other_category : "uncategorized"} onChange={(e) => setLev(i, { other_category: e.target.value })} className="yyc-input" style={{ width: 210 }} title={t.otherCat}>
                     {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k]}</option>)}
                   </select>
                   <input value={l.related_to || ""} onChange={(e) => setLev(i, { related_to: e.target.value })} placeholder={t.relatedToPh} className="yyc-input" style={{ flex: 1, minWidth: 200 }} />
@@ -2901,7 +2949,6 @@ function KnowledgePanel({
           <button className="yyc-btn-primary" onClick={saveEdit} disabled={busy}>{busy ? "…" : t.saveChanges}</button>
           <button className="yyc-btn-secondary" onClick={() => { setMode("list"); setEditDoc(null); setEditLevers([]); }}>{t.cancel}</button>
         </div>
-        {leverManagerView}
       </div>
     );
   }
@@ -2939,7 +2986,6 @@ function KnowledgePanel({
           <div>
             <h1 className="yyc-section-title">{t.reviewTitle}</h1>
             <div className="yyc-section-sub">{t.reviewNote}</div>
-            {isAdmin && <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)} style={{ marginTop: 10 }}>Manage lever categories</button>}
           </div>
         </div>
 
@@ -3000,6 +3046,27 @@ function KnowledgePanel({
                 >
                   {leverKeys.map((key) => <option key={key} value={key}>{t.levers[key]}</option>)}
                 </select>
+                {l.lever === "others" && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                    <select
+                      className="yyc-input"
+                      aria-label={t.otherCat}
+                      title={t.otherCat}
+                      value={OTHER_CATS.includes(l.other_category) ? l.other_category : "uncategorized"}
+                      onChange={(e) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, other_category: e.target.value } : v)) }))}
+                      style={{ width: 230, fontSize: 12 }}
+                    >
+                      {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k] || k}</option>)}
+                    </select>
+                    <input
+                      className="yyc-input"
+                      value={l.related_to || ""}
+                      onChange={(e) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, related_to: e.target.value } : v)) }))}
+                      placeholder={t.relatedToPh}
+                      style={{ flex: 1, minWidth: 200, fontSize: 12 }}
+                    />
+                  </div>
+                )}
                 {conflicts[i] && (
                   <div style={{ marginTop: 7, padding: "8px 11px", borderRadius: 8, background: P.goldSoft, border: `1px solid rgba(184,134,11,0.45)`, fontSize: 12.5, lineHeight: 1.55 }}>
                     <span style={{ fontWeight: 750, color: P.goldDark }}>⚠ {t.similarExisting} ({Math.round(conflicts[i].sim * 100)}%):</span>{" "}
@@ -3027,7 +3094,6 @@ function KnowledgePanel({
           <button className="yyc-btn-primary" onClick={saveDoc} disabled={busy}>{busy ? "…" : t.saveDoc}</button>
           <button className="yyc-btn-secondary" onClick={() => { if (bulkReviewId) { setBulkReviewId(null); setMode("bulk"); } else setMode("add"); }}>{t.discard}</button>
         </div>
-        {leverManagerView}
       </div>
     );
   }
@@ -3147,7 +3213,6 @@ function KnowledgePanel({
                 </>
               ) : (<><Icon name="spark" size={14} /> {t.extract}</>)}
             </button>
-            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)}>Manage lever categories</button>
             {busy && (
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5, fontWeight: 600 }}>
                 {[["reading", t.stageReading], ["analyze", t.stageAnalyze], ["levers", t.stageLevers]].map(([k, label]) => {
@@ -3169,7 +3234,6 @@ function KnowledgePanel({
             )}
           </div>
         </div>
-        {leverManagerView}
       </div>
     );
   }
@@ -3194,7 +3258,6 @@ function KnowledgePanel({
         </div>
         {isAdmin && (
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="yyc-btn-secondary" onClick={() => setShowLeverManager(true)}>Manage lever categories</button>
             <button className="yyc-btn-secondary" onClick={() => importRef.current?.click()} title={t.importKB}>
               <Icon name="upload" size={13} /> {t.importKB}
             </button>
@@ -3209,7 +3272,6 @@ function KnowledgePanel({
         )}
       </div>
 
-      {leverManagerView}
 
       <div className="yyc-stats">
         <div className="yyc-stat">
@@ -3436,7 +3498,7 @@ function KnowledgePanel({
         </div>
       )}
 
-      {isAdmin && (
+      {isAdmin && !window.storage?.remote && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 36, flexWrap: "wrap", paddingTop: 20, borderTop: `1px solid ${P.line}` }}>
           <span style={{ fontSize: 13, color: P.sub, fontWeight: 600 }}>{t.changePass}:</span>
           <input type="password" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder={t.newPassPh} className="yyc-input" style={{ width: 200 }} />
@@ -3458,6 +3520,14 @@ function KnowledgePanel({
             <select className="yyc-input" value={editLeverRecord.lever || "price"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, lever: e.target.value }))}>
               {leverKeys.map((lever) => <option key={lever} value={lever}>{t.levers[lever]}</option>)}
             </select>
+            {editLeverRecord.lever === "others" && (<>
+              <label className="yyc-edit-record-field" style={S.label}>{t.otherCat}</label>
+              <select className="yyc-input" value={OTHER_CATS.includes(editLeverRecord.other_category) ? editLeverRecord.other_category : "uncategorized"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, other_category: e.target.value }))}>
+                {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k] || k}</option>)}
+              </select>
+              <label className="yyc-edit-record-field" style={S.label}>{t.relatedTo}</label>
+              <input className="yyc-input" value={editLeverRecord.related_to || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, related_to: e.target.value }))} placeholder={t.relatedToPh} />
+            </>)}
             <label className="yyc-edit-record-field" style={S.label}>Strategy / claim (English)</label>
             <textarea className="yyc-input yyc-edit-record-textarea" rows={4} value={editLeverRecord.claim_en || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, claim_en: e.target.value }))} />
             {/* Chinese claim editing is intentionally hidden in the frontend for now.
@@ -3790,7 +3860,7 @@ QUESTION: ${question}`;
           : null;
         setMsgs((m) => [...m, { role: "ai", refused: true, text: t.refused, closest, retrieved }]);
         const log = (await sget("kb:gaplog")) || [];
-        log.push({ q: question, at: Date.now() });
+        log.push({ id: uid(), status: "active", q: question, at: Date.now() });
         await sset("kb:gaplog", log);
       } else {
         const cits = (j.citations || [])
@@ -3977,7 +4047,265 @@ QUESTION: ${question}`;
   );
 }
 
-function ExplorerPanel({ t, lang, levers, index, openPreview }) {
+/* Layout helpers for LeverManagerModal. Module level on purpose: components defined inside another component are rebuilt on every
+   keystroke, which would drop the focus from the text boxes. */
+const MgrField = ({ label, children, hint }) => (
+  <div style={{ marginTop: 12 }}>
+    <label style={{ ...S.label, display: "block", marginBottom: 5 }}>{label}</label>
+    {children}
+    {hint && <div style={{ fontSize: 12, lineHeight: 1.5, color: P.sub, marginTop: 5 }}>{hint}</div>}
+  </div>
+);
+const MgrFooter = ({ children }) => <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>{children}</div>;
+const MgrSection = ({ title, children }) => (
+  <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${P.line}` }}>
+    <div style={{ fontSize: 14, fontWeight: 750 }}>{title}</div>
+    {children}
+  </div>
+);
+
+/* Admin tool opened from the Lever Explorer. Two tabs: "Edit existing" (built-in levers, Others + its sub-categories, custom levers)
+   and "Create new" (a custom lever or an Others sub-category). Nothing here touches records already saved, except deleting a custom
+   sub-category, which moves its records to "Uncategorized". */
+function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, flash, refreshKB, onClose }) {
+  const [tab, setTab] = useState("edit");
+  const [createKind, setCreateKind] = useState("lever");
+  const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState("");
+  const [target, setTarget] = useState("price"); // lever being edited: a built-in id, "others", or a custom lever id
+  const draftFor = (id) => {
+    const o = (config?.leverOverrides || {})[id] || {};
+    return { name: o.name || T.en.levers[id] || id, description: o.description || BUILTIN_LEVER_DEFAULTS[id] || "", headings: o.headings || "" };
+  };
+  const [builtinDraft, setBuiltinDraft] = useState(() => draftFor("price"));
+  const [customDraft, setCustomDraft] = useState(null); // an existing custom lever being edited
+  const [newLever, setNewLever] = useState({ name: "", description: "", example: "" });
+  const subDraftFor = (id) => {
+    const c = (config?.customOtherCats || []).find((x) => x.id === id);
+    if (c) return { name: c.name, description: c.description };
+    const o = (config?.otherCatOverrides || {})[id] || {};
+    return { name: o.name || T.en.otherCats[id] || id, description: o.description || OTHER_CAT_DEFAULT_DEFS[id] || "" };
+  };
+  const [subId, setSubId] = useState(OTHER_CATS[0]);
+  const [subDraft, setSubDraft] = useState(() => subDraftFor(OTHER_CATS[0]));
+  const [newSub, setNewSub] = useState({ name: "", description: "" });
+  useEffect(() => { if (!setAdminLocked) return; setAdminLocked(true); return () => setAdminLocked(false); }, [setAdminLocked]); // admin cannot be locked out while this is open
+
+  const saveCfg = async (cfg) => { await sset("kb:config", cfg); setConfig(cfg); };
+  const customLevers = config?.customLevers || [];
+  const customSubs = config?.customOtherCats || [];
+  const isBuiltin = !!BUILTIN_LEVER_DEFAULTS[target];
+  const isOthers = target === "others";
+  const customTarget = customLevers.find((c) => c.id === target);
+  const nameTaken = (name, exceptId) => {
+    const n = name.trim().toLowerCase();
+    return [...Object.keys(T.en.levers).map((k) => [k, ((config?.leverOverrides || {})[k] || {}).name || T.en.levers[k]]), ...customLevers.map((c) => [c.id, c.name])]
+      .some(([k, v]) => k !== exceptId && String(v || "").trim().toLowerCase() === n);
+  };
+  const pick = (id) => {
+    setErrMsg(""); setTarget(id);
+    const c = customLevers.find((x) => x.id === id);
+    if (c) setCustomDraft({ ...c });
+    else setBuiltinDraft(draftFor(id));
+  };
+
+  // ── built-in levers + Others (name only) ──
+  const saveBuiltin = async () => {
+    const d = builtinDraft;
+    const name = d.name.trim(), description = (d.description || "").trim(), headings = splitHeadings(d.headings).join(", ");
+    if (!name || (isBuiltin && !description)) { setErrMsg("Enter a name" + (isBuiltin ? " and a definition." : ".")); return; }
+    if (nameTaken(name, target)) { setErrMsg("Another lever already uses this name."); return; }
+    const o = isBuiltin
+      ? { name: name === T.en.levers[target] ? "" : name, description: description === BUILTIN_LEVER_DEFAULTS[target] ? "" : description, headings }
+      : { name: name === T.en.levers[target] ? "" : name };
+    const leverOverrides = { ...(config?.leverOverrides || {}) };
+    if (Object.values(o).every((v) => !v)) delete leverOverrides[target]; else leverOverrides[target] = o;
+    await saveCfg({ ...config, leverOverrides }); setErrMsg(""); flash("Lever saved");
+  };
+  const resetBuiltin = async () => {
+    const leverOverrides = { ...(config?.leverOverrides || {}) };
+    delete leverOverrides[target];
+    await saveCfg({ ...config, leverOverrides });
+    setBuiltinDraft({ name: T.en.levers[target] || target, description: BUILTIN_LEVER_DEFAULTS[target] || "", headings: "" });
+    setErrMsg(""); flash("Reset to the original lever");
+  };
+
+  // ── Others sub-categories ──
+  const pickSub = (id) => { setErrMsg(""); setSubId(id); setSubDraft(subDraftFor(id)); };
+  const subNameTaken = (name, exceptId) => OTHER_CATS.some((k) => k !== exceptId && String(t.otherCats[k] || "").trim().toLowerCase() === name.trim().toLowerCase());
+  const saveSub = async () => {
+    const name = subDraft.name.trim(), description = subDraft.description.trim();
+    if (!name || !description) { setErrMsg("Enter a name and a definition for the sub-category."); return; }
+    if (subNameTaken(name, subId)) { setErrMsg("Another sub-category already uses this name."); return; }
+    if (customSubs.some((c) => c.id === subId)) {
+      await saveCfg({ ...config, customOtherCats: customSubs.map((c) => (c.id === subId ? { ...c, name, description } : c)) });
+    } else {
+      const otherCatOverrides = { ...(config?.otherCatOverrides || {}) };
+      const o = { name: name === T.en.otherCats[subId] ? "" : name, description: description === OTHER_CAT_DEFAULT_DEFS[subId] ? "" : description };
+      if (!o.name && !o.description) delete otherCatOverrides[subId]; else otherCatOverrides[subId] = o;
+      await saveCfg({ ...config, otherCatOverrides });
+    }
+    setErrMsg(""); flash("Sub-category saved");
+  };
+  const resetSub = async () => {
+    const otherCatOverrides = { ...(config?.otherCatOverrides || {}) };
+    delete otherCatOverrides[subId];
+    await saveCfg({ ...config, otherCatOverrides });
+    setSubDraft({ name: T.en.otherCats[subId] || subId, description: OTHER_CAT_DEFAULT_DEFS[subId] || "" });
+    setErrMsg(""); flash("Reset to the original sub-category");
+  };
+  const deleteSub = () => {
+    const c = customSubs.find((x) => x.id === subId); if (!c) return;
+    setConfirm({
+      message: `Delete the sub-category "${c.name}"? Records filed under it move to "${T.en.otherCats.uncategorized}".`,
+      onConfirm: async () => {
+        try {
+          const all = (await sget("kb:levers")) || [];
+          await sset("kb:levers", all.map((r) => (r.lever === "others" && r.other_category === c.id ? { ...r, other_category: "uncategorized" } : r)));
+          await saveCfg({ ...config, customOtherCats: customSubs.filter((x) => x.id !== c.id) });
+          if (refreshKB) await refreshKB();
+          pickSub(OTHER_CATS.find((k) => k !== c.id) || OTHER_CATS[0]);
+          flash("Sub-category deleted");
+        } catch { setErrMsg(t.loadErr); }
+      },
+    });
+  };
+  const createSub = async () => {
+    const name = newSub.name.trim(), description = newSub.description.trim();
+    if (!name || !description) { setErrMsg("Enter a name and a definition for the sub-category."); return; }
+    if (subNameTaken(name, "")) { setErrMsg("Another sub-category already uses this name."); return; }
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "custom";
+    await saveCfg({ ...config, customOtherCats: [...customSubs, { id: `oc_${slug}_${uid()}`, name, description }] });
+    setNewSub({ name: "", description: "" }); setErrMsg(""); flash("Sub-category created");
+  };
+
+  // ── custom levers (create + edit), checked by the AI first ──
+  const persistCustomLever = async (draft) => {
+    const normalizedName = draft.name.trim().toLowerCase();
+    if (nameTaken(draft.name, draft.id)) { setErrMsg("A lever with this name already exists."); return; }
+    const slug = normalizedName.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "custom";
+    const item = { ...draft, id: draft.id || `custom_${slug}_${uid()}`, name: draft.name.trim(), description: draft.description.trim(), example: draft.example.trim() };
+    const next = draft.id ? customLevers.map((e) => (e.id === draft.id ? item : e)) : [...customLevers, item];
+    await saveCfg({ ...config, customLevers: next });
+    if (draft.id) setCustomDraft(item); else setNewLever({ name: "", description: "", example: "" });
+    setErrMsg(""); flash("Lever category saved");
+  };
+  const validateAndSaveLever = async (raw) => {
+    const draft = { ...raw, name: raw.name.trim(), description: raw.description.trim(), example: raw.example.trim() };
+    if (!draft.name || !draft.description || !draft.example) { setErrMsg("Enter a name, definition, and example before validating."); return; }
+    setBusy(true); setErrMsg("");
+    try {
+      const existingCategories = Object.fromEntries(Object.entries(t.levers).filter(([key]) => key !== draft.id));
+      const result = await askAI(`Review this proposed knowledge-base lever category. Judge whether its name, definition, and example are coherent and useful for classifying business strategies, and whether its scope is distinct enough from the existing categories. Return JSON only: {"valid": true|false, "reason": "short explanation"}. Existing categories: ${JSON.stringify(existingCategories)}. Proposed category: ${JSON.stringify({ name: draft.name, description: draft.description, example: draft.example })}`, 350);
+      if (result.valid === true) {
+        await persistCustomLever(draft);
+      } else {
+        const reason = String(result.reason || "The AI could not confirm that this category is clear and distinct.");
+        setConfirm({ message: `${reason}\n\nDo you want to save this category anyway? Please confirm again.`, onConfirm: () => persistCustomLever(draft) });
+      }
+    } catch (e) { setErrMsg(describeAIError(e, t)); }
+    setBusy(false);
+  };
+
+  const tabBtn = (id, label) => (
+    <button className={`yyc-lever-chip ${tab === id ? "is-active" : ""}`} style={{ padding: "8px 18px", fontSize: 13 }} onClick={() => { setTab(id); setErrMsg(""); }}>{label}</button>
+  );
+
+  return (
+    <div className="yyc-modal-backdrop" onClick={() => !busy && onClose()}>
+      <div className="yyc-modal yyc-edit-record-modal" style={{ width: 640, maxWidth: "100%", padding: 24, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin settings</div>
+            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: "#4a0707", fontWeight: "bolder" }}>Lever Categories</h2>
+          </div>
+          <button className="yyc-icon-btn" onClick={onClose} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
+        </div>
+        <div style={{ display: "flex", gap: 8, margin: "16px 0 4px" }}>
+          {tabBtn("edit", "Edit existing")}
+          {tabBtn("create", "Create new")}
+        </div>
+
+        {tab === "edit" && (<>
+          <MgrField label="Lever">
+            <select className="yyc-input" value={target} onChange={(e) => pick(e.target.value)}>
+              <optgroup label="Built-in levers">
+                {[...Object.keys(BUILTIN_LEVER_DEFAULTS), "others"].map((id) => <option key={id} value={id}>{t.levers[id] || id}</option>)}
+              </optgroup>
+              {customLevers.length > 0 && (
+                <optgroup label="Custom levers">
+                  {customLevers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              )}
+            </select>
+          </MgrField>
+
+          {(isBuiltin || isOthers) && (<>
+            <MgrField label="Name"><input className="yyc-input" value={builtinDraft.name} onChange={(e) => setBuiltinDraft((d) => ({ ...d, name: e.target.value }))} /></MgrField>
+            {isBuiltin && (<>
+              <MgrField label="Definition the AI uses"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={builtinDraft.description} onChange={(e) => setBuiltinDraft((d) => ({ ...d, description: e.target.value }))} /></MgrField>
+              <MgrField label="Extra heading words (comma separated)" hint="A document heading that starts with one of these words is filed under this lever.">
+                <input className="yyc-input" value={builtinDraft.headings} onChange={(e) => setBuiltinDraft((d) => ({ ...d, headings: e.target.value }))} placeholder="e.g. Tariffs, Rates" />
+              </MgrField>
+            </>)}
+            {isOthers && <div style={{ fontSize: 12, lineHeight: 1.5, color: P.sub, marginTop: 8 }}>"Others" catches every strategy that fits no other lever; its meaning is fixed, its name and sub-categories are editable.</div>}
+            <MgrFooter>
+              <button className="yyc-btn-secondary" onClick={resetBuiltin}>Reset to original</button>
+              <button className="yyc-btn-primary" onClick={saveBuiltin}>Save lever</button>
+            </MgrFooter>
+          </>)}
+
+          {isOthers && (
+            <MgrSection title="Sub-categories of Others">
+              <MgrField label="Sub-category">
+                <select className="yyc-input" value={subId} onChange={(e) => pickSub(e.target.value)}>
+                  {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k] || k}</option>)}
+                </select>
+              </MgrField>
+              <MgrField label="Name"><input className="yyc-input" value={subDraft.name} onChange={(e) => setSubDraft((d) => ({ ...d, name: e.target.value }))} /></MgrField>
+              <MgrField label="Definition the AI uses"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={subDraft.description} onChange={(e) => setSubDraft((d) => ({ ...d, description: e.target.value }))} /></MgrField>
+              <MgrFooter>
+                {customSubs.some((c) => c.id === subId)
+                  ? <button className="yyc-btn-secondary" onClick={deleteSub}>Delete</button>
+                  : <button className="yyc-btn-secondary" onClick={resetSub}>Reset to original</button>}
+                <button className="yyc-btn-primary" onClick={saveSub}>Save sub-category</button>
+              </MgrFooter>
+            </MgrSection>
+          )}
+
+          {customTarget && customDraft && (<>
+            <MgrField label="Name"><input className="yyc-input" value={customDraft.name} onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))} /></MgrField>
+            <MgrField label="Definition and classification guidance"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={customDraft.description} onChange={(e) => setCustomDraft((d) => ({ ...d, description: e.target.value }))} /></MgrField>
+            <MgrField label="Example strategy" hint="The AI checks that the category is clear and distinct. If it flags a concern you can review the reason and save anyway."><textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={customDraft.example} onChange={(e) => setCustomDraft((d) => ({ ...d, example: e.target.value }))} /></MgrField>
+            <MgrFooter><button className="yyc-btn-primary" onClick={() => validateAndSaveLever(customDraft)} disabled={busy}>{busy ? "Checking with AI…" : "Validate and save changes"}</button></MgrFooter>
+          </>)}
+        </>)}
+
+        {tab === "create" && (<>
+          <div className="yyc-chip-row" style={{ marginTop: 12 }}>
+            <button className={`yyc-lever-chip ${createKind === "lever" ? "is-active" : ""}`} onClick={() => { setCreateKind("lever"); setErrMsg(""); }}>New lever</button>
+            <button className={`yyc-lever-chip ${createKind === "sub" ? "is-active" : ""}`} onClick={() => { setCreateKind("sub"); setErrMsg(""); }}>New "Others" sub-category</button>
+          </div>
+          {createKind === "lever" ? (<>
+            <MgrField label="Name"><input className="yyc-input" value={newLever.name} onChange={(e) => setNewLever((d) => ({ ...d, name: e.target.value }))} placeholder="e.g. Customer Retention" /></MgrField>
+            <MgrField label="Definition and classification guidance"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={newLever.description} onChange={(e) => setNewLever((d) => ({ ...d, description: e.target.value }))} placeholder="Describe which strategies belong in this category." /></MgrField>
+            <MgrField label="Example strategy" hint="The AI checks that the category is clear and distinct. If it flags a concern you can review the reason and save anyway."><textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={newLever.example} onChange={(e) => setNewLever((d) => ({ ...d, example: e.target.value }))} placeholder="Give the AI a concrete example." /></MgrField>
+            <MgrFooter><button className="yyc-btn-primary" onClick={() => validateAndSaveLever(newLever)} disabled={busy}>{busy ? "Checking with AI…" : "Validate and create"}</button></MgrFooter>
+          </>) : (<>
+            <MgrField label="Name"><input className="yyc-input" value={newSub.name} onChange={(e) => setNewSub((d) => ({ ...d, name: e.target.value }))} placeholder="e.g. Technology & Systems" /></MgrField>
+            <MgrField label="Definition the AI uses" hint="Strategies that fit no lever are filed under Others, then into one of its sub-categories; this tells the AI what belongs here."><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={newSub.description} onChange={(e) => setNewSub((d) => ({ ...d, description: e.target.value }))} placeholder="Describe which strategies belong in this sub-category." /></MgrField>
+            <MgrFooter><button className="yyc-btn-primary" onClick={createSub}>Create sub-category</button></MgrFooter>
+          </>)}
+        </>)}
+
+        {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
+      </div>
+    </div>
+  );
+}
+
+function ExplorerPanel({ t, lang, levers, index, openPreview, isAdmin, config, setConfig, setConfirm, setAdminLocked, flash, refreshKB }) {
+  const [showMgr, setShowMgr] = useState(false);
   const [sel, setSel] = useState("price");
   const [cat, setCat] = useState("all");
   const [oc, setOc] = useState("all");
@@ -4025,7 +4353,9 @@ function ExplorerPanel({ t, lang, levers, index, openPreview }) {
           <h1 className="yyc-section-title">{t.tabs.explorer}</h1>
           <div className="yyc-section-sub">{t.explorerIntro}</div>
         </div>
+        {isAdmin && <button className="yyc-btn-secondary" onClick={() => setShowMgr(true)}>Manage lever categories</button>}
       </div>
+      {showMgr && isAdmin && <LeverManagerModal t={t} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} onClose={() => setShowMgr(false)} />}
 
       {/* lever pills */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
@@ -4127,10 +4457,14 @@ function GapPanel({ t, flash, setConfirm }) {
   const clear = () => {
     setConfirm({
       message: t.clearGap + "?",
-      onConfirm: async () => { await sset("kb:gaplog", []); setLog([]); flash("OK"); },
+      onConfirm: async () => { // soft delete: the entries stay in storage, marked deleted
+        const marked = ((await sget("kb:gaplog")) || []).map((g) => (isLive(g) ? softDelete(g) : g));
+        await sset("kb:gaplog", marked); setLog(marked); flash("OK");
+      },
     });
   };
   if (log === null) return <div style={{ color: P.sub }}>…</div>;
+  const shown = log.filter(isLive);
   return (
     <div>
       <div className="yyc-section-head">
@@ -4138,19 +4472,19 @@ function GapPanel({ t, flash, setConfirm }) {
           <h1 className="yyc-section-title">{t.tabs.gap}</h1>
           <div className="yyc-section-sub">{t.gapIntro}</div>
         </div>
-        {log.length > 0 && (
+        {shown.length > 0 && (
           <button className="yyc-btn-secondary" onClick={clear}><Icon name="trash" size={13} /> {t.clearGap}</button>
         )}
       </div>
 
-      {log.length === 0 ? (
+      {shown.length === 0 ? (
         <div className="yyc-empty">
           <div className="yyc-empty-icon"><Icon name="alert" size={22} /></div>
           {t.gapEmpty}
         </div>
       ) : (
         <div style={{ ...S.card, overflow: "hidden" }}>
-          {[...log].reverse().map((g, i) => (
+          {[...shown].reverse().map((g, i) => (
             <div key={i} style={{ padding: "14px 20px", borderTop: i ? `1px solid ${P.line}` : "none" }}>
               <div style={{ fontSize: 14, lineHeight: 1.55 }}>{g.q}</div>
               <div style={{ fontSize: 12, color: P.faint, marginTop: 4 }}>{new Date(g.at).toLocaleString("en-MY")}</div>

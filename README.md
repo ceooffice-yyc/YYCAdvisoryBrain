@@ -109,6 +109,46 @@ GROQ_API_KEY_4=gsk_...
 - Once a benched key has recovered it is preferred again, in order.
 - Keys stay on the server and are never logged. Each key has its own quota, so the keys should belong to different Groq accounts/organisations; several keys of one organisation share one limit.
 
+## Shared online database + sign-in (Supabase)
+
+By default each browser keeps its own copy of the library and anyone can open it. To share one library with the whole team **and require a sign-in**, use Supabase. It is switched on by server settings; with them absent nothing changes.
+
+**1. Create the project** at [supabase.com](https://supabase.com) → *New project* (choose a region near you; save the database password).
+
+**2. Create the table.** *SQL Editor → New query*, paste [`supabase/schema.sql`](supabase/schema.sql) and run it. It is safe to run again (run it again after updating the app: it adds new columns such as `status` and `updated_by`). The table has Row Level Security on and **no public policy**, so the public key cannot read or write it.
+
+**3. Switch sign-up off and create your people.** *Authentication → Sign In / Providers → Email*: turn **off** "Allow new users to sign up" (and "Confirm email" can stay on or off). Then *Authentication → Users → Add user → Create new user*: enter their company email and a password, and tick **Auto Confirm User**. Do this for every person. Send them the password; no emails are needed. To reset a forgotten password, edit the user in the same screen.
+
+**4. Copy the keys.** *Project Settings → API*: the **Project URL**, the **anon public** key and the **service_role** secret.
+
+**5. Add the settings** to `.env` (local) and to Vercel → Settings → Environment Variables (Production + Preview), then restart / redeploy:
+
+```
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_ANON_KEY=eyJ...                 # public key: sent to the page so it can sign people in
+SUPABASE_SERVICE_ROLE_KEY=eyJ...         # SECRET: server only, never prefix with VITE_, never commit it
+ADMIN_EMAILS=you@yourcompany.com,boss@yourcompany.com   # who are admins; everyone else who can sign in is a viewer
+ALLOWED_EMAIL_DOMAINS=yourcompany.com    # optional extra guard
+ALLOW_GUEST=false                        # optional: remove the Continue-as-guest button and block guest reads
+```
+
+The server prints `Shared database + sign-in: Supabase` at start-up. (An admin can also be made with `app_metadata.role = "admin"`; see the bottom of `supabase/schema.sql`.)
+
+**6. Move your existing library.** In the *old* setup use **Export backup**; after the switch sign in as an admin, press **Unlock admin**, and use **Import backup**. Custom levers, edited built-in levers and Others sub-categories come with it.
+
+How it works (`server/auth.js`, `server/kvStore.js`, `api/kv.js`, `src/Root.jsx`, `src/storage.js`):
+
+- **Everyone signs in** (email + password), or presses **Continue as guest**. A guest can only **browse the knowledge base and the lever records** (including opening documents): there is no Ask the Brain, no Gap Log, no chat and no editing, and the AI proxy still refuses them. The bottom-left button is **Log in** for a guest and **Log out** for a signed-in person. Guest access lasts for that browser tab. Turn guests off with `ALLOW_GUEST=false`; note that while guests are on, **anyone with the link can read the whole library**. The Groq AI proxy requires the same sign-in, so strangers cannot spend your quota.
+- The browser keeps only a session token; every call to `/api/kv` and `/api/groq/chat` carries it and the **server** checks it with Supabase. The service-role key never leaves the server.
+- **Viewers** (signed in) can read the library, ask questions, and add to the Gap Log. **Admins** (see `ADMIN_EMAILS`) can also change the library: admin accounts are in admin mode as soon as they log in (no Unlock admin button and no shared passcode any more).
+- **Chat history is personal**: it is saved per signed-in person (`kb:chat:<user id>`), follows them to any browser or device, and only they (and admins) can read it.
+- **Nothing is hard-deleted.** Every row has a `status` (`active` / `deleted`) and `deleted_at`; deleting only marks it `deleted`. Inside the lists the same applies to each item: documents, index entries, lever records, chat messages and Gap Log entries carry a `status`, so removing a record on the Edit screen, "Clear chat" and "Clear gap log" only mark items deleted. The data stays in Supabase; restore with the SQL at the bottom of `supabase/schema.sql`.
+- **Who did what:** each row records `updated_by` / `deleted_by` (the person's email); new documents and records carry `created_by`.
+- If the database cannot be reached, the app shows an error instead of an empty library, so a failed read can never overwrite real data. A session that ends (or is revoked) returns the person to the sign-in screen; access changes can take up to a minute to apply.
+- Two admins saving at the same moment can overwrite each other (each list is saved as a whole). Fine for one or two editors; do not run big imports from two machines at once.
+- Free tier: 500 MB, and a project with no activity for about a week is paused (resume it from the dashboard).
+- If `SUPABASE_URL` and the service-role key are set but `SUPABASE_ANON_KEY` is missing, the app shows a "server is not set up correctly" screen instead of silently falling back to browser storage.
+
 ## Deploy to Vercel
 
 The repo is Vercel-ready: the static site is built by Vite and `api/groq/chat.js` replaces the Express proxy.
@@ -124,9 +164,9 @@ There  is an **available deployed web site** that you might get reach on:
 Things to know when hosted:
 
 - The function has `maxDuration = 60` s, because a long document can take 20–40 s of model time per chunk.
-- **Each person has their own library. (FOR CURRENT STATE ONLY)** Data is stored in the browser's `localStorage` (≈5 MB). The Vercel site starts empty and is not shared between staff or with `localhost`. Move data with **Export backup** and **Import backup** (Knowledge Base tab).
-- Plan to do a shared library by using an online database? **(FOR FUTURE STATE)** 
-- The site and `/api/groq/chat` are **public** unless you protect the deployment, so anyone with the link can spend your Groq quota.
+- **Without Supabase, each person has their own library.** Data is stored in the browser's `localStorage` (≈5 MB). The Vercel site starts empty and is not shared between staff or with `localhost`. Move data with **Export backup** and **Import backup** (Knowledge Base tab).
+- A shared library for the whole team, with sign-in: see **Shared online database + sign-in (Supabase)** above.
+- Without Supabase the site and `/api/groq/chat` are **public** unless you protect the deployment, so anyone with the link can spend your Groq quota. With Supabase sign-in both require a signed-in account.
 
 ---
 
@@ -212,6 +252,10 @@ If you see `429` in the browser console, this is the cause.
 | `localhost:5173` unreachable after `npm start` | `npm start` uses **:8787**; `:5173` is dev mode only. |
 | Not reachable from another device | Use `npm run dev:lan`, allow the ports in Windows Firewall, check for Wi-Fi client isolation. |
 | A strategy is missing or misfiled | Re-upload after restarting the server (old records keep their old values). If it persists, check the document's heading wording against the list above. |
+| "Your session has ended" / back at the sign-in screen | The login expired or was revoked: sign in again. |
+| "Your account is not an administrator" | Add the email to `ADMIN_EMAILS` (or set `app_metadata.role = admin`) and restart / redeploy. |
+| "Wrong email or password" for a correct password | The user must exist in Supabase → Authentication → Users and be confirmed; check the project URL / anon key belong to the same project. |
+| Library looks empty after enabling Supabase | The new database starts empty: use Export backup in the old browser, then Import backup. If the page shows a database error instead, check `SUPABASE_URL`, the service-role key, and that `supabase/schema.sql` was run. |
 | "Quota"/import error | `localStorage` is limited to ~5 MB; export a backup and remove old documents. |
 
 ---
@@ -222,7 +266,13 @@ If you see `429` in the browser console, this is the cause.
 api/groq/chat.js     Vercel serverless proxy to Groq (production)
 server/index.js      Express proxy + static server (local / npm start)
 src/App.jsx          The whole app: UI, extraction pipeline, chat, storage helpers
-src/main.jsx         Entry point + localStorage shim (window.storage)
+src/main.jsx         Entry point (starts the storage layer, then the app)
+src/storage.js       window.storage: Supabase through /api/kv (with sign-in) when configured, else localStorage
+src/Root.jsx         Sign-in screen + error screen shown before the app
+server/auth.js       Verifies the Supabase session on every request; decides who is an admin
+server/kvStore.js    /api/kv logic: reads, admin-token writes, password check (Supabase)
+api/kv.js            Vercel twin of the /api/kv route
+supabase/schema.sql  The one table to create in Supabase
 public/logo.png      YYC logo (served at /logo.png)
 index.html           HTML shell
 vite.config.js       Dev proxy: /api → http://127.0.0.1:8787
@@ -232,4 +282,5 @@ vite.config.js       Dev proxy: /api → http://127.0.0.1:8787
 ## Security notes
 
 - The Groq key stays on the server (`.env` locally, Vercel env vars when hosted); `.env` is git-ignored.
-- The admin passcode is a convenience lock stored with the data, **not** real authentication. Anyone with browser access to the data can read it. Do not treat the library as confidential on a public deployment without adding proper access control.
+- **With Supabase** everyone signs in with their own account; admins are decided on the server (`ADMIN_EMAILS`), there is no shared passcode, and only admins can change or delete. Keep sign-up switched off in Supabase so only people you create can get in.
+- **Without Supabase** the admin passcode is a convenience lock stored with the data, **not** real authentication. Anyone with browser access to the data can read it. Do not treat the library as confidential on a public deployment without adding proper access control.
