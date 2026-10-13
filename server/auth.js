@@ -1,4 +1,4 @@
-// Sign-in check shared by /api/kv and /api/groq/chat (Express server and Vercel functions).
+// Sign-in check shared by /api/db and /api/groq/chat (Express server and Vercel functions).
 //
 // People sign in with Supabase Auth (email + password, accounts created by an admin in the Supabase dashboard) and the browser sends
 // the session's access token as `Authorization: Bearer <token>`. This module asks Supabase who the token belongs to, so a forged,

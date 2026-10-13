@@ -8,7 +8,7 @@
 
 import { forwardToGroq, loadGroqKeys } from '../../server/groqProxy.js';
 import { authenticate } from '../../server/auth.js';
-import { kvConfigured } from '../../server/kvStore.js';
+import { dbConfigured } from '../../server/db.js';
 
 // A long document can take 20-40 s of model time; the default function limit (10 s) would cut it off.
 export const config = { maxDuration: 60 };
@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (kvConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
+  if (dbConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
     const a = await authenticate(req.headers);
     if (!a.ok) return res.status(a.status).json({ error: a.error });
   }

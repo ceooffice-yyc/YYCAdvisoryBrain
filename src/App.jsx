@@ -98,11 +98,18 @@ const BUILTIN_LEVER_DEFAULTS = {
 let LEVER_OVERRIDES = {}; // set from the saved config by setLeverOverrides(); read by the prompt builder and the heading matcher
 const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const splitHeadings = (s) => String(s || "").split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
-let EXTRA_HEADING_LEVER = [];
-function setLeverOverrides(ov) {
+let EXTRA_HEADING_LEVER = []; // checked BEFORE the built-in heading rules: a custom lever named "Customer Retention" must not be swallowed by the built-in "Customers" rule
+let CUSTOM_LEVERS = []; // custom levers from the lever definitions (the levers table when the shared database is on)
+// words that send a document heading to a custom lever: the admin's heading words, plus the lever's own name
+const customHeadingWords = (l) => [...new Set([...splitHeadings(l.headings), String(l.name || "").trim()].filter(Boolean))];
+function setLeverOverrides(ov, custom) {
   LEVER_OVERRIDES = ov && typeof ov === "object" ? ov : {};
-  EXTRA_HEADING_LEVER = Object.entries(LEVER_OVERRIDES).flatMap(([id, o]) =>
-    BUILTIN_LEVER_DEFAULTS[id] ? splitHeadings(o && o.headings).map((h) => [new RegExp("^" + escRe(h) + "(?![A-Za-z])", "i"), id]) : []);
+  CUSTOM_LEVERS = Array.isArray(custom) ? custom.filter((l) => l && l.id && l.name) : [];
+  const toRe = (h) => new RegExp("^" + escRe(h) + "(?![A-Za-z])", "i");
+  EXTRA_HEADING_LEVER = [
+    ...Object.entries(LEVER_OVERRIDES).flatMap(([id, o]) => (BUILTIN_LEVER_DEFAULTS[id] ? splitHeadings(o && o.headings).map((h) => [toRe(h), id]) : [])),
+    ...CUSTOM_LEVERS.flatMap((l) => customHeadingWords(l).map((h) => [toRe(h), l.id])),
+  ];
 }
 const leverDefinition = (id) => String((LEVER_OVERRIDES[id] && LEVER_OVERRIDES[id].description) || "").trim() || BUILTIN_LEVER_DEFAULTS[id];
 const leverDefLine = (id) => {
@@ -110,7 +117,10 @@ const leverDefLine = (id) => {
   return `- ${id}:${nm ? ` (shown to users as "${nm}")` : ""} ${leverDefinition(id)}`;
 };
 const extraHeadingNote = () => {
-  const rows = Object.entries(LEVER_OVERRIDES).filter(([id]) => BUILTIN_LEVER_DEFAULTS[id]).map(([id, o]) => [id, splitHeadings(o && o.headings)]).filter(([, h]) => h.length);
+  const rows = [
+    ...Object.entries(LEVER_OVERRIDES).filter(([id]) => BUILTIN_LEVER_DEFAULTS[id]).map(([id, o]) => [id, splitHeadings(o && o.headings)]),
+    ...CUSTOM_LEVERS.map((l) => [l.id, customHeadingWords(l)]),
+  ].filter(([, h]) => h.length);
   return rows.length ? `\nAlso: ${rows.map(([id, h]) => `${h.join(" / ")} → ${id}`).join(" · ")}` : "";
 };
 const LEGACY_OTHER_CATEGORY = {
@@ -437,19 +447,14 @@ const TYPE_COLORS = {
   notes: { bg: "#EEF0F5", fg: "#3D4B6E" },
 };
 
+// Personal, per-browser values only (UI hints). The library itself is read and written through window.db (src/db.js).
 async function sget(key, shared = true) {
   try { const r = await window.storage.get(key, shared); return r ? JSON.parse(r.value) : null; }
-  catch (e) {
-    if (window.storage?.remote && String(e?.message) !== "not found") throw e; // shared database unreachable: surface it, never pretend the library is empty
-    return null;
-  }
+  catch { return null; }
 }
 async function sset(key, val, shared = true) {
   const r = await window.storage.set(key, JSON.stringify(val), shared);
   if (!r) throw new Error("storage write failed");
-}
-async function sdel(key, shared = true) {
-  try { await window.storage.delete(key, shared); } catch (e) { if (window.storage?.remote) throw e; } // shared database: a refused delete must not look done
 }
 
 /* Nothing is hard-deleted. Every stored item (document, index entry, lever record, chat message, gap-log entry) has a status:
@@ -458,9 +463,6 @@ const isLive = (x) => !x || x.status !== "deleted";
 const live = (arr) => (Array.isArray(arr) ? arr.filter(isLive) : []);
 const me = () => (window.storage?.user && window.storage.user.email) || undefined; // signed-in user (shared database), for the audit trail
 const softDelete = (x) => ({ ...x, status: "deleted", deleted_at: Date.now(), deleted_by: me() });
-// Chat history: with the shared database it belongs to the signed-in person (kb:chat:<their user id>, readable only by them and admins);
-// without it, exactly as before in this browser's own storage.
-const chatStore = () => (window.storage?.remote ? { key: "kb:chat:" + window.storage.user.id, shared: true, cap: 500 } : { key: "kb:chatlog", shared: false, cap: 80 });
 
 const GROQ_URL = "/api/groq/chat"; // proxied server-side so the API key never reaches the browser
 const GROQ_MODEL = "openai/gpt-oss-120b";
@@ -709,7 +711,7 @@ export default function App() {
 
   const t = useMemo(() => {
     setOtherCatConfig(config?.otherCatOverrides, config?.customOtherCats);
-    setLeverOverrides(config?.leverOverrides); // admin edits to the built-in levers reach the extraction prompt and heading matcher
+    setLeverOverrides(config?.leverOverrides, config?.customLevers); // the lever definitions (built-in edits + custom levers) reach the extraction prompt and heading matcher
     const renamed = Object.fromEntries(Object.entries(config?.leverOverrides || {}).filter(([id, o]) => (BUILTIN_LEVER_DEFAULTS[id] || id === "others") && o && String(o.name || "").trim()).map(([id, o]) => [id, String(o.name).trim()]));
     return {
       ...T[lang],
@@ -739,22 +741,21 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        let cfg = await sget("kb:config");
-        if (!cfg) {
-          if (window.storage?.remote) cfg = {}; // shared database: the server holds the admin password (default 12345 until changed)
-          else { cfg = { adminPass: "12345" }; await sset("kb:config", cfg); }
-        }
-        setConfig(cfg);
-        setIndex(live(await sget("kb:index")));
-        setLevers(live(await sget("kb:levers")));
+        // Paint from the copy kept in this browser at once (shared database only), then replace it with the fresh copy
+        const kept = window.storage?.remote ? window.db.peek() : null;
+        if (kept) { setConfig(kept.config || {}); setIndex(kept.index); setLevers(kept.records); setReady(true); }
+        // config, documents and lever records arrive in ONE request (it was usually already prefetched while the sign-in screen showed)
+        const lib = await window.db.loadLibrary();
+        setConfig(lib.config);
+        setIndex(lib.index);
+        setLevers(lib.records);
         /* [ZH disabled for now — English only] restore saved UI language
         const savedLang = await sget("ui:lang", false);
         if (savedLang) setLang(savedLang);
         */
         try { // the chat must not stop the library from loading, and is only saved back once it has been read successfully
           if (window.storage?.remote && !window.storage.user) throw new Error("guest: no chat"); // guests have no chat history
-          const cs = chatStore();
-          const savedChat = await sget(cs.key, cs.shared);
+          const savedChat = await window.db.chatLoad();
           if (Array.isArray(savedChat) && savedChat.length) setChatAll(savedChat.map((m) => (m.id ? m : { ...m, id: uid(), status: "active" })));
           chatOkRef.current = true;
         } catch { chatOkRef.current = false; }
@@ -773,21 +774,21 @@ export default function App() {
 
   useEffect(() => {
     if (!ready || !chatOkRef.current) return;
-    const cs = chatStore();
-    sset(cs.key, chatAll.slice(-cs.cap), cs.shared).catch(() => { });
+    window.db.chatSave(chatAll).catch(() => { });
   }, [chatAll, ready]);
 
   // [ZH disabled for now — English only] language switcher handler
   // const switchLang = (l) => { setLang(l); sset("ui:lang", l, false).catch(() => { }); };
 
   const openPreview = useCallback(async (docId, targetSection) => {
-    const doc = await sget("kb:doc:" + docId);
+    const doc = await window.db.getDocument(docId);
     if (doc) setPreviewDoc({ doc, targetSection: targetSection || null });
   }, []);
 
   const refreshKB = async () => {
-    setIndex(live(await sget("kb:index")));
-    setLevers(live(await sget("kb:levers")));
+    const kb = await window.db.loadKB();
+    setIndex(kb.index);
+    setLevers(kb.records);
   };
 
   const navItems = [
@@ -1510,7 +1511,7 @@ function leverHeadingRaw(p) {
   if (MNA_SECTION_RE.test(x)) return x; // M&A section headings may be long ("What <Company> Brings to Acquired Companies")
   const words = wordCount(x);
   // the line must BE a heading phrase, not merely start with a lever word ("Customer pays before fulfilment" is a strategy title, not "Customers")
-  const hit = words <= 5 ? [...HEADING_LEVER, ...EXTRA_HEADING_LEVER].find(([re]) => re.test(x)) : null;
+  const hit = words <= 5 ? [...EXTRA_HEADING_LEVER, ...HEADING_LEVER].find(([re]) => re.test(x)) : null;
   if (hit) {
     const rest = x.slice(x.match(hit[0])[0].length);
     if (/^[\s/&,-]*(and\s+)?(days?|strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x; // "Receivable Days", "Payable Days", "Talent Strategy"
@@ -1556,7 +1557,7 @@ const HEADING_LEVER = [
   [/^(acquisitions?\s*,?\s*(expansion\s*|\w+\s*)?(&|and)\s*valuation|expansion\s*&\s*valuation|acquisition\s*&\s*expansion|mergers?\s*(and|&)\s*acquisitions?|m\s*&\s*a\s*$|post[- ]merger integration|business combinations?)(?![A-Za-z])/i, "acquisition_expansion_valuation"],
   [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
 ];
-const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = [...HEADING_LEVER, ...EXTRA_HEADING_LEVER].find(([re]) => re.test(x)); return hit ? hit[1] : null; };
+const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = [...EXTRA_HEADING_LEVER, ...HEADING_LEVER].find(([re]) => re.test(x)); return hit ? hit[1] : null; };
 const isTitleLike = (p) => { const t = p.trim(); return t.length <= 80 && !/\n/.test(t) && !/[.!?]$/.test(t); };
 
 function chunkMaterial(text, size = 3800) {
@@ -2251,6 +2252,12 @@ async function parseDocxFile(f) {
 }
 
 function buildExtractionPrompt(capped, title, part = 1, parts = 1, customLevers = [], forceMna = false) {
+  const customs = customLevers.length ? customLevers : CUSTOM_LEVERS; // custom levers come from the lever definitions, exactly like the built-in ones
+  const customBlock = customs.length ? `
+CUSTOM LEVERS (added by the administrator in Admin settings; they are as real as the levers above and take precedence over "others"):
+${customs.map((l) => `- ${l.id} ("${l.name}"): ${l.description}${l.example ? ` Example: ${l.example}` : ""}${customHeadingWords(l).length ? ` Document headings for it: ${customHeadingWords(l).join(", ")}.` : ""}`).join("\n")}
+When a strategy clearly matches a custom lever's definition, or sits under one of its headings, set lever to that custom id (never "others"). Keep a built-in lever when it fits better.
+` : "";
   const isMnaDoc = !!forceMna; // decided in code from the document's section headings, not by keywords in the chunk
   const mnaRules = isMnaDoc ? `
 M&A DOCUMENT MODE. The material was prefiltered in code to these sections only: "M&A Appetite", "Acquisition Criteria", "Post-Acquisition Strategy" and "What [Company] Brings to Acquired Companies" (headings may be numbered). Extract NOTHING from the background block or from anything outside those sections. No "Key Strategies" heading is needed: in an M&A document a strategy is an explicit acquisition action, policy, target-selection criterion, deal structure or operating approach.
@@ -2294,10 +2301,7 @@ RULES:
   const formatC = "FORMAT C — M&A narrative/criteria: apply M&A DOCUMENT MODE above even without strategy headings. Extract only explicitly stated approaches or criteria; never infer a strategy from a capability, benefit, aspiration, or scale fact.";
   const formatSection = isMnaDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatC}` : `═══ 4. DOCUMENT FORMATS (learn them before extracting) ═══\n${formatA}${hasKeyStrategyCard ? `\n\n${formatB}` : ""}`;
   return `You are the ingestion engine of YYC's internal advisory knowledge base (Malaysian accounting & advisory firm). Analyse the material below and return ONLY a JSON object, no markdown fences, no commentary.
-${customLevers.length ? `
-CUSTOM LEVER CATEGORIES (when a strategy clearly matches a custom definition, use that custom id even if it would otherwise fall into the broad "others" bucket. Keep using built-in levers when they fit better.):
-${customLevers.map((l) => `- ${l.id}: ${l.name}. Definition: ${l.description}. Example: ${l.example || "none"}`).join("\n")}
-` : ""}
+
 
 ═══ 1. OUTPUT SHAPE ═══
 {
@@ -2310,12 +2314,12 @@ ${customLevers.map((l) => `- ${l.id}: ${l.name}. Definition: ${l.description}. E
  "language": "en" | "zh" | "mixed",
  "problem_signature": "<one line: the business problem pattern this addresses, in English>",
  "sections": [ { "heading": "<section heading>", "summary_en": "<1-2 sentence English summary>" } ],
- "levers": [ { "lever": "price"|"volume"|"cogs"|"overheads"|"ar_days"|"inventory_days"|"ap_days"|"talent_strategy"|"product_differentiation"|"acquisition_expansion_valuation"|"others", "strategy_name": "<the strategy's title EXACTLY as written in the document; for an untitled but explicit strategy, use a short contiguous phrase copied from its evidence>", "description": "<what the business did or the explicit acquisition criterion, copied EXACTLY from the document — see WORDING RULE>", "impact": "<the actual impact of this strategy, copied EXACTLY from the document — see WORDING RULE; the string \"N/A\" if the document states no actual impact>", "section": "<EXACT heading from the sections array above that this lever came from>", "other_category": "<ONLY when lever is others: legal_regulatory_ip|business_model_execution|financing_capital|operations_process|partnerships_alliances|shareholder_governance|uncategorized>", "related_to": "<ONLY when lever is others: 3-8 English words naming what it specifically relates to>" } ]
+ "levers": [ { "lever": "price"|"volume"|"cogs"|"overheads"|"ar_days"|"inventory_days"|"ap_days"|"talent_strategy"|"product_differentiation"|"acquisition_expansion_valuation"${customs.map((l) => `|"${l.id}"`).join("")}|"others", "strategy_name": "<the strategy's title EXACTLY as written in the document; for an untitled but explicit strategy, use a short contiguous phrase copied from its evidence>", "description": "<what the business did or the explicit acquisition criterion, copied EXACTLY from the document — see WORDING RULE>", "impact": "<the actual impact of this strategy, copied EXACTLY from the document — see WORDING RULE; the string \"N/A\" if the document states no actual impact>", "section": "<EXACT heading from the sections array above that this lever came from>", "other_category": "<ONLY when lever is others: legal_regulatory_ip|business_model_execution|financing_capital|operations_process|partnerships_alliances|shareholder_governance|uncategorized>", "related_to": "<ONLY when lever is others: 3-8 English words naming what it specifically relates to>" } ]
 }
 
 ═══ 2. SCOPE — WHAT TO EXTRACT AND WHAT TO IGNORE ═══
 Extract ONLY the KEY STRATEGIES part of the document. A key strategy is an action or decision the business took (or should take) to grow, protect or fund itself.
-IN SCOPE: the strategy sections — lever headings (Pricing, Volume, COGS, Overheads, Inventory, Receivables, Payables, Talent Strategy, Product Differentiation…), "Other Strategies Used to Grow the Business", or the "Key Strategy" field of a summary card.
+IN SCOPE: the strategy sections — lever headings (Pricing, Volume, COGS, Overheads, Inventory, Receivables, Payables, Talent Strategy, Product Differentiation${customs.length ? ", " + customs.map((l) => l.name).join(", ") : ""}…), "Other Strategies Used to Grow the Business", or the "Key Strategy" field of a summary card.
 OUT OF SCOPE — never create a record from these, and never list them as strategies:
   • Failed strategies / "Failed Strategies, Problems Encountered & Solutions" / lessons-from-failure sections — EXCLUDE them entirely, even if they contain a "Solution".
   • Background narrative, biography, timeline / chronology, company history, website links, references.
@@ -2358,7 +2362,7 @@ ${leverDefLine("acquisition_expansion_valuation")}
   For EVERY "others" record you MUST also set other_category and related_to. Pick the ONE category that fits best:
 ${otherCatDefs()}
   related_to = 3-8 English words naming what the strategy specifically relates to.
-For M&A records, use acquisition_expansion_valuation for acquisition strategy and criteria. Use others only when the strategy is not itself an acquisition/valuation/ownership policy and another category clearly fits (e.g. a standalone shareholder governance or financing policy). Do not duplicate one strategy across lever categories.
+${customBlock}For M&A records, use acquisition_expansion_valuation for acquisition strategy and criteria. Use others only when the strategy is not itself an acquisition/valuation/ownership policy and another category clearly fits (e.g. a standalone shareholder governance or financing policy). Do not duplicate one strategy across lever categories.
 
 ═══ 6. EXTRACTION RULES ═══
 1. Only extract what the text supports. Do NOT invent. A document may cover zero levers.
@@ -2371,7 +2375,7 @@ For M&A records, use acquisition_expansion_valuation for acquisition strategy an
 7. strategy_name and description are ALWAYS present.
 8. Maximum: 12 sections, 30 lever records for this part (strategy_titles: as many as the material has). Keep section summaries to 1-2 sentences, but NEVER drop or merge named strategies to save space — completeness of records matters more than brevity.${parts > 1 ? `
 9. This material is PART ${part} of ${parts} of one document. Extract only what appears in this part; do not invent or repeat content from other parts. Title/industry fields: best reading from this part.` : ""}
-${customLevers.length ? `CUSTOM CATEGORY OVERRIDE: When a strategy clearly matches one of the custom category definitions above, set lever to that custom id. Custom categories take precedence over the broad "others" category when their definition matches. Do not force a custom category when a built-in cash or non-cash category is a better fit.` : ""}
+
 
 PROVIDED TITLE: ${title || "(none)"}
 
@@ -2566,23 +2570,14 @@ function KnowledgePanel({
         html: html || "",
         created: Date.now(),
       };
-      await sset("kb:doc:" + id, doc);
-      const idx = (await sget("kb:index")) || [];
-      idx.push({
-        id, status: "active", created_by: doc.created_by, title: doc.title, doc_type: doc.doc_type,
-        industry: doc.industry, industry_main: doc.industry_main, industry_sub: doc.industry_sub,
-        language: doc.language, problem_signature: doc.problem_signature,
-        created: doc.created,
-      });
-      await sset("kb:index", idx);
-      const allLevers = (await sget("kb:levers")) || [];
+      const records = [];
       (extraction.levers || []).forEach((lr) => {
         if (leverKeys.includes(lr.lever) && !lr.skip) {
           const { skip, ...clean } = lr;
-          allLevers.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
+          records.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
         }
       });
-      await sset("kb:levers", allLevers);
+      await window.db.saveDocument(doc, records);
       await refreshKB();
       if (bulkReviewId) {
         const remaining = bulkItems.filter((x) => x.id !== bulkReviewId);
@@ -2602,20 +2597,14 @@ function KnowledgePanel({
     setConfirm({
       message: t.delConfirm,
       onConfirm: async () => {
-        // soft delete: the document, its index entry and its lever records stay in storage, marked deleted
-        const doc = await sget("kb:doc:" + docId);
-        if (doc && isLive(doc)) await sset("kb:doc:" + docId, softDelete(doc));
-        const idx = ((await sget("kb:index")) || []).map((d) => (d.id === docId && isLive(d) ? softDelete(d) : d));
-        await sset("kb:index", idx);
-        const allLevers = ((await sget("kb:levers")) || []).map((l) => (l.doc_id === docId && isLive(l) ? softDelete(l) : l));
-        await sset("kb:levers", allLevers);
+        await window.db.deleteDocument(docId); // soft delete: the document and its lever records stay in storage, marked deleted
         await refreshKB();
       },
     });
   };
 
   const startEdit = async (docId) => {
-    const doc = await sget("kb:doc:" + docId);
+    const doc = await window.db.getDocument(docId, { fresh: true });
     if (!doc) return;
     setEditDoc(JSON.parse(JSON.stringify(doc)));
     setEditLevers(sortByLever(levers.filter((l) => l.doc_id === docId)).map((l) => ({ ...l })));
@@ -2626,11 +2615,7 @@ function KnowledgePanel({
     if (!editLeverRecord) return;
     setBusy(true); setErrMsg("");
     try {
-      const allLevers = (await sget("kb:levers")) || [];
-      const updated = allLevers.map((record) => record.id === editLeverRecord.id
-        ? normalizeOther({ ...record, ...editLeverRecord })
-        : record);
-      await sset("kb:levers", updated);
+      await window.db.saveRecord(normalizeOther({ ...editLeverRecord }));
       await refreshKB();
       setEditLeverRecord(null);
       flash(t.saved);
@@ -2642,8 +2627,7 @@ function KnowledgePanel({
     setConfirm({
       message: t.delConfirm,
       onConfirm: async () => {
-        const allLevers = (await sget("kb:levers")) || [];
-        await sset("kb:levers", allLevers.map((item) => (item.id === record.id && isLive(item) ? softDelete(item) : item)));
+        await window.db.deleteRecord(record.id); // soft delete
         await refreshKB();
       },
     });
@@ -2655,27 +2639,11 @@ function KnowledgePanel({
       if (!editDoc.industry_main) {
         editDoc.industry_main = normalizeMainCategory(editDoc.industry || "General");
       }
-      await sset("kb:doc:" + editDoc.id, editDoc);
-      const idx = ((await sget("kb:index")) || []).map((d) =>
-        d.id === editDoc.id
-          ? {
-            id: editDoc.id, status: d.status || "active", title: editDoc.title, doc_type: editDoc.doc_type,
-            industry: editDoc.industry, industry_main: editDoc.industry_main, industry_sub: editDoc.industry_sub,
-            language: editDoc.language, problem_signature: editDoc.problem_signature,
-            created: editDoc.created || d.created,
-          }
-          : d
-      );
-      await sset("kb:index", idx);
-      const stored = (await sget("kb:levers")) || [];
-      const others = stored.filter((l) => l.doc_id !== editDoc.id);
       const mine = editLevers
         .filter((l) => leverKeys.includes(l.lever) && ((l.claim_en || "").trim() || (l.claim_zh || "").trim()))
         .map((l) => normalizeOther({ status: "active", ...l, doc_title: editDoc.title }));
-      const keptIds = new Set(mine.map((l) => l.id));
       // records of this document that are no longer on the edit screen (removed, or emptied) stay in storage, marked deleted
-      const gone = stored.filter((l) => l.doc_id === editDoc.id && !keptIds.has(l.id)).map((l) => (isLive(l) ? softDelete(l) : l));
-      await sset("kb:levers", [...others, ...gone, ...mine]);
+      await window.db.updateDocument(editDoc, mine);
       await refreshKB();
       setMode("list"); setEditDoc(null); setEditLevers([]);
       flash(t.saved);
@@ -2687,8 +2655,8 @@ function KnowledgePanel({
     if (!newPass.trim()) return;
     const cfg = { ...config, adminPass: newPass.trim() };
     try {
-      await sset("kb:config", cfg);
-      setConfig(window.storage?.remote ? { ...cfg, adminPass: undefined } : cfg); // the server keeps only a hash of the new password
+      await window.db.saveConfig(cfg);
+      setConfig(cfg);
       setNewPass(""); flash(t.passChanged);
     } catch (e) { setErrMsg(String(e?.message || t.loadErr)); }
   };
@@ -2709,49 +2677,8 @@ function KnowledgePanel({
         message: t.importConfirm.replace("{n}", String(parsed.docs.length)),
         onConfirm: async () => {
           try {
-            const curIndex = (await sget("kb:index")) || [];
-            const curIds = new Set(curIndex.map((d) => d.id));
-            let added = 0;
-            for (const doc of parsed.docs) {
-              if (!doc?.id || curIds.has(doc.id)) continue; // skip duplicates by id
-              await sset("kb:doc:" + doc.id, { status: "active", ...doc });
-              const meta = parsed.index.find((x) => x.id === doc.id);
-              curIndex.push({ status: "active", ...(meta || {
-                id: doc.id, title: doc.title, doc_type: doc.doc_type,
-                industry: doc.industry, industry_main: doc.industry_main, industry_sub: doc.industry_sub,
-                language: doc.language, problem_signature: doc.problem_signature, created: doc.created,
-              }) });
-              curIds.add(doc.id);
-              added++;
-            }
-            await sset("kb:index", curIndex);
-            const curLevers = (await sget("kb:levers")) || [];
-            const leverIds = new Set(curLevers.map((l) => l.id));
-            (Array.isArray(parsed.levers) ? parsed.levers : []).forEach((l) => {
-              if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push({ status: "active", ...l }); leverIds.add(l.id); }
-            });
-            await sset("kb:levers", curLevers);
-            /* Keep local settings and passcode, but merge the category definitions needed to label imported records
-               (custom levers / sub-categories by id; edits to built-in levers / sub-categories only where nothing is set yet). */
-            const pc = parsed.config || {};
-            const hasCfg = [pc.customLevers, pc.customOtherCats].some((x) => Array.isArray(x) && x.length) || [pc.leverOverrides, pc.otherCatOverrides].some((x) => x && typeof x === "object" && Object.keys(x).length);
-            if (hasCfg) {
-              const localConfig = (await sget("kb:config")) || config || {};
-              const mergeById = (mine = [], theirs = [], ok) => {
-                const out = [...mine]; const known = new Set(out.map((i) => i.id));
-                (Array.isArray(theirs) ? theirs : []).forEach((i) => { if (i?.id && ok(i) && !known.has(i.id)) { out.push(i); known.add(i.id); } });
-                return out;
-              };
-              const mergedConfig = {
-                ...localConfig,
-                customLevers: mergeById(localConfig.customLevers, pc.customLevers, (i) => i.name),
-                customOtherCats: mergeById(localConfig.customOtherCats, pc.customOtherCats, (i) => i.name),
-                leverOverrides: { ...(pc.leverOverrides || {}), ...(localConfig.leverOverrides || {}) },
-                otherCatOverrides: { ...(pc.otherCatOverrides || {}), ...(localConfig.otherCatOverrides || {}) },
-              };
-              await sset("kb:config", mergedConfig);
-              setConfig(mergedConfig);
-            }
+            const { added, config: merged } = await window.db.importBackup(parsed);
+            if (merged) setConfig(merged);
             await refreshKB();
             flash(t.importDone.replace("{n}", String(added)));
           } catch (err) {
@@ -2763,9 +2690,9 @@ function KnowledgePanel({
   };
 
   const exportBackup = async () => {
-    const docs = [];
-    for (const d of index) { const doc = await sget("kb:doc:" + d.id); if (doc) docs.push(doc); }
-    const backup = { version: 1, exported_at: Date.now(), config, index, levers, docs };
+    const all = await window.db.exportAll();
+    const { adminPass, ...cleanConfig } = all.config || {}; void adminPass; // the passcode is never written into a backup
+    const backup = { version: 1, exported_at: Date.now(), config: cleanConfig, index: all.index, levers: all.levers, docs: all.docs };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3451,6 +3378,7 @@ function KnowledgePanel({
               <div
                 key={d.id}
                 className="yyc-doc"
+                onMouseEnter={() => window.db?.warmDocuments([d.id])}
                 role="button"
                 tabIndex={0}
                 style={{ animationDelay: `${Math.min(i * 30, 300)}ms` }}
@@ -3642,6 +3570,9 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     }
   }, []);
 
+  // the first question reads every document: fetch them in the background as soon as the chat opens (remote storage only)
+  useEffect(() => { window.db?.warmDocuments(index.map((d) => d.id)); }, [index]);
+
   const dismissHint = () => {
     setShowHint(false);
     sset("ui:hint-seen", true, false).catch(() => { });
@@ -3654,14 +3585,14 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     const fp = index.map((d) => d.id).sort().join(",");
     let cancelled = false;
     (async () => {
-      const cached = await sget("kb:suggestions");
+      const cached = await window.db.suggestionsGet();
       if (cached && cached.fp === fp && Array.isArray(cached.en) && Array.isArray(cached.zh)) {
         if (!cancelled) setSugg(cached);
         return;
       }
       setSuggBusy(true);
       try {
-        const docs = (await Promise.all(index.slice(0, 12).map((d) => sget("kb:doc:" + d.id)))).filter(Boolean);
+        const docs = await window.db.getDocuments(index.slice(0, 12).map((d) => d.id));
         const outline = docs
           .map((d) => `- ${d.title} (${d.doc_type}, ${d.industry}): ${(d.sections || []).slice(0, 5).map((s) => s.heading).join("; ")}`)
           .join("\n");
@@ -3671,7 +3602,7 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
         );
         if (!cancelled && Array.isArray(j.en)) {
           const rec = { fp, en: j.en.slice(0, 3), zh: [] /* [ZH disabled for now] j.zh.slice(0, 3) */ };
-          await sset("kb:suggestions", rec);
+          await window.db.suggestionsSet(rec);
           setSugg(rec);
         }
       } catch { }
@@ -3733,7 +3664,7 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
       const docsFp = index.map((d) => d.id).sort().join(",");
       let docs = searchDocsCacheRef.current.docs;
       if (searchDocsCacheRef.current.fp !== docsFp || Date.now() - searchDocsCacheRef.current.at > 30000) {
-        docs = (await Promise.all(index.map((d) => sget("kb:doc:" + d.id)))).filter(Boolean);
+        docs = await window.db.getDocuments(index.map((d) => d.id));
         searchDocsCacheRef.current = { fp: docsFp, at: Date.now(), docs };
       }
       const docById = new Map(docs.map((doc) => [doc.id, doc]));
@@ -3859,9 +3790,7 @@ QUESTION: ${question}`;
           ? { ...j.closest, doc_title: titleOf(j.closest.doc_id) }
           : null;
         setMsgs((m) => [...m, { role: "ai", refused: true, text: t.refused, closest, retrieved }]);
-        const log = (await sget("kb:gaplog")) || [];
-        log.push({ id: uid(), status: "active", q: question, at: Date.now() });
-        await sset("kb:gaplog", log);
+        await window.db.gapAdd(question);
       } else {
         const cits = (j.citations || [])
           .map((c) => {
@@ -4079,7 +4008,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
   };
   const [builtinDraft, setBuiltinDraft] = useState(() => draftFor("price"));
   const [customDraft, setCustomDraft] = useState(null); // an existing custom lever being edited
-  const [newLever, setNewLever] = useState({ name: "", description: "", example: "" });
+  const [newLever, setNewLever] = useState({ name: "", description: "", example: "", headings: "" });
   const subDraftFor = (id) => {
     const c = (config?.customOtherCats || []).find((x) => x.id === id);
     if (c) return { name: c.name, description: c.description };
@@ -4091,7 +4020,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
   const [newSub, setNewSub] = useState({ name: "", description: "" });
   useEffect(() => { if (!setAdminLocked) return; setAdminLocked(true); return () => setAdminLocked(false); }, [setAdminLocked]); // admin cannot be locked out while this is open
 
-  const saveCfg = async (cfg) => { await sset("kb:config", cfg); setConfig(cfg); };
+  const saveCfg = async (cfg) => { await window.db.saveConfig(cfg); setConfig(cfg); };
   const customLevers = config?.customLevers || [];
   const customSubs = config?.customOtherCats || [];
   const isBuiltin = !!BUILTIN_LEVER_DEFAULTS[target];
@@ -4160,8 +4089,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
       message: `Delete the sub-category "${c.name}"? Records filed under it move to "${T.en.otherCats.uncategorized}".`,
       onConfirm: async () => {
         try {
-          const all = (await sget("kb:levers")) || [];
-          await sset("kb:levers", all.map((r) => (r.lever === "others" && r.other_category === c.id ? { ...r, other_category: "uncategorized" } : r)));
+          await window.db.recategorize(c.id, "uncategorized");
           await saveCfg({ ...config, customOtherCats: customSubs.filter((x) => x.id !== c.id) });
           if (refreshKB) await refreshKB();
           pickSub(OTHER_CATS.find((k) => k !== c.id) || OTHER_CATS[0]);
@@ -4184,10 +4112,10 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
     const normalizedName = draft.name.trim().toLowerCase();
     if (nameTaken(draft.name, draft.id)) { setErrMsg("A lever with this name already exists."); return; }
     const slug = normalizedName.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "custom";
-    const item = { ...draft, id: draft.id || `custom_${slug}_${uid()}`, name: draft.name.trim(), description: draft.description.trim(), example: draft.example.trim() };
+    const item = { ...draft, id: draft.id || `custom_${slug}_${uid()}`, name: draft.name.trim(), description: draft.description.trim(), example: draft.example.trim(), headings: splitHeadings(draft.headings).join(", ") };
     const next = draft.id ? customLevers.map((e) => (e.id === draft.id ? item : e)) : [...customLevers, item];
     await saveCfg({ ...config, customLevers: next });
-    if (draft.id) setCustomDraft(item); else setNewLever({ name: "", description: "", example: "" });
+    if (draft.id) setCustomDraft(item); else setNewLever({ name: "", description: "", example: "", headings: "" });
     setErrMsg(""); flash("Lever category saved");
   };
   const validateAndSaveLever = async (raw) => {
@@ -4277,6 +4205,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
             <MgrField label="Name"><input className="yyc-input" value={customDraft.name} onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))} /></MgrField>
             <MgrField label="Definition and classification guidance"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={customDraft.description} onChange={(e) => setCustomDraft((d) => ({ ...d, description: e.target.value }))} /></MgrField>
             <MgrField label="Example strategy" hint="The AI checks that the category is clear and distinct. If it flags a concern you can review the reason and save anyway."><textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={customDraft.example} onChange={(e) => setCustomDraft((d) => ({ ...d, example: e.target.value }))} /></MgrField>
+            <MgrField label="Extra heading words (comma separated)" hint="A document heading that starts with one of these words (or is this lever's own name) is filed under this lever."><input className="yyc-input" value={customDraft.headings || ""} onChange={(e) => setCustomDraft((d) => ({ ...d, headings: e.target.value }))} placeholder="e.g. Loyalty, Retention" /></MgrField>
             <MgrFooter><button className="yyc-btn-primary" onClick={() => validateAndSaveLever(customDraft)} disabled={busy}>{busy ? "Checking with AI…" : "Validate and save changes"}</button></MgrFooter>
           </>)}
         </>)}
@@ -4290,6 +4219,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
             <MgrField label="Name"><input className="yyc-input" value={newLever.name} onChange={(e) => setNewLever((d) => ({ ...d, name: e.target.value }))} placeholder="e.g. Customer Retention" /></MgrField>
             <MgrField label="Definition and classification guidance"><textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={newLever.description} onChange={(e) => setNewLever((d) => ({ ...d, description: e.target.value }))} placeholder="Describe which strategies belong in this category." /></MgrField>
             <MgrField label="Example strategy" hint="The AI checks that the category is clear and distinct. If it flags a concern you can review the reason and save anyway."><textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={newLever.example} onChange={(e) => setNewLever((d) => ({ ...d, example: e.target.value }))} placeholder="Give the AI a concrete example." /></MgrField>
+            <MgrField label="Extra heading words (comma separated)" hint="A document heading that starts with one of these words (or is this lever's own name) is filed under this lever."><input className="yyc-input" value={newLever.headings || ""} onChange={(e) => setNewLever((d) => ({ ...d, headings: e.target.value }))} placeholder="e.g. Loyalty, Retention" /></MgrField>
             <MgrFooter><button className="yyc-btn-primary" onClick={() => validateAndSaveLever(newLever)} disabled={busy}>{busy ? "Checking with AI…" : "Validate and create"}</button></MgrFooter>
           </>) : (<>
             <MgrField label="Name"><input className="yyc-input" value={newSub.name} onChange={(e) => setNewSub((d) => ({ ...d, name: e.target.value }))} placeholder="e.g. Technology & Systems" /></MgrField>
@@ -4453,18 +4383,17 @@ function ExplorerPanel({ t, lang, levers, index, openPreview, isAdmin, config, s
 
 function GapPanel({ t, flash, setConfirm }) {
   const [log, setLog] = useState(null);
-  useEffect(() => { (async () => setLog((await sget("kb:gaplog")) || []))(); }, []);
+  useEffect(() => { (async () => { try { setLog(await window.db.gapList()); } catch { setLog([]); } })(); }, []);
   const clear = () => {
     setConfirm({
       message: t.clearGap + "?",
       onConfirm: async () => { // soft delete: the entries stay in storage, marked deleted
-        const marked = ((await sget("kb:gaplog")) || []).map((g) => (isLive(g) ? softDelete(g) : g));
-        await sset("kb:gaplog", marked); setLog(marked); flash("OK");
+        await window.db.gapClear(); setLog([]); flash("OK");
       },
     });
   };
   if (log === null) return <div style={{ color: P.sub }}>…</div>;
-  const shown = log.filter(isLive);
+  const shown = log;
   return (
     <div>
       <div className="yyc-section-head">

@@ -115,7 +115,7 @@ By default each browser keeps its own copy of the library and anyone can open it
 
 **1. Create the project** at [supabase.com](https://supabase.com) → *New project* (choose a region near you; save the database password).
 
-**2. Create the table.** *SQL Editor → New query*, paste [`supabase/schema.sql`](supabase/schema.sql) and run it. It is safe to run again (run it again after updating the app: it adds new columns such as `status` and `updated_by`). The table has Row Level Security on and **no public policy**, so the public key cannot read or write it.
+**2. Create the tables.** *SQL Editor → New query*, paste [`supabase/schema.sql`](supabase/schema.sql) and run it (safe to run again). It creates real tables: **`documents`**, **`records`** (one row per extracted strategy), **`levers`** (the lever definitions the extraction prompt is built from), **`gap_log`**, **`chats`** and **`suggestions`**. Row Level Security is on with **no public policy**, so the public key cannot read or write anything. Earlier versions kept everything in one `kv` table; it is no longer used and is left untouched.
 
 **3. Switch sign-up off and create your people.** *Authentication → Sign In / Providers → Email*: turn **off** "Allow new users to sign up" (and "Confirm email" can stay on or off). Then *Authentication → Users → Add user → Create new user*: enter their company email and a password, and tick **Auto Confirm User**. Do this for every person. Send them the password; no emails are needed. To reset a forgotten password, edit the user in the same screen.
 
@@ -134,18 +134,20 @@ ALLOW_GUEST=false                        # optional: remove the Continue-as-gues
 
 The server prints `Shared database + sign-in: Supabase` at start-up. (An admin can also be made with `app_metadata.role = "admin"`; see the bottom of `supabase/schema.sql`.)
 
-**6. Move your existing library.** In the *old* setup use **Export backup**; after the switch sign in as an admin, press **Unlock admin**, and use **Import backup**. Custom levers, edited built-in levers and Others sub-categories come with it.
+**6. Move your existing library.** In the *old* setup (the browser or the earlier deployment that has the data) use **Export backup**; after the switch, sign in as an admin and use **Import backup**. Documents, strategies, custom levers, edited built-in levers and Others sub-categories all come with it; anything already in the new database is kept and duplicates are skipped.
 
-How it works (`server/auth.js`, `server/kvStore.js`, `api/kv.js`, `src/Root.jsx`, `src/storage.js`):
+How it works (`server/auth.js`, `server/db.js`, `api/db.js`, `src/db.js`, `src/storage.js`, `src/Root.jsx`):
 
 - **Everyone signs in** (email + password), or presses **Continue as guest**. A guest can only **browse the knowledge base and the lever records** (including opening documents): there is no Ask the Brain, no Gap Log, no chat and no editing, and the AI proxy still refuses them. The bottom-left button is **Log in** for a guest and **Log out** for a signed-in person. Guest access lasts for that browser tab. Turn guests off with `ALLOW_GUEST=false`; note that while guests are on, **anyone with the link can read the whole library**. The Groq AI proxy requires the same sign-in, so strangers cannot spend your quota.
-- The browser keeps only a session token; every call to `/api/kv` and `/api/groq/chat` carries it and the **server** checks it with Supabase. The service-role key never leaves the server.
+- The browser keeps only a session token; every call to `/api/db` and `/api/groq/chat` carries it and the **server** checks it with Supabase. The service-role key never leaves the server. The app talks to the database only through `window.db` (`src/db.js`); with no Supabase the same interface runs on the browser's localStorage, so local development works unchanged.
 - **Viewers** (signed in) can read the library, ask questions, and add to the Gap Log. **Admins** (see `ADMIN_EMAILS`) can also change the library: admin accounts are in admin mode as soon as they log in (no Unlock admin button and no shared passcode any more).
-- **Chat history is personal**: it is saved per signed-in person (`kb:chat:<user id>`), follows them to any browser or device, and only they (and admins) can read it.
-- **Nothing is hard-deleted.** Every row has a `status` (`active` / `deleted`) and `deleted_at`; deleting only marks it `deleted`. Inside the lists the same applies to each item: documents, index entries, lever records, chat messages and Gap Log entries carry a `status`, so removing a record on the Edit screen, "Clear chat" and "Clear gap log" only mark items deleted. The data stays in Supabase; restore with the SQL at the bottom of `supabase/schema.sql`.
-- **Who did what:** each row records `updated_by` / `deleted_by` (the person's email); new documents and records carry `created_by`.
+- **Chat history is personal**: it is saved per signed-in person (the `chats` table), follows them to any browser or device, and only they (and admins) can read it.
+- **Nothing is hard-deleted.** Every row of every table has a `status` (`active` / `deleted`) and `deleted_at`; deleting a document, a strategy, a lever or a gap-log entry only marks it `deleted`, and it disappears from the app. Removing a strategy on the Edit screen and "Clear chat" / "Clear gap log" are soft too. The data stays in Supabase; restore with the SQL at the bottom of `supabase/schema.sql`.
+- **Who did what:** every row records `created_by`, `updated_by` and `deleted_by` (the person's email).
+- **Lever definitions live in the `levers` table.** Custom levers (name, definition, example, heading words), edits to the 10 built-in levers and the Others sub-categories are rows there, and the **extraction prompt is built from them** every time: a lever you add in *Lever Explorer → Manage lever categories* is part of the next extraction (its id is an allowed value, its definition and example are listed with the built-in levers, and a document heading matching its heading words or its name is filed under it). Existing records keep their lever; re-run extraction on a document to re-sort it.
+- **Speed.** The library (lever definitions, document list, lever records) is requested in one call as soon as the page opens, while the sign-in screen is still showing, and again the moment someone signs in, so it is usually waiting when the app appears. A copy is kept in the browser, so a returning visitor sees the library immediately while the fresh copy loads; it is erased on log-out (on a shared computer, log out). Documents are cached in memory for 5 minutes (previews and Ask the Brain), and loaded in the background when you hover a card or open Ask the Brain. Anything about to change data reads fresh from the server. Large tables are read page by page (Supabase returns at most 1,000 rows per request). For the best response time, deploy the Vercel functions in the same region as your Supabase project.
 - If the database cannot be reached, the app shows an error instead of an empty library, so a failed read can never overwrite real data. A session that ends (or is revoked) returns the person to the sign-in screen; access changes can take up to a minute to apply.
-- Two admins saving at the same moment can overwrite each other (each list is saved as a whole). Fine for one or two editors; do not run big imports from two machines at once.
+- Each edit saves only what changed (one document, one record, one lever), so two admins no longer overwrite each other's whole library; the last save of the *same* item wins.
 - Free tier: 500 MB, and a project with no activity for about a week is paused (resume it from the dashboard).
 - If `SUPABASE_URL` and the service-role key are set but `SUPABASE_ANON_KEY` is missing, the app shows a "server is not set up correctly" screen instead of silently falling back to browser storage.
 
@@ -255,7 +257,7 @@ If you see `429` in the browser console, this is the cause.
 | "Your session has ended" / back at the sign-in screen | The login expired or was revoked: sign in again. |
 | "Your account is not an administrator" | Add the email to `ADMIN_EMAILS` (or set `app_metadata.role = admin`) and restart / redeploy. |
 | "Wrong email or password" for a correct password | The user must exist in Supabase → Authentication → Users and be confirmed; check the project URL / anon key belong to the same project. |
-| Library looks empty after enabling Supabase | The new database starts empty: use Export backup in the old browser, then Import backup. If the page shows a database error instead, check `SUPABASE_URL`, the service-role key, and that `supabase/schema.sql` was run. |
+| Library looks empty after enabling Supabase | The new database starts empty: use Export backup in the old browser, then Import backup. If the page shows a database error instead, check `SUPABASE_URL`, the service-role key, and that the latest `supabase/schema.sql` was run (it creates the tables the app reads). |
 | "Quota"/import error | `localStorage` is limited to ~5 MB; export a backup and remove old documents. |
 
 ---
@@ -267,12 +269,13 @@ api/groq/chat.js     Vercel serverless proxy to Groq (production)
 server/index.js      Express proxy + static server (local / npm start)
 src/App.jsx          The whole app: UI, extraction pipeline, chat, storage helpers
 src/main.jsx         Entry point (starts the storage layer, then the app)
-src/storage.js       window.storage: Supabase through /api/kv (with sign-in) when configured, else localStorage
+src/storage.js       window.storage: this browser's storage + Supabase sign-in (guest mode, session token)
+src/db.js            window.db: every read/write of the library; Supabase through /api/db, or localStorage
 src/Root.jsx         Sign-in screen + error screen shown before the app
 server/auth.js       Verifies the Supabase session on every request; decides who is an admin
-server/kvStore.js    /api/kv logic: reads, admin-token writes, password check (Supabase)
-api/kv.js            Vercel twin of the /api/kv route
-supabase/schema.sql  The one table to create in Supabase
+server/db.js           /api/db: documents, records, levers, gap log, chats; roles; soft delete
+api/db.js              Vercel twin of the /api/db route
+supabase/schema.sql  The tables to create in Supabase (documents, records, levers, gap_log, chats, suggestions)
 public/logo.png      YYC logo (served at /logo.png)
 index.html           HTML shell
 vite.config.js       Dev proxy: /api → http://127.0.0.1:8787

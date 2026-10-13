@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
-import { handleKv, kvConfigured } from './kvStore.js';
+import { handleDb, dbConfigured } from './db.js';
 import { authenticate } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +23,7 @@ app.use(express.json({ limit: '4mb' }));
 // client bundle, and moves on to the next key when one hits its rate limit.
 app.post('/api/groq/chat', async (req, res) => {
   try {
-    if (kvConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
+    if (dbConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
       const a = await authenticate(req.headers);
       if (!a.ok) return res.status(a.status).json({ error: a.error });
     }
@@ -37,9 +37,9 @@ app.post('/api/groq/chat', async (req, res) => {
 });
 
 // Shared database (Supabase). Without SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY the app keeps using each browser's own storage.
-console.log(kvConfigured() ? 'Shared database + sign-in: Supabase (library data is stored online; people must sign in)' : 'Shared database: not configured (each browser keeps its own copy; see README → Supabase)');
-app.all('/api/kv', async (req, res) => {
-  const out = await handleKv({ method: req.method, query: req.query, body: req.body, headers: req.headers });
+console.log(dbConfigured() ? 'Shared database + sign-in: Supabase (library data is stored online; people must sign in)' : 'Shared database: not configured (each browser keeps its own copy; see README → Supabase)');
+app.all('/api/db', async (req, res) => {
+  const out = await handleDb({ method: req.method, query: req.query, body: req.body, headers: req.headers });
   res.set('Cache-Control', 'no-store');
   res.status(out.status).json(out.body);
 });
