@@ -14,6 +14,10 @@ import { dbConfigured } from '../../server/db.js';
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
+  if (req.method === 'GET') { // how many keys are configured (a count, not a secret): the browser sizes its budget from it
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ keys: loadGroqKeys().length });
+  }
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });

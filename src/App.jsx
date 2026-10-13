@@ -246,8 +246,8 @@ const T = {
     saved: "Saved to the shared knowledge base",
     loadErr: "Couldn't reach storage. Reload and try again.",
     apiErr: "The AI call failed. Try again in a moment.",
-    rateDaily: "Groq's DAILY token limit is used up (free plan: 200,000 tokens/day). It resets in about {time}. Wait until then, or upgrade the Groq plan (console.groq.com → Billing) to continue now.",
-    rateMinute: "Groq per-minute rate limit hit repeatedly. Wait about {time} and press retry.",
+    rateDaily: "AI Tool's DAILY token limit is used up (free plan: 200,000 tokens/day). It resets in about {time}. Wait until then, or upgrade the AI plan to continue now.",
+    rateMinute: "AI per-minute rate limit hit repeatedly. Wait about {time} and press retry.",
     rateWaiting: "Rate limit reached — retrying automatically in",
     changePass: "Change passcode", newPassPh: "New passcode", passChanged: "Passcode updated.",
     sharedNote: "Shared knowledge base — visible to everyone using this app.",
@@ -272,7 +272,7 @@ const T = {
     tryAsking: "Try asking",
     loadingSuggestions: "Preparing example questions…",
     bulkTitle: "Bulk upload",
-    bulkHint: "Documents are extracted one by one, ~70s apart, to stay inside the Groq 8k tokens/minute limit. You can leave this running.",
+    bulkHint: "Documents are extracted one by one, ~70s apart, to stay inside the AI 8k tokens/minute limit. You can leave this running.",
     bulkStop: "Stop queue",
     bulkWaiting: "Rate-limit pacing — next document in",
     bulkReviewBtn: "Review & save",
@@ -362,8 +362,8 @@ const T = {
     saved: "已保存到共享知识库",
     loadErr: "无法连接存储,请刷新重试。",
     apiErr: "AI 调用失败,请稍后重试。",
-    rateDaily: "Groq 今日的 token 额度已用完(免费版每日 200,000 tokens)。约 {time} 后重置。请等待,或升级 Groq 方案(console.groq.com → Billing)以立即继续。",
-    rateMinute: "Groq 每分钟限速多次触发。请等待约 {time} 后点击重试。",
+    rateDaily: "AI 今日的 token 额度已用完(免费版每日 200,000 tokens)。约 {time} 后重置。请等待,或升级 AI 方案(console.groq.com --> Billing)以立即继续。",
+    rateMinute: "AI 每分钟限速多次触发。请等待约 {time} 后点击重试。",
     rateWaiting: "已触发限速——自动重试倒计时",
     changePass: "修改密码", newPassPh: "新密码", passChanged: "密码已更新。",
     sharedNote: "共享知识库———所有使用此应用的人都能看到。",
@@ -388,7 +388,7 @@ const T = {
     tryAsking: "试试提问",
     loadingSuggestions: "正在生成示例问题…",
     bulkTitle: "批量上传",
-    bulkHint: "为符合Groq每分钟八千tokens的限制,文件将逐份提取、间隔约 70 秒。您可以让它在后台运行。",
+    bulkHint: "AI,文件将逐份提取、间隔约 70 秒。您可以让它在后台运行。",
     bulkStop: "停止队列",
     bulkWaiting: "限速等待——下一份文件还有",
     bulkReviewBtn: "核对并保存",
@@ -412,7 +412,7 @@ const T = {
     explorerSearchPh: "搜索策略…",
     explorerEmpty: "没有匹配的策略——请更换杠杆或清除筛选。",
     greetReply: "你好! 我是 YYC 顾问知识大脑——欢迎提问资料涵盖的任何内容,输入 @ 可指定资料。",
-    hintTip: "💡 提示：Ctrl+K 快速跳转 · 聊天中输入 @ 可标记资料",
+    hintTip: "💡 提示: Ctrl+K 快速跳转 · 聊天中输入 @ 可标记资料",
     gotIt: "知道了",
     kbarPh: "跳转到资料、页面或杠杆…",
     kbarEmpty: "没有匹配结果",
@@ -467,6 +467,7 @@ const softDelete = (x) => ({ ...x, status: "deleted", deleted_at: Date.now(), de
 const GROQ_URL = "/api/groq/chat"; // proxied server-side so the API key never reaches the browser
 const GROQ_MODEL = "openai/gpt-oss-120b";
 
+const fmtElapsed = (ms) => { const sec = Math.round(ms / 1000); return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`; };
 function estimateTokens(str) { return Math.ceil((str || "").length / 3.5); }
 
 
@@ -532,14 +533,25 @@ function assertUnderLimit(messages, maxTokens) {
 /* ---- client-side TPM budget: Groq admits a request as (input tokens + max_tokens),
    so every call reserves its estimated footprint in a rolling 60s window and waits
    its turn instead of colliding into 429s ---- */
-const TPM_LIMIT = 7600; // slightly under the 8,000 TPM account limit
+const PER_KEY_TPM = 7600; // slightly under the 8,000 TPM limit of ONE Groq key: also the biggest a single request may be
 const tpmLog = []; // {at, tokens}
+/* Fast extraction (on by default; the tick box on the Add material screen, stored as localStorage "yyc:fast"): the server holds several
+   Groq keys and spreads load over them, so the per-minute budget is PER_KEY_TPM x the number of keys and several chunks of one document
+   are extracted at once. Off = the original behaviour: one key's budget, one chunk at a time, a pause between bulk documents. */
+const fastExtraction = () => { try { return localStorage.getItem("yyc:fast") !== "0"; } catch { return true; } };
+let groqKeysPromise = null;
+function groqKeyCount() { // asked once from the server; 1 when unknown
+  if (!groqKeysPromise) groqKeysPromise = fetch(GROQ_URL).then((r) => (r.ok ? r.json() : {})).then((j) => Math.max(1, Math.min(8, Number(j && j.keys) || 1))).catch(() => 1);
+  return groqKeysPromise;
+}
+const keysInUse = async () => (fastExtraction() ? groqKeyCount() : 1);
 async function reserveTPM(need) {
+  const limit = PER_KEY_TPM * (await keysInUse());
   for (; ;) {
     const now = Date.now();
     while (tpmLog.length && now - tpmLog[0].at > 60000) tpmLog.shift();
     const used = tpmLog.reduce((sum, x) => sum + x.tokens, 0);
-    if (used + need <= TPM_LIMIT) { tpmLog.push({ at: now, tokens: need }); return; }
+    if (used + need <= limit) { tpmLog.push({ at: now, tokens: need }); return; }
     const waitMs = tpmLog.length ? 61000 - (now - tpmLog[0].at) : 2000;
     await new Promise((r) => setTimeout(r, Math.min(Math.max(waitMs, 1000), 61000)));
   }
@@ -577,7 +589,7 @@ async function askAI(userContent, maxTokens = 1500, maxRetries = 2) {
   for (let i = 0; i <= maxRetries; i++) {
     try {
       /* clamp so input + max_tokens always fits inside one minute's quota */
-      const effMax = Math.max(600, Math.min(maxTokens * (i + 1), TPM_LIMIT - inputTok - 100));
+      const effMax = Math.max(600, Math.min(maxTokens * (i + 1), PER_KEY_TPM - inputTok - 100));
       await reserveTPM(inputTok + effMax);
       const body = {
         model: GROQ_MODEL, temperature: 0.1,
@@ -2014,20 +2026,32 @@ ${context}
       seenLev.add(key); merged.levers.push(l);
     }
   };
-  const extractAndIngest = async (material, part, totalParts = chunks.length, depth = 0) => {
+  // the model's answers for one piece of material, in order (a piece whose answer is not valid JSON is halved and retried)
+  const extractResults = async (material, part, totalParts = chunks.length, depth = 0) => {
     try {
-      const result = await askAI(buildExtractionPrompt(material, title, part, totalParts, customLevers, isMnaDocument), 3000);
-      ingest(result);
+      return [await askAI(buildExtractionPrompt(material, title, part, totalParts, customLevers, isMnaDocument), 3000)];
     } catch (error) {
       if (!(error instanceof AIError) || error.kind !== "json_output") throw error;
       const halves = depth < 7 ? splitMaterialForRetry(material) : null;
-      if (!halves) throw new Error("Groq could not return valid JSON for this source text. No text was shortened or discarded; split this material into smaller complete paragraphs and try again.");
-      await extractAndIngest(halves[0], part, totalParts, depth + 1);
-      await extractAndIngest(halves[1], part, totalParts, depth + 1);
+      if (!halves) throw new Error("AI could not return valid JSON for this source text. No text was shortened or discarded; split this material into smaller complete paragraphs and try again.");
+      return [...(await extractResults(halves[0], part, totalParts, depth + 1)), ...(await extractResults(halves[1], part, totalParts, depth + 1))];
     }
   };
-  for (let k = 0; k < chunks.length; k++) {
-    await extractAndIngest(chunks[k], k + 1, chunks.length);
+  const extractAndIngest = async (material, part, totalParts = chunks.length) => { for (const r of await extractResults(material, part, totalParts)) ingest(r); };
+  const parallel = Math.max(1, Math.min(await keysInUse(), 4, chunks.length));
+  if (parallel <= 1) {
+    for (let k = 0; k < chunks.length; k++) await extractAndIngest(chunks[k], k + 1, chunks.length);
+  } else {
+    // several chunks at once (one per key, at most 4); the answers are merged in document order afterwards, exactly as if done one by one
+    const answers = new Array(chunks.length);
+    let next = 0, failed = false;
+    await Promise.all(Array.from({ length: parallel }, async () => {
+      while (!failed && next < chunks.length) {
+        const k = next++;
+        try { answers[k] = await extractResults(chunks[k], k + 1, chunks.length); } catch (e) { failed = true; throw e; }
+      }
+    }));
+    answers.forEach((rs) => rs.forEach(ingest));
   }
 
   /* COVERAGE GUARANTEE — the model sometimes quietly skips a strategy (esp. ones with only a Power Cash Link and no
@@ -2398,6 +2422,7 @@ function KnowledgePanel({
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [html, setHtml] = useState("");
+  const [fastMode, setFastMode] = useState(fastExtraction()); // tick box on the Add material screen
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState("");
   const [aiNote, setAiNote] = useState(null);                 // live rate-limit wait from askAI: {kind:"wait", sec}
@@ -2487,9 +2512,10 @@ function KnowledgePanel({
       if (bulkCancelRef.current) break;
       const it = items[i];
       setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "extracting" } : x)));
+      const startedAt = Date.now();
       try {
         const j = await extractDocument(it.text, it.title, config?.customLevers || [], it.html);
-        setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "done", extraction: j, error: "" } : x)));
+        setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "done", extraction: j, error: "", elapsed: Date.now() - startedAt } : x)));
       } catch (e) {
         const msg = describeAIError(e, t);
         setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "error", error: msg } : x)));
@@ -2498,7 +2524,8 @@ function KnowledgePanel({
         if (e instanceof AIError && e.kind === "daily") break;
       }
       if (i < items.length - 1 && !bulkCancelRef.current) {
-        for (let sLeft = 45; sLeft > 0; sLeft--) {
+        const pauseSec = (await keysInUse()) > 1 ? 0 : 45; // several keys: the token budget does the pacing; one key: the original 45 s gap
+        for (let sLeft = pauseSec; sLeft > 0; sLeft--) {
           if (bulkCancelRef.current) break;
           setBulkWait(sLeft);
           await new Promise((r) => setTimeout(r, 1000));
@@ -2540,10 +2567,12 @@ function KnowledgePanel({
     if (!text.trim()) return;
     setBusy(true); setErrMsg(""); setStage("analyze");
     const stageTimer = setTimeout(() => setStage("levers"), 7000); // presentational: one AI call, staged for confidence
+    const startedAt = Date.now();
     try {
       const j = await extractDocument(text, title, config?.customLevers || [], html);
       setExtraction(j);
       setMode("review");
+      flash(`Extracted in ${fmtElapsed(Date.now() - startedAt)} (${fastExtraction() ? "fast mode" : "normal mode"})`);
     } catch (e) { setErrMsg(describeAIError(e, t)); }
     clearTimeout(stageTimer);
     setStage("");
@@ -3029,6 +3058,7 @@ function KnowledgePanel({
     const doneN = bulkItems.filter((x) => x.status === "done").length;
     const pendingN = bulkItems.filter((x) => x.status === "pending" || x.status === "extracting").length;
     const statusLabel = { pending: t.statusPending, extracting: t.statusExtracting, done: t.statusDone, error: t.statusError };
+    const fmtDone = (it) => (it.status === "done" && it.elapsed ? `${statusLabel.done} · ${fmtElapsed(it.elapsed)}` : statusLabel[it.status]);
     const statusColor = { pending: P.faint, extracting: P.maroon, done: P.green, error: P.red };
     return (
       <div>
@@ -3062,7 +3092,7 @@ function KnowledgePanel({
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
                 <div style={{ fontSize: 11.5, color: statusColor[it.status], fontWeight: 600 }}>
-                  {statusLabel[it.status]}
+                  {fmtDone(it)}
                   {it.status === "done" && it.extraction ? ` · ${(it.extraction.levers || []).length} ${t.leverRecords.toLowerCase()}` : ""}
                 </div>
                 {it.status === "error" && it.error && <div style={{ fontSize: 11.5, color: P.red, marginTop: 3, lineHeight: 1.4 }}>{it.error}</div>}
@@ -3131,7 +3161,14 @@ function KnowledgePanel({
           {aiBanner}
           {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 10, fontWeight: 600 }}>{errMsg}</div>}
 
-          <div style={{ display: "flex", gap: 12, marginTop: 18, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 14, fontSize: 12.5, color: P.sub, lineHeight: 1.5, cursor: busy ? "default" : "pointer" }}>
+            <input type="checkbox" checked={fastMode} disabled={busy || bulkRunning}
+              onChange={(e) => { const on = e.target.checked; setFastMode(on); try { localStorage.setItem("yyc:fast", on ? "1" : "0"); } catch { /* private mode */ } }}
+              style={{ marginTop: 3 }} />
+            <span><b style={{ color: P.ink }}>Fast extraction</b>: use all the AI keys at once (several parts of a document in parallel, no pause between uploaded files). Untick to go back to the original one-part-at-a-time way. The time taken is shown after each extraction, so you can compare.</span>
+          </label>
+
+          <div style={{ display: "flex", gap: 12, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
             <button className="yyc-btn-primary" onClick={runExtract} disabled={busy || !text.trim()}>
               {busy ? (
                 <>

@@ -107,6 +107,7 @@ GROQ_API_KEY_4=gsk_...
 - Key 1 is used first. If Groq answers **429** (per-minute or per-day limit), that key is set aside until its reset time and the **same request is retried on the next key**, so the browser only sees a rate-limit error when *every* key is limited.
 - A key that was **rejected (401/403)** is skipped for 10 minutes; a network error moves on to the next key.
 - Once a benched key has recovered it is preferred again, in order.
+- **Fast extraction** (tick box on the *Add material* screen, on by default): the browser asks the server how many keys it has (`GET /api/groq/chat` returns `{ "keys": n }`), budgets `n × 7,600` tokens per minute instead of one key's worth, extracts up to 4 parts of a document at once, and skips the 45-second pause between uploaded files. The parts' answers are merged in document order, so the records are the same as one by one (checked on the earlier case studies). The time taken is shown after each extraction. Untick it to go back to the original one-part-at-a-time behaviour (the choice is remembered in the browser).
 - Keys stay on the server and are never logged. Each key has its own quota, so the keys should belong to different Groq accounts/organisations; several keys of one organisation share one limit.
 
 ## Shared online database + sign-in (Supabase)

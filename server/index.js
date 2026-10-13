@@ -21,6 +21,9 @@ app.use(express.json({ limit: '4mb' }));
 // The browser posts the same {model, messages, ...} body it used to send straight
 // to Groq. This adds the Authorization header server-side, so the keys never ship in the
 // client bundle, and moves on to the next key when one hits its rate limit.
+// How many keys are configured: the browser sizes its per-minute budget and its parallel requests from this.
+app.get('/api/groq/chat', (req, res) => res.json({ keys: GROQ_KEYS.length }));
+
 app.post('/api/groq/chat', async (req, res) => {
   try {
     if (dbConfigured()) { // with Supabase the site requires sign-in, and so does the AI proxy
