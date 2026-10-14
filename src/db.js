@@ -186,9 +186,16 @@ export function makeRemoteDb(storage) {
       return p;
     },
     async getDocuments(ids) {
-      const missing = ids.filter((i) => !fresh(docs.get(i)));
-      for (let i = 0; i < missing.length; i += 40) fillDocs((await call("documents", { ids: missing.slice(i, i + 40) })).docs || []);
-      return ids.map((i) => (fresh(docs.get(i)) ? docs.get(i).doc : null)).filter(Boolean);
+      // the result is built from what was fetched, not re-read from the memory cache: the cache holds at most DOC_MAX documents,
+      // so with a bigger library it would have dropped the earlier ones and Ask the Brain would silently search only part of it
+      const got = new Map(ids.filter((i) => fresh(docs.get(i))).map((i) => [i, docs.get(i).doc]));
+      const missing = ids.filter((i) => !got.has(i));
+      for (let i = 0; i < missing.length; i += 40) {
+        const part = (await call("documents", { ids: missing.slice(i, i + 40) })).docs || [];
+        fillDocs(part);
+        part.forEach((d) => got.set(d.id, d));
+      }
+      return ids.map((i) => got.get(i)).filter(Boolean);
     },
     /* Load documents into memory in the background (hover, opening Ask the Brain). Never throws. */
     async warmDocuments(ids) { try { await db.getDocuments([...new Set(ids)].slice(0, DOC_MAX)); } catch { /* fetched when needed */ } },
