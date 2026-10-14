@@ -233,6 +233,14 @@ const OPS = {
       return {};
     },
   },
+  import_check: { // for the Import Backup preview: which of these document ids are already in the library, and which were deleted
+    level: 'admin',
+    run: async ({ sb }, a) => {
+      const ids = (Array.isArray(a.ids) ? a.ids : []).map((i) => trim(i, 100)).filter(Boolean).slice(0, 200);
+      const rows = ids.length ? must(await sb.from('documents').select('id,status').in('id', ids), 'read documents') : [];
+      return { exists: rows.filter((r) => r.status !== 'deleted').map((r) => r.id), deleted: rows.filter((r) => r.status === 'deleted').map((r) => r.id) };
+    },
+  },
   config_save: { level: 'admin', run: async (ctx, a) => { if (!a.config || typeof a.config !== 'object') throw bad('Bad config'); await replaceLevers(ctx, a.config); return {}; } },
   import_docs: {
     level: 'admin',

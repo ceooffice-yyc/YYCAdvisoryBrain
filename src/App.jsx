@@ -2407,6 +2407,101 @@ MATERIAL:
 ${capped}`;
 }
 
+/* Import Backup preview: every material found in the backup, with its status and strategies, and the lever settings found in it.
+   Nothing is saved until "Import selected" is pressed; only what is ticked is imported. */
+const IMPORT_STATE = { new: ["New", "#0E7C4A", "#E6F5EC"], exists: ["Already in the library: skipped", "#8A6508", "#FFF6DC"], deleted: ["Was deleted: skipped", "#9A0000", "#FDEDED"] };
+function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
+  const [selDocs, setSelDocs] = useState(() => new Set(plan.docs.filter((d) => d.state === "new").map((d) => d.id)));
+  const [selCfg, setSelCfg] = useState(() => new Set(plan.cfgItems.filter((c) => !c.exists).map((c) => c.key)));
+  const [open, setOpen] = useState(() => new Set());
+  const toggle = (set, setter, key) => { const n = new Set(set); n.has(key) ? n.delete(key) : n.add(key); setter(n); };
+  const newDocs = plan.docs.filter((d) => d.state === "new");
+  const newCfg = plan.cfgItems.filter((c) => !c.exists);
+  const nDocs = selDocs.size, nCfg = selCfg.size;
+  const nRecs = plan.docs.filter((d) => selDocs.has(d.id)).reduce((n, d) => n + d.records.length, 0);
+  const counts = (st) => plan.docs.filter((d) => d.state === st).length;
+  const chip = (st) => <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 999, color: IMPORT_STATE[st][1], background: IMPORT_STATE[st][2], whiteSpace: "nowrap" }}>{IMPORT_STATE[st][0]}</span>;
+  return (
+    <div className="yyc-modal-backdrop" onClick={() => !busy && onCancel()}>
+      <div className="yyc-modal" style={{ width: 760, maxWidth: "100%", padding: 24, maxHeight: "90vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Import backup</div>
+            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: "#4a0707", fontWeight: "bolder" }}>Review what will be imported</h2>
+            <div style={{ fontSize: 12.5, color: P.sub, marginTop: 4, lineHeight: 1.5 }}>
+              {plan.fileName}{plan.exportedAt ? ` · exported ${new Date(plan.exportedAt).toLocaleString("en-MY")}` : ""} · {plan.docs.length} material{plan.docs.length === 1 ? "" : "s"}: {counts("new")} new, {counts("exists")} already in the library, {counts("deleted")} previously deleted. Nothing is saved until you press Import selected.
+            </div>
+          </div>
+          <button className="yyc-icon-btn" onClick={onCancel} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, margin: "14px 0 8px", alignItems: "center", flexWrap: "wrap" }}>
+          <button className="yyc-btn-secondary" style={{ padding: "5px 12px", fontSize: 12 }} disabled={busy || !newDocs.length} onClick={() => setSelDocs(new Set(newDocs.map((d) => d.id)))}>Select all new</button>
+          <button className="yyc-btn-secondary" style={{ padding: "5px 12px", fontSize: 12 }} disabled={busy || !nDocs} onClick={() => setSelDocs(new Set())}>Select none</button>
+          <span style={{ fontSize: 12, color: P.faint }}>{nDocs} of {newDocs.length} importable material{newDocs.length === 1 ? "" : "s"} ticked</span>
+        </div>
+
+        <div style={{ overflowY: "auto", flex: 1, minHeight: 120, border: `1px solid ${P.line}`, borderRadius: 12 }}>
+          {plan.docs.length === 0 && <div style={{ padding: 18, fontSize: 13, color: P.sub }}>This backup contains no materials.</div>}
+          {plan.docs.map((d, i) => {
+            const importable = d.state === "new"; const isOpen = open.has(d.id);
+            return (
+              <div key={d.id} style={{ borderTop: i ? `1px solid ${P.line}` : "none", opacity: importable ? 1 : 0.7 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 14px" }}>
+                  <input type="checkbox" aria-label={`Import ${d.title}`} checked={selDocs.has(d.id)} disabled={busy || !importable} onChange={() => toggle(selDocs, setSelDocs, d.id)} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title || "(untitled)"}</div>
+                    <div style={{ fontSize: 12, color: P.sub }}>{[t.docTypes[d.doc_type] || d.doc_type, d.industry].filter(Boolean).join(" · ")} · {d.records.length} strateg{d.records.length === 1 ? "y" : "ies"}</div>
+                  </div>
+                  {chip(d.state)}
+                  <button className="yyc-btn-secondary" style={{ padding: "4px 10px", fontSize: 12 }} disabled={busy || !d.records.length} onClick={() => toggle(open, setOpen, d.id)}>{isOpen ? "Hide" : "Preview"}</button>
+                </div>
+                {isOpen && (
+                  <div style={{ padding: "0 14px 12px 40px", display: "grid", gap: 8 }}>
+                    {d.records.map((r) => { const c = splitClaim(r.claim_en || r.claim_zh || ""); return (
+                      <div key={r.id} style={{ fontSize: 12.5, lineHeight: 1.5, background: P.wash, borderRadius: 8, padding: "8px 10px" }}>
+                        <span className="yyc-lever-pill">{t.levers[r.lever] || r.lever}{r.lever === "others" && r.other_category ? ` · ${t.otherCats[r.other_category] || r.other_category}` : ""}</span>{" "}
+                        <b>{c.name}</b>{c.name ? ": " : ""}<span>{String(c.desc || "").slice(0, 220)}{String(c.desc || "").length > 220 ? "…" : ""}</span>
+                        {r.impact && r.impact !== "N/A" && <div style={{ color: P.sub, marginTop: 2 }}>Actual impact: {String(r.impact).slice(0, 160)}{String(r.impact).length > 160 ? "…" : ""}</div>}
+                      </div>
+                    ); })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {plan.cfgItems.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 750, marginBottom: 6 }}>Lever settings in this backup</div>
+            <div style={{ border: `1px solid ${P.line}`, borderRadius: 12, maxHeight: 150, overflowY: "auto" }}>
+              {plan.cfgItems.map((c, i) => (
+                <label key={c.key} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 14px", borderTop: i ? `1px solid ${P.line}` : "none", opacity: c.exists ? 0.7 : 1, cursor: c.exists || busy ? "default" : "pointer" }}>
+                  <input type="checkbox" checked={selCfg.has(c.key)} disabled={busy || c.exists} onChange={() => toggle(selCfg, setSelCfg, c.key)} />
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.45 }}><b>{c.label}</b>{c.detail ? <span style={{ color: P.sub }}> — {String(c.detail).slice(0, 110)}{String(c.detail).length > 110 ? "…" : ""}</span> : null}</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: c.exists ? "#8A6508" : "#0E7C4A" }}>{c.exists ? "Already set: skipped" : "New"}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12.5, color: P.sub }}>
+            Will import <b style={{ color: P.ink }}>{nDocs}</b> material{nDocs === 1 ? "" : "s"} with <b style={{ color: P.ink }}>{nRecs}</b> strateg{nRecs === 1 ? "y" : "ies"}
+            {nCfg ? <> and <b style={{ color: P.ink }}>{nCfg}</b> lever setting{nCfg === 1 ? "" : "s"}</> : null}.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="yyc-btn-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+            <button className="yyc-btn-primary" disabled={busy || (!nDocs && !nCfg)} onClick={() => onConfirm({ docIds: selDocs, cfgKeys: selCfg })}>{busy ? "Importing…" : "Import selected"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KnowledgePanel({
   t, lang, isAdmin, index, levers, refreshKB, openPreview, flash, config, setConfig, setConfirm, setAdminLocked,
   paletteLever, clearPaletteLever, onWorking,
@@ -2423,6 +2518,7 @@ function KnowledgePanel({
   const [text, setText] = useState("");
   const [html, setHtml] = useState("");
   const [fastMode, setFastMode] = useState(fastExtraction()); // tick box on the Add material screen
+  const [importPlan, setImportPlan] = useState(null); // the Import Backup preview window
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState("");
   const [aiNote, setAiNote] = useState(null);                 // live rate-limit wait from askAI: {kind:"wait", sec}
@@ -2460,10 +2556,11 @@ function KnowledgePanel({
       busy ||
       editLeverRecord !== null ||
       pickerRecord !== null ||
+      importPlan !== null ||
       statPicker;
     setAdminLocked(locked);
     return () => setAdminLocked(false);
-  }, [mode, busy, editLeverRecord, pickerRecord, statPicker, setAdminLocked]);
+  }, [mode, busy, editLeverRecord, pickerRecord, statPicker, importPlan, setAdminLocked]);
 
   // tell the app when something is running, and warn before the page is closed/refreshed with work in progress or an unsaved review
   const working = busy || bulkRunning;
@@ -2692,30 +2789,66 @@ function KnowledgePanel({
 
   const importRef = useRef(null);
 
+  // Import Backup, step 1: read the file and build a preview (what is new, what is already here, what was deleted, which settings come along)
   const importBackup = async (e) => {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
+    setErrMsg("");
     try {
       const parsed = JSON.parse(await f.text());
-      if (!parsed || !Array.isArray(parsed.index) || !Array.isArray(parsed.docs)) {
-        setErrMsg(t.importErr);
-        return;
-      }
-      setConfirm({
-        message: t.importConfirm.replace("{n}", String(parsed.docs.length)),
-        onConfirm: async () => {
-          try {
-            const { added, config: merged } = await window.db.importBackup(parsed);
-            if (merged) setConfig(merged);
-            await refreshKB();
-            flash(t.importDone.replace("{n}", String(added)));
-          } catch (err) {
-            setErrMsg(window.storage?.remote ? String(err?.message || t.importErr) : t.importQuotaErr); // local storage: most likely the 5MB cap
-          }
-        },
+      if (!parsed || !Array.isArray(parsed.index) || !Array.isArray(parsed.docs)) { setErrMsg(t.importErr); return; }
+      const docs = parsed.docs.filter((d) => d && d.id);
+      const check = await window.db.importCheck(docs.map((d) => d.id));
+      const have = new Set(check.exists), gone = new Set(check.deleted);
+      const recs = (Array.isArray(parsed.levers) ? parsed.levers : []).filter((r) => r && r.id && isLive(r));
+      const planDocs = docs.map((d) => ({
+        id: d.id, title: d.title, doc_type: d.doc_type, industry: d.industry,
+        state: gone.has(d.id) ? "deleted" : have.has(d.id) ? "exists" : "new",
+        records: recs.filter((r) => r.doc_id === d.id),
+      }));
+      const pc = parsed.config || {};
+      const cur = config || {};
+      const cfgItems = [
+        ...(Array.isArray(pc.customLevers) ? pc.customLevers : []).filter((l) => l && l.id && l.name).map((l) => ({ key: "customLevers:" + l.id, kind: "customLevers", id: l.id, label: "Custom lever: " + l.name, detail: l.description, exists: (cur.customLevers || []).some((x) => x.id === l.id) })),
+        ...Object.entries(pc.leverOverrides && typeof pc.leverOverrides === "object" ? pc.leverOverrides : {}).map(([id, o]) => ({ key: "leverOverrides:" + id, kind: "leverOverrides", id, label: "Edited built-in lever: " + (T.en.levers[id] || id), detail: [o && o.name, o && o.description].filter(Boolean).join(" · "), exists: !!(cur.leverOverrides || {})[id] })),
+        ...(Array.isArray(pc.customOtherCats) ? pc.customOtherCats : []).filter((c) => c && c.id && c.name).map((c) => ({ key: "customOtherCats:" + c.id, kind: "customOtherCats", id: c.id, label: "Custom Others sub-category: " + c.name, detail: c.description, exists: (cur.customOtherCats || []).some((x) => x.id === c.id) })),
+        ...Object.entries(pc.otherCatOverrides && typeof pc.otherCatOverrides === "object" ? pc.otherCatOverrides : {}).map(([id, o]) => ({ key: "otherCatOverrides:" + id, kind: "otherCatOverrides", id, label: "Edited Others sub-category: " + (T.en.otherCats[id] || id), detail: [o && o.name, o && o.description].filter(Boolean).join(" · "), exists: !!(cur.otherCatOverrides || {})[id] })),
+      ];
+      setImportPlan({ parsed, docs: planDocs, cfgItems, fileName: f.name, exportedAt: parsed.exported_at });
+    } catch (err) { setErrMsg(window.storage?.remote && err && err.message && !/JSON/i.test(err.message) ? String(err.message) : t.importErr); }
+  };
+
+  // Import Backup, step 2: import only what was ticked in the preview
+  const confirmImport = async ({ docIds, cfgKeys }) => {
+    const plan = importPlan; if (!plan) return;
+    setBusy(true); setErrMsg("");
+    try {
+      const pick = plan.cfgItems.filter((c) => cfgKeys.has(c.key));
+      const sub = { customLevers: [], customOtherCats: [], leverOverrides: {}, otherCatOverrides: {} };
+      pick.forEach((c) => {
+        const src = plan.parsed.config || {};
+        if (c.kind === "customLevers") sub.customLevers.push(src.customLevers.find((x) => x.id === c.id));
+        else if (c.kind === "customOtherCats") sub.customOtherCats.push(src.customOtherCats.find((x) => x.id === c.id));
+        else sub[c.kind][c.id] = src[c.kind][c.id];
       });
-    } catch { setErrMsg(t.importErr); }
+      const filtered = {
+        ...plan.parsed,
+        docs: plan.parsed.docs.filter((d) => d && docIds.has(d.id)),
+        index: (plan.parsed.index || []).filter((d) => d && docIds.has(d.id)),
+        levers: (Array.isArray(plan.parsed.levers) ? plan.parsed.levers : []).filter((r) => r && docIds.has(r.doc_id)),
+        config: sub,
+      };
+      const { added, records, config: merged } = await window.db.importBackup(filtered);
+      if (merged) setConfig(merged);
+      await refreshKB();
+      setImportPlan(null);
+      flash(`Imported ${added} material${added === 1 ? "" : "s"}, ${records ?? 0} strateg${records === 1 ? "y" : "ies"}${pick.length ? `, ${pick.length} lever setting${pick.length === 1 ? "" : "s"}` : ""}`);
+    } catch (err) {
+      setErrMsg(window.storage?.remote ? String(err?.message || t.importErr) : t.importQuotaErr); // local storage: most likely the 5MB cap
+      setImportPlan(null);
+    }
+    setBusy(false);
   };
 
   const exportBackup = async () => {
@@ -3236,6 +3369,12 @@ function KnowledgePanel({
         )}
       </div>
 
+      {errMsg && !editLeverRecord && !importPlan && (
+        <div role="alert" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", margin: "0 0 14px", padding: "10px 14px", borderRadius: 10, background: "#FDEDED", border: `1px solid rgba(154,0,0,0.25)`, color: P.red, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+          <span>{errMsg}</span>
+          <button className="yyc-icon-btn" onClick={() => setErrMsg("")} title={t.close} style={{ flexShrink: 0 }}><Icon name="close" size={12} /></button>
+        </div>
+      )}
 
       <div className="yyc-stats">
         <div className="yyc-stat">
@@ -3470,6 +3609,8 @@ function KnowledgePanel({
           <button className="yyc-btn-secondary" onClick={savePass} style={{ padding: "8px 16px" }}>OK</button>
         </div>
       )}
+
+      {importPlan && isAdmin && <ImportPreviewModal t={t} plan={importPlan} busy={busy} onCancel={() => setImportPlan(null)} onConfirm={confirmImport} />}
 
       {editLeverRecord && (
         <div className="yyc-modal-backdrop" onClick={() => !busy && setEditLeverRecord(null)}>

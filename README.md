@@ -183,7 +183,7 @@ Things to know when hosted:
 
 ### Backup and restore
 
-**Export backup** downloads `yyc-brain-backup-YYYY-MM-DD.json` (documents, strategies, config). **Import backup** restores it (existing materials are kept, duplicates are skipped). Do this before clearing browser data or moving to another browser/host.
+**Export backup** downloads `yyc-brain-backup-YYYY-MM-DD.json` (documents, strategies, config). **Import backup** first opens a **preview window**: every material in the file with its status (*New*, *Already in the library*, or *Was deleted*), its strategies (click *Preview*), and the lever settings found in the backup (custom levers, edited built-in levers, Others sub-categories). New items are ticked; untick what you do not want, then press **Import selected**. Nothing is saved before that, and *Cancel* leaves the library untouched. Existing and previously deleted materials are never overwritten or brought back. Do this before clearing browser data or moving to another browser/host.
 
 ---
 

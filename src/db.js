@@ -69,7 +69,13 @@ export function makeLocalDb(storage) {
     },
     async saveConfig(cfg) { await wr("kb:config", cfg); return cfg; },
 
+    async importCheck(ids) { // which backup documents are already here (active / previously deleted)
+      const raw = (await rd("kb:index")) || [];
+      const want = new Set(ids);
+      return { exists: raw.filter((d) => want.has(d.id) && isLive(d)).map((d) => d.id), deleted: raw.filter((d) => want.has(d.id) && !isLive(d)).map((d) => d.id) };
+    },
     async importBackup(parsed) {
+      let addedRecords = 0;
       const curIndex = (await rd("kb:index")) || [];
       const curIds = new Set(curIndex.map((d) => d.id));
       let added = 0;
@@ -85,7 +91,7 @@ export function makeLocalDb(storage) {
       const curLevers = (await rd("kb:levers")) || [];
       const leverIds = new Set(curLevers.map((l) => l.id));
       (Array.isArray(parsed.levers) ? parsed.levers : []).forEach((l) => {
-        if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push({ status: "active", ...l }); leverIds.add(l.id); }
+        if (l?.id && !leverIds.has(l.id) && curIds.has(l.doc_id)) { curLevers.push({ status: "active", ...l }); leverIds.add(l.id); addedRecords++; }
       });
       await wr("kb:levers", curLevers);
       // keep local settings and passcode, but merge the category definitions needed to label imported records
@@ -108,7 +114,7 @@ export function makeLocalDb(storage) {
         };
         await wr("kb:config", config);
       }
-      return { added, config };
+      return { added, records: addedRecords, config };
     },
     async exportAll() {
       const [config, index, records] = [await rd("kb:config"), live(await rd("kb:index")), live(await rd("kb:levers"))];
@@ -208,7 +214,13 @@ export function makeRemoteDb(storage) {
     async recategorize(from, to) { pre = null; await call("recategorize", { from, to }); },
     async saveConfig(cfg) { pre = null; await call("config_save", { config: cfg }); return cfg; },
 
+    async importCheck(ids) {
+      const out = { exists: [], deleted: [] };
+      for (let i = 0; i < ids.length; i += 200) { const r = await call("import_check", { ids: ids.slice(i, i + 200) }); out.exists.push(...(r.exists || [])); out.deleted.push(...(r.deleted || [])); }
+      return out;
+    },
     async importBackup(parsed) {
+      let addedRecords = 0;
       const backupDocs = (parsed.docs || []).filter((d) => d && d.id);
       const recs = Array.isArray(parsed.levers) ? parsed.levers : [];
       let added = 0;
@@ -217,12 +229,13 @@ export function makeRemoteDb(storage) {
         const ids = new Set(part.map((d) => d.id));
         const out = await call("import_docs", { docs: part, records: recs.filter((r) => ids.has(r.doc_id)) });
         added += out.added || 0;
+        addedRecords += out.records || 0;
       }
       pre = null;
       const pc = parsed.config || {};
       const hasCfg = [pc.customLevers, pc.customOtherCats].some((x) => Array.isArray(x) && x.length) || [pc.leverOverrides, pc.otherCatOverrides].some((x) => x && typeof x === "object" && Object.keys(x).length);
       const config = hasCfg ? (await call("config_merge", { config: pc })).config : null;
-      return { added, config };
+      return { added, records: addedRecords, config };
     },
     async exportAll() {
       const lib = await call("library");
