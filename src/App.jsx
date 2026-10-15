@@ -472,7 +472,11 @@ function estimateTokens(str) { return Math.ceil((str || "").length / 3.5); }
 
 
 function tokenizeQuery(qstr) {
-  const latin = ((qstr || "").toLowerCase().match(/[a-z0-9]{3,}/g)) || [];
+  /* "m&a" -> "mna" so single-letter-ampersand terms survive; 2-digit numbers ("50" in 50/50, "60/40") are kept as tokens too */
+  const lowered = (qstr || "").toLowerCase().replace(/\b([a-z])&([a-z])\b/g, "$1n$2");
+  /* light stemming so "reinvesting" matches "reinvest" and "dividends" matches "dividend" (applied the same way to documents) */
+  const stem = (w) => (w.length > 5 ? w.replace(/ies$/, "y").replace(/(ing|ed|es|s)$/, "") : w);
+  const latin = (lowered.match(/[a-z0-9]{3,}|\b\d{2}\b/g) || []).map(stem);
   const runs = (qstr || "").match(/[\u4e00-\u9fff]+/g) || [];
   const cjk = [];
   runs.forEach((run) => {
@@ -484,8 +488,12 @@ function tokenizeQuery(qstr) {
 
 // BM25 (Okapi) ranking for the local knowledge base. The corpus is small enough
 // to index in the browser; it does not require a hosted search or vector service.
-function bm25Rank(query, documents, textOf) {
-  const terms = tokenizeQuery(query);
+function bm25Rank(query, documents, textOf, extraQuery = "", extraWeight = 0.5) {
+  /* extraQuery = AI-suggested synonyms/keywords: they widen the search but count for less than the user's own words */
+  const own = tokenizeQuery(query);
+  const weight = new Map(own.map((tk) => [tk, 1]));
+  tokenizeQuery(extraQuery).forEach((tk) => { if (!weight.has(tk)) weight.set(tk, extraWeight); });
+  const terms = [...weight.keys()];
   if (!terms.length || !documents.length) return [];
   const tokenized = documents.map((item) => tokenizeQuery(textOf(item)));
   const avgLength = tokenized.reduce((sum, tokens) => sum + tokens.length, 0) / tokenized.length || 1;
@@ -503,11 +511,63 @@ function bm25Rank(query, documents, textOf) {
       if (!tf) return;
       const df = documentFrequency.get(term) || 0;
       const idf = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
-      score += idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * tokens.length / avgLength)));
+      score += weight.get(term) * idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * tokens.length / avgLength)));
     });
     return { item, score };
   });
   return scored.sort((a, b) => b.score - a.score).filter((x) => x.score > 0);
+}
+
+/* Split a document into overlapping ~800-character chunks on line boundaries, remembering the section heading each chunk sits under,
+   so retrieval can rank paragraphs instead of whole documents. */
+function chunkDocument(doc, size = 800, overlap = 160) {
+  const headings = new Set((doc.sections || []).map((s) => String(s.heading || "").trim().toLowerCase()).filter(Boolean));
+  const lines = String(doc.full_text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const chunks = [];
+  let buf = "";
+  let heading = "";
+  let chunkHeading = "";
+  const push = () => {
+    if (buf.trim().length > 40) chunks.push({ doc_id: doc.id, pos: chunks.length, title: doc.title, industry: doc.industry, heading: chunkHeading, text: buf.trim() });
+    // carry the tail of this chunk into the next one, starting at a word boundary
+    let tail = buf.length > overlap ? buf.slice(buf.length - overlap) : "";
+    const sp = tail.search(/\s/);
+    buf = sp >= 0 ? tail.slice(sp + 1) : tail;
+    chunkHeading = heading;
+  };
+  for (const line of lines) {
+    const isHeading = headings.has(line.toLowerCase());
+    // a single very long line is cut so no chunk balloons past the budget
+    for (let p = 0; p < line.length || p === 0; p += size) {
+      const piece = line.slice(p, p + size);
+      if (buf.length + piece.length + 1 > size && buf.length > 0) push();
+      if (p === 0 && isHeading) heading = line; // the heading applies from this line on, after the previous chunk was closed
+      if (!buf) chunkHeading = heading;
+      buf += (buf ? "\n" : "") + piece;
+      if (line.length <= size) break;
+    }
+  }
+  push();
+  return chunks;
+}
+
+/* Ask the model for search keywords/synonyms for the question (used only to widen BM25). Never throws: on any failure or timeout
+   it returns [] and the search proceeds with the original question alone. */
+async function expandQuery(question, history) {
+  const prompt = `Rewrite a search question for a keyword search over business case studies (pricing, volume, cost, inventory, talent, ownership, funding, strategy).
+Return ONLY JSON: {"keywords": ["..."]} with 6-12 short words or phrases: synonyms, alternative wordings, related concepts and any numbers or ratios in other formats (e.g. "50 50" -> "50:50", "equal ownership", "equal shareholding", "deadlock", "joint control"). Do not answer the question. Do not repeat words already in it.
+${history ? `RECENT CONVERSATION (resolve follow-ups such as "what about 60/40?" from this):\n${history}\n` : ""}QUESTION: ${question}`;
+  try {
+    const j = await Promise.race([
+      askAI(prompt, 300, 0),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("rewrite timeout")), 8000)),
+    ]);
+    return (Array.isArray(j?.keywords) ? j.keywords : [])
+      .filter((k) => typeof k === "string" && k.trim().length > 1 && k.length <= 40)
+      .slice(0, 12);
+  } catch {
+    return [];
+  }
 }
 
 function claimSimilarity(a, b) {
@@ -3837,25 +3897,50 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     setMsgs((m) => [...m, { role: "user", text: question }]);
     setBusy(true);
     try {
-      const qTerms = tokenizeQuery(question);
+      const history = msgs.slice(-4)
+        .map((m, k, arr) => `${m.role === "user" ? "Q" : "A"}: ${(m.text || "").slice(0, k === arr.length - 1 ? 900 : 300)}`).join("\n");
+      // Synonym/keyword expansion runs while the documents load; it falls back to [] so a failure never blocks the search.
+      const kwPromise = expandQuery(question, history);
       // Reuse the corpus briefly so follow-up questions avoid rereading every document.
       const docsFp = index.map((d) => d.id).sort().join(",");
       let docs = searchDocsCacheRef.current.docs;
       if (searchDocsCacheRef.current.fp !== docsFp || Date.now() - searchDocsCacheRef.current.at > 30000) {
         docs = await window.db.getDocuments(index.map((d) => d.id));
-        searchDocsCacheRef.current = { fp: docsFp, at: Date.now(), docs };
+        searchDocsCacheRef.current = { fp: docsFp, at: Date.now(), docs, chunks: docs.flatMap((doc) => chunkDocument(doc)) };
       }
+      const chunks = searchDocsCacheRef.current.chunks || [];
+      const kw = await kwPromise;
+      const kwText = kw.join(" ");
+      const qTerms = tokenizeQuery(`${question} ${kwText}`);
+      console.info("[search] expanded with:", kw);
       const docById = new Map(docs.map((doc) => [doc.id, doc]));
       const docText = (doc) => [doc.title, doc.industry, doc.problem_signature,
         (doc.sections || []).map((s) => `${s.heading} ${s.summary_en || ""} ${s.summary_zh || ""}`).join(" "),
         doc.full_text].filter(Boolean).join(" ");
-      const scored = bm25Rank(question, docs, docText).map(({ item: doc, score }) => ({ doc, score }));
+      /* rank paragraphs (chunks), not whole documents: max 3 chunks per document, 12 overall, then group them by document */
+      const rankedChunks = bm25Rank(question, chunks, (c) => `${c.title} ${c.industry || ""} ${c.heading} ${c.text}`, kwText);
+      const perDocCount = new Map();
+      const pickedChunks = [];
+      for (const { item, score } of rankedChunks) {
+        if (pickedChunks.length >= 12) break;
+        const n = perDocCount.get(item.doc_id) || 0;
+        if (n >= 3 || !docById.has(item.doc_id)) continue;
+        perDocCount.set(item.doc_id, n + 1);
+        pickedChunks.push({ ...item, score });
+      }
+      const chunksByDoc = new Map();
+      pickedChunks.forEach((c) => chunksByDoc.set(c.doc_id, [...(chunksByDoc.get(c.doc_id) || []), c]));
+      let scored = [...chunksByDoc.keys()].map((id) => ({ doc: docById.get(id), score: Math.max(...chunksByDoc.get(id).map((c) => c.score)) }))
+        .sort((a, b) => b.score - a.score);
+      // no usable chunks (e.g. documents without full text): fall back to ranking whole documents
+      if (!scored.length) scored = bm25Rank(question, docs, docText, kwText).map(({ item: doc, score }) => ({ doc, score }));
       const recordPool = (levers || []).filter((r) => docById.has(r.doc_id));
       const rankedRecords = bm25Rank(question, recordPool, (r) => {
         const meta = docById.get(r.doc_id);
         return [r.lever, r.other_category, r.claim_en, r.claim_zh, r.quote, r.impact, r.section, meta?.title, meta?.industry].filter(Boolean).join(" ");
-      });
-      const requestedCount = question.match(/\b(?:top|first|show|give|provide|list)\s+(\d{1,2})\b/i);
+      }, kwText);
+      const requestedCount = question.match(/\b(?:top|first|show|give|provide|list)(?:\s+me)?\s+(\d{1,2})\b/i)
+        || question.match(/\b(\d{1,2})\s+(?:\w+\s+)?(?:examples?|strateg(?:y|ies)|levers?|ideas?)\b/i);
       const resultLimit = requestedCount ? Math.min(20, Number(requestedCount[1])) : 10;
       const exampleIntent = /\b(example|examples|lever|strateg(?:y|ies)|volume)\b/i.test(question);
       const selectedRecords = rankedRecords.slice(0, resultLimit).map(({ item, score }) => ({ ...item, _score: score }));
@@ -3910,7 +3995,14 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
         const header = `### DOC id=${d.id} | title=${d.title} | type=${d.doc_type} | industry=${d.industry}`;
         const overhead = header.length + sec.length + recs.length + 60;
         const room = Math.max(0, charBudget - overhead);
-        const body = passagesFor(d.full_text || "", qTerms, Math.min(1300, room));
+        /* the best-matching paragraphs of this document, in reading order; whole chunks only (tagged / chunk-less docs use keyword snippets) */
+        let body = "";
+        for (const c of [...(chunksByDoc.get(d.id) || [])].sort((a, b) => a.pos - b.pos)) {
+          const piece = `${c.heading ? `[${c.heading}] ` : ""}${c.text}`;
+          if (body.length + piece.length + 6 > Math.min(2600, room)) break;
+          body += (body ? "\n[…]\n" : "") + piece;
+        }
+        if (!body) body = passagesFor(d.full_text || "", qTerms, Math.min(1300, room));
         charBudget -= overhead + body.length;
         return `${header}\nSections:\n${sec}${recs ? `\nKey lever strategies:\n${recs}` : ""}\nText:\n${body}`;
       });
@@ -3918,9 +4010,6 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
         const meta = docById.get(r.doc_id);
         return `${i + 1}. [doc_id=${r.doc_id}; source=${meta?.title || "Unknown"}; lever=${r.lever}${r.other_category ? `/${r.other_category}` : ""}] ${r.claim_en || r.claim_zh || r.quote || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`;
       }).join("\n") : "";
-      const history = msgs.slice(-4)
-        .map((m, k, arr) => `${m.role === "user" ? "Q" : "A"}: ${(m.text || "").slice(0, k === arr.length - 1 ? 900 : 300)}`).join("\n");
-
       /* answer language is decided by the words OUTSIDE @-tagged titles — a long
          English doc title must not drag a Chinese instruction into an English answer */
       const qOutsideTags = taggedDocs.reduce(
@@ -3939,6 +4028,9 @@ Return ONLY a JSON object, no fences:
 Rules:
 - If the documents do not contain enough information to answer, set answerable=false. Never guess, never pad with general knowledge.
 - Treat keyword-style queries as valid questions: a fragment like "volume in Build-A-Bear" or "Gymshark 价格" means "summarize everything the documents say about that topic for that company". Do not refuse a query just because it is not phrased as a full sentence.
+- PARTIAL ANSWERS: if the documents contain relevant information that addresses the question or its underlying concern, even without the question's exact wording (e.g. the question asks whether something is "mandatory" but the documents describe what a company did and why), set answerable=true. State what the documents say and clearly note anything they do not state. Set answerable=false only when nothing in the documents is relevant.
+- Formatting: put each bullet on its own line starting with "- " using real line breaks. Never write the two characters backslash and n as text.
+- evidence.passage must be copied verbatim from the DOCUMENTS text. For list answers built from MATCHED LEVER RECORDS, leave passage as an empty string.
 - "@DocumentTitle" in the question marks documents the advisor explicitly wants used — prioritise those documents when answering.
 - Every claim in the answer must come from the documents. Cite every document you used.
 - evidence: 1-4 items when answerable — the exact passages that support the answer, quoted verbatim; relevance = how strongly that passage answers the question (0-100). Never fabricate a passage.
@@ -3976,11 +4068,19 @@ QUESTION: ${question}`;
             return meta ? { ...c, doc_title: meta.title } : null;
           })
           .filter(Boolean);
+        /* a "quote" is shown only if it really occurs in that document; the model's own wording is not evidence */
+        const squash = (s) => String(s || "").toLowerCase().replace(/[\s]+/g, " ").trim();
+        const quoteIsReal = (e) => {
+          const p = squash(e.passage);
+          return p.length >= 8 && squash(docById.get(e.doc_id)?.full_text).includes(p);
+        };
         const evidence = (j.evidence || [])
-          .map((e) => (titleOf(e.doc_id) ? { ...e, doc_title: titleOf(e.doc_id), relevance: Math.max(0, Math.min(100, Number(e.relevance) || 0)) } : null))
+          .map((e) => (titleOf(e.doc_id) ? { ...e, passage: quoteIsReal(e) ? e.passage : "", doc_title: titleOf(e.doc_id), relevance: Math.max(0, Math.min(100, Number(e.relevance) || 0)) } : null))
           .filter(Boolean)
           .slice(0, 4);
-        setMsgs((m) => [...m, { role: "ai", text: j.answer, citations: cits, evidence, retrieved }]);
+        /* some replies arrive with line breaks written as the literal characters \n */
+        const answerText = String(j.answer || "").replace(/\\r\\n|\\n/g, "\n");
+        setMsgs((m) => [...m, { role: "ai", text: answerText, citations: cits, evidence, retrieved }]);
       }
     } catch (e) {
       setMsgs((m) => [...m, { role: "ai", refused: true, text: describeAIError(e, t) }]);
