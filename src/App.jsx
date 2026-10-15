@@ -578,6 +578,32 @@ function claimSimilarity(a, b) {
   A.forEach((w) => { if (B.has(w)) inter++; });
   return inter / (A.size + B.size - inter);
 }
+/* Tie each bullet of a list answer to the lever record it came from, so references can point at the exact claim.
+   Order of trust: the [R#] tag the model was asked to add -> closest wording among records not yet used -> no link (caller keeps the
+   document+section reference). Tags are always removed from the displayed text, including invalid ones. */
+function linkBulletsToRecords(answer, records) {
+  const used = new Set();
+  const linked = [];
+  const claimTokens = (records || []).map((r) => new Set(tokenizeQuery(`${r.claim_en || r.claim_zh || ""} ${r.lever || ""}`)));
+  const lines = String(answer || "").split("\n").map((line) => {
+    const tags = [...line.matchAll(/\[R(\d{1,2})\]/gi)].map((m) => Number(m[1]) - 1);
+    const clean = line.replace(/\s*\[R\d{1,2}\]/gi, "");
+    if (!/^\s*(?:[-*•]|\d+[.)])\s+/.test(line) || !records?.length) return clean;
+    let idx = tags.find((i) => i >= 0 && i < records.length);
+    if (idx === undefined) {
+      /* share of the bullet's own words found in the claim; accept only a clear winner */
+      const words = tokenizeQuery(clean);
+      const scores = claimTokens.map((set, i) => ({ i, hits: used.has(i) ? 0 : words.filter((w) => set.has(w)).length }));
+      scores.sort((a, b) => b.hits - a.hits);
+      const best = scores[0];
+      const next = scores[1] ? scores[1].hits : 0;
+      if (best && words.length >= 3 && best.hits >= 3 && best.hits / words.length >= 0.5 && best.hits >= next + 2) idx = best.i;
+    }
+    if (idx !== undefined) { used.add(idx); linked.push(records[idx]); }
+    return clean;
+  });
+  return { text: lines.join("\n"), records: linked };
+}
 function isSmallTalk(qstr) {
   const s = (qstr || "").trim().toLowerCase();
   if (s.length > 25) return false; // real questions are longer
@@ -852,9 +878,9 @@ export default function App() {
   // [ZH disabled for now — English only] language switcher handler
   // const switchLang = (l) => { setLang(l); sset("ui:lang", l, false).catch(() => { }); };
 
-  const openPreview = useCallback(async (docId, targetSection) => {
+  const openPreview = useCallback(async (docId, targetSection, targetRecordId) => {
     const doc = await window.db.getDocument(docId);
-    if (doc) setPreviewDoc({ doc, targetSection: targetSection || null });
+    if (doc) setPreviewDoc({ doc, targetSection: targetSection || null, targetRecordId: targetRecordId || null });
   }, []);
 
   const refreshKB = async () => {
@@ -4008,7 +4034,7 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
       });
       const matchedRecordsContext = exampleIntent ? selectedRecords.map((r, i) => {
         const meta = docById.get(r.doc_id);
-        return `${i + 1}. [doc_id=${r.doc_id}; source=${meta?.title || "Unknown"}; lever=${r.lever}${r.other_category ? `/${r.other_category}` : ""}] ${r.claim_en || r.claim_zh || r.quote || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`;
+        return `[R${i + 1}] [doc_id=${r.doc_id}; source=${meta?.title || "Unknown"}; lever=${r.lever}${r.other_category ? `/${r.other_category}` : ""}] ${r.claim_en || r.claim_zh || r.quote || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`;
       }).join("\n") : "";
       /* answer language is decided by the words OUTSIDE @-tagged titles — a long
          English doc title must not drag a Chinese instruction into an English answer */
@@ -4030,6 +4056,7 @@ Rules:
 - Treat keyword-style queries as valid questions: a fragment like "volume in Build-A-Bear" or "Gymshark 价格" means "summarize everything the documents say about that topic for that company". Do not refuse a query just because it is not phrased as a full sentence.
 - PARTIAL ANSWERS: if the documents contain relevant information that addresses the question or its underlying concern, even without the question's exact wording (e.g. the question asks whether something is "mandatory" but the documents describe what a company did and why), set answerable=true. State what the documents say and clearly note anything they do not state. Set answerable=false only when nothing in the documents is relevant.
 - Formatting: put each bullet on its own line starting with "- " using real line breaks. Never write the two characters backslash and n as text.
+- When a bullet is based on a MATCHED LEVER RECORD, end that bullet with the record's tag exactly as shown, e.g. [R3]. Use only tags that appear in the list.
 - evidence.passage must be copied verbatim from the DOCUMENTS text. For list answers built from MATCHED LEVER RECORDS, leave passage as an empty string.
 - "@DocumentTitle" in the question marks documents the advisor explicitly wants used — prioritise those documents when answering.
 - Every claim in the answer must come from the documents. Cite every document you used.
@@ -4079,8 +4106,39 @@ QUESTION: ${question}`;
           .filter(Boolean)
           .slice(0, 4);
         /* some replies arrive with line breaks written as the literal characters \n */
-        const answerText = String(j.answer || "").replace(/\\r\\n|\\n/g, "\n");
-        setMsgs((m) => [...m, { role: "ai", text: answerText, citations: cits, evidence, retrieved }]);
+        const rawAnswer = String(j.answer || "").replace(/\\r\\n|\\n/g, "\n");
+        /* list answers: point each bullet's reference at the exact lever record; bullets that cannot be linked keep the section-level reference */
+        const linked = linkBulletsToRecords(rawAnswer, exampleIntent ? selectedRecords : []);
+        const answerText = linked.text;
+        let finalCits = cits;
+        let finalEvidence = evidence;
+        /* "Why this answer" rows for list answers come from the records themselves (not from what the model chooses to report):
+           match % = this record's search score relative to the best-scoring record */
+        const topScore = Math.max(0, ...selectedRecords.map((r) => r._score || 0));
+        const recordRow = (r) => ({
+          doc_id: r.doc_id, record_id: r.id, section: r.section || "", doc_title: titleOf(r.doc_id),
+          passage: String(r.claim_en || r.claim_zh || "").replace(/\s+/g, " ").trim().slice(0, 220),
+          relevance: topScore > 0 ? Math.max(1, Math.min(100, Math.round((100 * (r._score || 0)) / topScore))) : 0,
+        });
+        if (exampleIntent) {
+          const rows = (linked.records.length ? linked.records : selectedRecords.slice(0, 4)).filter((r) => titleOf(r.doc_id));
+          const seenRow = new Set();
+          const recordRows = rows.filter((r) => !seenRow.has(r.id) && seenRow.add(r.id)).map(recordRow);
+          if (recordRows.length) finalEvidence = recordRows;
+        }
+        if (linked.records.length) {
+          const claimLabel = (r) => {
+            const name = splitClaim(r.claim_en || r.claim_zh || "").name || String(r.claim_en || r.claim_zh || "").split(/\s+/).slice(0, 7).join(" ");
+            return name.length > 52 ? `${name.slice(0, 50)}…` : name;
+          };
+          const seen = new Set();
+          const recCits = linked.records
+            .filter((r) => !seen.has(r.id) && seen.add(r.id) && titleOf(r.doc_id))
+            .map((r) => ({ doc_id: r.doc_id, record_id: r.id, section: r.section || "", doc_title: titleOf(r.doc_id), claim: claimLabel(r) }));
+          const covered = new Set(recCits.map((c) => c.doc_id));
+          finalCits = [...recCits, ...cits.filter((c) => !covered.has(c.doc_id))];
+        }
+        setMsgs((m) => [...m, { role: "ai", text: answerText, citations: finalCits, evidence: finalEvidence, retrieved }]);
       }
     } catch (e) {
       setMsgs((m) => [...m, { role: "ai", refused: true, text: describeAIError(e, t) }]);
@@ -4152,9 +4210,9 @@ QUESTION: ${question}`;
                     <div className="yyc-cites">
                       <span className="yyc-cites-label">{t.refs}:</span>
                       {m.citations.map((c, j) => (
-                        <button key={j} className="yyc-cite-btn" onClick={() => openPreview(c.doc_id, c.section)}>
+                        <button key={j} className="yyc-cite-btn" title={c.claim || undefined} onClick={() => openPreview(c.doc_id, c.section, c.record_id)}>
                           <Icon name="file" size={11} />
-                          {c.doc_title}{c.section ? ` · ${c.section}` : ""}
+                          {c.doc_title}{c.section ? ` · ${c.section}` : ""}{c.claim ? ` · ${c.claim}` : ""}
                         </button>
                       ))}
                     </div>
@@ -4175,7 +4233,7 @@ QUESTION: ${question}`;
                           {(m.evidence || []).map((e, k) => {
                             const barColor = e.relevance >= 70 ? P.green : e.relevance >= 40 ? P.gold : P.red;
                             return (
-                              <div key={k} className="yyc-why-row" onClick={() => openPreview(e.doc_id, e.section)}>
+                              <div key={k} className="yyc-why-row" onClick={() => openPreview(e.doc_id, e.section, e.record_id)}>
                                 <div className="yyc-why-row-head">
                                   <span className="yyc-why-doc">
                                     <Icon name="file" size={11} /> {e.doc_title}{e.section ? ` · ${e.section}` : ""}
@@ -4704,9 +4762,12 @@ function GapPanel({ t, flash, setConfirm }) {
 }
 
 function PreviewModal({ t, lang, data, levers, onClose }) {
-  const { doc, targetSection } = data;
+  const { doc, targetSection, targetRecordId } = data;
   const hasHtml = !!doc.html;
-  const [view, setView] = useState(targetSection ? "summary" : hasHtml ? "document" : "summary");
+  const docLevers = sortByLever((levers || []).filter((l) => l.doc_id === doc.id));
+  /* a reference to one lever record opens the Lever records tab on that record (if it still exists); otherwise the old section behaviour */
+  const hasTargetRecord = !!targetRecordId && docLevers.some((l) => l.id === targetRecordId);
+  const [view, setView] = useState(hasTargetRecord ? "levers" : targetSection ? "summary" : hasHtml ? "document" : "summary");
   const targetRef = useRef(null);
 
   useEffect(() => {
@@ -4714,7 +4775,6 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
     return () => clearTimeout(id);
   }, [view]);
 
-  const docLevers = sortByLever((levers || []).filter((l) => l.doc_id === doc.id));
   const tabs = [
     ...(hasHtml ? [["document", t.docView]] : []),
     ["summary", t.sumView],
@@ -4773,7 +4833,8 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
             </div>
           ) : view === "levers" ? (
             docLevers.map((r, i) => (
-              <div key={r.id || i} style={{ ...S.card, padding: "16px 18px", marginBottom: 10 }}>
+              <div key={r.id || i} ref={hasTargetRecord && r.id === targetRecordId ? targetRef : null}
+                style={{ ...S.card, padding: "16px 18px", marginBottom: 10, ...(hasTargetRecord && r.id === targetRecordId ? { background: P.goldSoft, border: `1px solid ${P.gold}`, borderLeft: `3px solid ${P.gold}` } : null) }}>
                 <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
                   <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "4px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
                     {leverTag(t, r)}
