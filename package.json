@@ -11,6 +11,9 @@
     "build": "vite build",
     "start": "npm run build && node server/index.js",
     "lint": "eslint .",
+    "reindex": "node scripts/reindex.mjs",
+    "eval": "node scripts/eval.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "preview": "vite preview"
   },
   "dependencies": {

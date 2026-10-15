@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
 import { handleDb, dbConfigured } from './db.js';
+import { handleAsk } from './ask/handler.js';
 import { authenticate } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,14 @@ console.log(dbConfigured() ? 'Shared database + sign-in: Supabase (library data 
 app.all('/api/db', async (req, res) => {
   const out = await handleDb({ method: req.method, query: req.query, body: req.body, headers: req.headers });
   res.set('Cache-Control', 'no-store');
+  res.status(out.status).json(out.body);
+});
+
+// Ask the Brain, answered on the server (search + AI + references): see server/ask/handler.js
+app.post('/api/ask', async (req, res) => {
+  const out = await handleAsk({ method: req.method, body: req.body, headers: req.headers });
+  res.set('Cache-Control', 'no-store');
+  for (const [k, v] of Object.entries(out.headers || {})) res.set(k, v);
   res.status(out.status).json(out.body);
 });
 

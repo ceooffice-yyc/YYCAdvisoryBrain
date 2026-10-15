@@ -117,3 +117,115 @@ alter table public.suggestions enable row level security;
 
 -- Making someone an admin without touching server settings (alternative to the ADMIN_EMAILS setting):
 --   update auth.users set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"role":"admin"}' where email = 'name@yourcompany.com';
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- Search index for "Ask the Brain": each document cut into ~800-character chunks, searchable by keyword (full-text) AND by meaning
+-- (pgvector embeddings from Gemini gemini-embedding-001, 768 dimensions). Safe to run again.
+-- This table is only an INDEX built from documents.full_text: the app rebuilds it whenever a document is saved, and
+-- `npm run reindex` rebuilds all of it, so unlike the library tables its rows are replaced rather than soft-deleted.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+create extension if not exists vector;
+
+create table if not exists public.doc_chunks (
+  id              bigint generated always as identity primary key,
+  doc_id          text not null references public.documents (id),
+  pos             integer not null,                  -- order of the chunk inside its document
+  heading         text not null default '',          -- the section heading the chunk sits under
+  content         text not null,
+  fts             tsvector generated always as (to_tsvector('english', coalesce(heading, '') || ' ' || content)) stored,
+  embedding       vector(768),                       -- null until embedded (keyword search still works without it)
+  embedding_model text,
+  updated_at      timestamptz not null default now(),
+  unique (doc_id, pos)
+);
+create index if not exists doc_chunks_fts_idx on public.doc_chunks using gin (fts);
+create index if not exists doc_chunks_emb_idx on public.doc_chunks using hnsw (embedding vector_cosine_ops);
+alter table public.doc_chunks enable row level security;   -- no policies: only the server (service-role key) can read or write
+
+-- Hybrid search: keyword rank + meaning rank, merged with reciprocal rank fusion (k = 60). At most per_doc chunks per document.
+--   query_text       a websearch_to_tsquery string, the server joins the words with "or"
+--   query_embedding  the question's vector, or null for keyword-only search
+create or replace function public.search_chunks(
+  query_text text,
+  query_embedding vector(768),
+  match_count integer default 12,
+  per_doc integer default 3
+)
+returns table (doc_id text, pos integer, heading text, content text, score double precision, kw_rank integer, vec_rank integer)
+language sql stable
+as $$
+  with q as (select websearch_to_tsquery('english', coalesce(query_text, '')) as tsq),
+  kw as (
+    select c.id, row_number() over (order by ts_rank_cd(c.fts, q.tsq) desc, c.id) as r
+    from public.doc_chunks c cross join q
+    where c.fts @@ q.tsq
+    order by ts_rank_cd(c.fts, q.tsq) desc, c.id
+    limit 40
+  ),
+  vec as (
+    select c.id, row_number() over (order by c.embedding <=> query_embedding, c.id) as r
+    from public.doc_chunks c
+    where query_embedding is not null and c.embedding is not null
+    order by c.embedding <=> query_embedding, c.id
+    limit 40
+  ),
+  fused as (
+    select coalesce(kw.id, vec.id) as id,
+           coalesce(1.0 / (60 + kw.r), 0) + coalesce(1.0 / (60 + vec.r), 0) as score,
+           kw.r as kw_rank, vec.r as vec_rank
+    from kw full outer join vec on kw.id = vec.id
+  ),
+  ranked as (
+    select c.doc_id, c.pos, c.heading, c.content, f.score, f.kw_rank, f.vec_rank,
+           row_number() over (partition by c.doc_id order by f.score desc, c.pos) as doc_rn
+    from fused f
+    join public.doc_chunks c on c.id = f.id
+    join public.documents d on d.id = c.doc_id and d.status = 'active'
+  )
+  select r.doc_id, r.pos, r.heading, r.content, r.score::double precision, r.kw_rank::integer, r.vec_rank::integer
+  from ranked r
+  where r.doc_rn <= per_doc
+  order by r.score desc, r.doc_id, r.pos
+  limit match_count;
+$$;
+revoke execute on function public.search_chunks(text, vector, integer, integer) from public, anon, authenticated;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- Ask the Brain log: one row per question, written by the server. It is how you find out what is not working: refused questions,
+-- thumbs-down answers, answers whose figures could not be matched to the sources, slow answers. Safe to run again.
+-- It holds the questions and answers people see, so treat it like the chats table. Set ASK_LOG=off on the server to stop writing it,
+-- and delete old rows whenever you like:  delete from public.ask_log where created_at < now() - interval '180 days';
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+create table if not exists public.ask_log (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid,
+  user_email    text,
+  question      text not null,
+  standalone    text,                                  -- the question as rewritten to stand alone (follow-ups)
+  intent        text,                                  -- 'list' | 'question'
+  keywords      jsonb not null default '[]'::jsonb,    -- the search words the AI added
+  mode          text,                                  -- 'hybrid' | 'keyword' | 'browser' (how the search ran)
+  answerable    boolean,
+  answer        text,
+  citations     jsonb,
+  retrieved     jsonb,                                 -- the documents the search found, with scores
+  unsupported   jsonb not null default '[]'::jsonb,    -- figures in the answer that appear nowhere in the sources
+  trace         jsonb,                                 -- chunk / record ids shown to the AI, prompt size, timings
+  ms            integer,                               -- total time
+  error         text,                                  -- set when the question failed (no answer was produced)
+  feedback      smallint check (feedback in (-1, 1)),  -- thumbs down / up from the person
+  feedback_note text,
+  feedback_at   timestamptz,
+  created_at    timestamptz not null default now()
+);
+create index if not exists ask_log_created_idx on public.ask_log (created_at desc);
+create index if not exists ask_log_user_idx    on public.ask_log (user_id);
+alter table public.ask_log enable row level security;   -- no policies: only the server (service-role key) can read or write
+
+-- Useful questions to ask of it (Dashboard → SQL Editor):
+--   select created_at, question from public.ask_log where answerable = false order by created_at desc limit 50;                -- refused
+--   select created_at, question, feedback_note from public.ask_log where feedback = -1 order by created_at desc limit 50;       -- thumbs down
+--   select created_at, question, unsupported from public.ask_log where unsupported <> '[]'::jsonb order by created_at desc;    -- unmatched figures
+--   select percentile_cont(0.5) within group (order by ms) as p50, percentile_cont(0.95) within group (order by ms) as p95 from public.ask_log;

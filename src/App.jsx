@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import mammoth from "mammoth";
+import { tokenizeQuery } from "../server/ask/text.js"; // the Ask the Brain pipeline lives in server/ask/ and is shared with the server
+import { isSmallTalk } from "../server/ask/router.js";
+import { runAsk } from "../server/ask/pipeline.js";
+import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
 
 const P = {
   paper: "#FAF7F2", paperDeep: "#F3EDE3", card: "#FFFFFF",
@@ -267,7 +271,23 @@ const T = {
     whyThis: "Why this answer",
     evidenceMatch: "match",
     closestMatch: "Closest material found",
-    belowThresholdNote: "below threshold — not enough to answer from YYC materials",
+    belowThresholdNote: "the closest material found, but not enough to answer from YYC materials",
+    figuresWarn: "Please check these figures in the cited documents; they were not found in the sources: {list}",
+    uncitedNote: "The sources shown are the closest passages found; the answer did not point to specific ones.",
+    fbAsk: "Was this useful?",
+    askLogTitle: "Recent questions",
+    askLogIntro: "What people asked and how it went. Thumbs-down answers and answers with unmatched figures show where the chatbot needs fixing.",
+    askLogRefused: "Not covered",
+    askLogDown: "Thumbs down",
+    askLogFigures: "Unmatched figures",
+    askLogAll: "All",
+    askLogEmpty: "Nothing to show yet.",
+    askLogFailed: "Failed",
+    askLogNotCovered: "Not covered",
+    askLogAnswered: "Answered",
+    askLogFigureTag: "Check figures",
+    fbUp: "Helpful",
+    fbDown: "Not helpful",
     checkedDocs: "Checked for this question",
     tryAsking: "Try asking",
     loadingSuggestions: "Preparing example questions…",
@@ -383,7 +403,23 @@ const T = {
     whyThis: "答案依据",
     evidenceMatch: "匹配",
     closestMatch: "最接近的资料",
-    belowThresholdNote: "低于门槛，不足以从 YYC 资料作答",
+    belowThresholdNote: "找到的最接近资料，但不足以作答",
+    figuresWarn: "请在引用的资料中核对这些数字，它们未出现在来源中：{list}",
+    uncitedNote: "显示的是找到的最相关段落；答案没有指明具体来源。",
+    fbAsk: "这个回答有用吗？",
+    askLogTitle: "最近的提问",
+    askLogIntro: "大家问了什么、结果如何。点踩的回答和数字对不上的回答显示了需要改进的地方。",
+    askLogRefused: "资料未涵盖",
+    askLogDown: "点踩",
+    askLogFigures: "数字对不上",
+    askLogAll: "全部",
+    askLogEmpty: "暂无内容。",
+    askLogFailed: "失败",
+    askLogNotCovered: "资料未涵盖",
+    askLogAnswered: "已回答",
+    askLogFigureTag: "请核对数字",
+    fbUp: "有用",
+    fbDown: "没用", 
     checkedDocs: "本次搜索的相关资料",
     tryAsking: "试试提问",
     loadingSuggestions: "正在生成示例问题…",
@@ -471,105 +507,6 @@ const fmtElapsed = (ms) => { const sec = Math.round(ms / 1000); return sec < 60 
 function estimateTokens(str) { return Math.ceil((str || "").length / 3.5); }
 
 
-function tokenizeQuery(qstr) {
-  /* "m&a" -> "mna" so single-letter-ampersand terms survive; 2-digit numbers ("50" in 50/50, "60/40") are kept as tokens too */
-  const lowered = (qstr || "").toLowerCase().replace(/\b([a-z])&([a-z])\b/g, "$1n$2");
-  /* light stemming so "reinvesting" matches "reinvest" and "dividends" matches "dividend" (applied the same way to documents) */
-  const stem = (w) => (w.length > 5 ? w.replace(/ies$/, "y").replace(/(ing|ed|es|s)$/, "") : w);
-  const latin = (lowered.match(/[a-z0-9]{3,}|\b\d{2}\b/g) || []).map(stem);
-  const runs = (qstr || "").match(/[\u4e00-\u9fff]+/g) || [];
-  const cjk = [];
-  runs.forEach((run) => {
-    if (run.length === 1) cjk.push(run);
-    for (let k = 0; k + 1 < run.length; k++) cjk.push(run.slice(k, k + 2));
-  });
-  return [...new Set([...latin, ...cjk])];
-}
-
-// BM25 (Okapi) ranking for the local knowledge base. The corpus is small enough
-// to index in the browser; it does not require a hosted search or vector service.
-function bm25Rank(query, documents, textOf, extraQuery = "", extraWeight = 0.5) {
-  /* extraQuery = AI-suggested synonyms/keywords: they widen the search but count for less than the user's own words */
-  const own = tokenizeQuery(query);
-  const weight = new Map(own.map((tk) => [tk, 1]));
-  tokenizeQuery(extraQuery).forEach((tk) => { if (!weight.has(tk)) weight.set(tk, extraWeight); });
-  const terms = [...weight.keys()];
-  if (!terms.length || !documents.length) return [];
-  const tokenized = documents.map((item) => tokenizeQuery(textOf(item)));
-  const avgLength = tokenized.reduce((sum, tokens) => sum + tokens.length, 0) / tokenized.length || 1;
-  const documentFrequency = new Map();
-  tokenized.forEach((tokens) => new Set(tokens).forEach((token) => documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1)));
-  const k1 = 1.2;
-  const b = 0.75;
-  const scored = documents.map((item, i) => {
-    const tokens = tokenized[i];
-    const frequencies = new Map();
-    tokens.forEach((token) => frequencies.set(token, (frequencies.get(token) || 0) + 1));
-    let score = 0;
-    terms.forEach((term) => {
-      const tf = frequencies.get(term) || 0;
-      if (!tf) return;
-      const df = documentFrequency.get(term) || 0;
-      const idf = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
-      score += weight.get(term) * idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * tokens.length / avgLength)));
-    });
-    return { item, score };
-  });
-  return scored.sort((a, b) => b.score - a.score).filter((x) => x.score > 0);
-}
-
-/* Split a document into overlapping ~800-character chunks on line boundaries, remembering the section heading each chunk sits under,
-   so retrieval can rank paragraphs instead of whole documents. */
-function chunkDocument(doc, size = 800, overlap = 160) {
-  const headings = new Set((doc.sections || []).map((s) => String(s.heading || "").trim().toLowerCase()).filter(Boolean));
-  const lines = String(doc.full_text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const chunks = [];
-  let buf = "";
-  let heading = "";
-  let chunkHeading = "";
-  const push = () => {
-    if (buf.trim().length > 40) chunks.push({ doc_id: doc.id, pos: chunks.length, title: doc.title, industry: doc.industry, heading: chunkHeading, text: buf.trim() });
-    // carry the tail of this chunk into the next one, starting at a word boundary
-    let tail = buf.length > overlap ? buf.slice(buf.length - overlap) : "";
-    const sp = tail.search(/\s/);
-    buf = sp >= 0 ? tail.slice(sp + 1) : tail;
-    chunkHeading = heading;
-  };
-  for (const line of lines) {
-    const isHeading = headings.has(line.toLowerCase());
-    // a single very long line is cut so no chunk balloons past the budget
-    for (let p = 0; p < line.length || p === 0; p += size) {
-      const piece = line.slice(p, p + size);
-      if (buf.length + piece.length + 1 > size && buf.length > 0) push();
-      if (p === 0 && isHeading) heading = line; // the heading applies from this line on, after the previous chunk was closed
-      if (!buf) chunkHeading = heading;
-      buf += (buf ? "\n" : "") + piece;
-      if (line.length <= size) break;
-    }
-  }
-  push();
-  return chunks;
-}
-
-/* Ask the model for search keywords/synonyms for the question (used only to widen BM25). Never throws: on any failure or timeout
-   it returns [] and the search proceeds with the original question alone. */
-async function expandQuery(question, history) {
-  const prompt = `Rewrite a search question for a keyword search over business case studies (pricing, volume, cost, inventory, talent, ownership, funding, strategy).
-Return ONLY JSON: {"keywords": ["..."]} with 6-12 short words or phrases: synonyms, alternative wordings, related concepts and any numbers or ratios in other formats (e.g. "50 50" -> "50:50", "equal ownership", "equal shareholding", "deadlock", "joint control"). Do not answer the question. Do not repeat words already in it.
-${history ? `RECENT CONVERSATION (resolve follow-ups such as "what about 60/40?" from this):\n${history}\n` : ""}QUESTION: ${question}`;
-  try {
-    const j = await Promise.race([
-      askAI(prompt, 300, 0),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("rewrite timeout")), 8000)),
-    ]);
-    return (Array.isArray(j?.keywords) ? j.keywords : [])
-      .filter((k) => typeof k === "string" && k.trim().length > 1 && k.length <= 40)
-      .slice(0, 12);
-  } catch {
-    return [];
-  }
-}
-
 function claimSimilarity(a, b) {
   const A = new Set(tokenizeQuery(a));
   const B = new Set(tokenizeQuery(b));
@@ -577,37 +514,6 @@ function claimSimilarity(a, b) {
   let inter = 0;
   A.forEach((w) => { if (B.has(w)) inter++; });
   return inter / (A.size + B.size - inter);
-}
-/* Tie each bullet of a list answer to the lever record it came from, so references can point at the exact claim.
-   Order of trust: the [R#] tag the model was asked to add -> closest wording among records not yet used -> no link (caller keeps the
-   document+section reference). Tags are always removed from the displayed text, including invalid ones. */
-function linkBulletsToRecords(answer, records) {
-  const used = new Set();
-  const linked = [];
-  const claimTokens = (records || []).map((r) => new Set(tokenizeQuery(`${r.claim_en || r.claim_zh || ""} ${r.lever || ""}`)));
-  const lines = String(answer || "").split("\n").map((line) => {
-    const tags = [...line.matchAll(/\[R(\d{1,2})\]/gi)].map((m) => Number(m[1]) - 1);
-    const clean = line.replace(/\s*\[R\d{1,2}\]/gi, "");
-    if (!/^\s*(?:[-*•]|\d+[.)])\s+/.test(line) || !records?.length) return clean;
-    let idx = tags.find((i) => i >= 0 && i < records.length);
-    if (idx === undefined) {
-      /* share of the bullet's own words found in the claim; accept only a clear winner */
-      const words = tokenizeQuery(clean);
-      const scores = claimTokens.map((set, i) => ({ i, hits: used.has(i) ? 0 : words.filter((w) => set.has(w)).length }));
-      scores.sort((a, b) => b.hits - a.hits);
-      const best = scores[0];
-      const next = scores[1] ? scores[1].hits : 0;
-      if (best && words.length >= 3 && best.hits >= 3 && best.hits / words.length >= 0.5 && best.hits >= next + 2) idx = best.i;
-    }
-    if (idx !== undefined) { used.add(idx); linked.push(records[idx]); }
-    return clean;
-  });
-  return { text: lines.join("\n"), records: linked };
-}
-function isSmallTalk(qstr) {
-  const s = (qstr || "").trim().toLowerCase();
-  if (s.length > 25) return false; // real questions are longer
-  return /^(hi+|hello+|hey+|yo|good (morning|afternoon|evening)|thanks?( you)?|thank u|tq|bye|goodbye|ok(ay)?|哈啰|你好|您好|早上好|下午好|晚上好|谢谢|多谢|再见|拜拜)[!.?~\s]*$/.test(s);
 }
 function assertUnderLimit(messages, maxTokens) {
   const inputTokens = messages.reduce((s, m) => s + estimateTokens(m.content), 0);
@@ -661,6 +567,14 @@ function fmtWait(sec) {
   if (sec >= 3600) return `${Math.floor(sec / 3600)}h ${Math.ceil((sec % 3600) / 60)}m`;
   if (sec >= 60) return `${Math.ceil(sec / 60)} min`;
   return `${sec}s`;
+}
+/* Errors from Ask the Brain: the hosted server sends { kind, waitSec, message }; the in-browser mode throws AIError */
+function describeAskError(e, t) {
+  const wait = fmtWait(Math.max(1, Math.ceil(Number(e && e.waitSec) || 30)));
+  if (e && e.kind === "daily") return t.rateDaily.replace("{time}", wait);
+  if (e && e.kind === "minute") return t.rateMinute.replace("{time}", wait);
+  if (e && e.kind === "user_rate" && e.message) return e.message;
+  return e instanceof AIError ? describeAIError(e, t) : t.apiErr;
 }
 function describeAIError(e, t) {
   if (e instanceof AIError && e.kind === "daily") return t.rateDaily.replace("{time}", fmtWait(e.waitSec));
@@ -1242,6 +1156,12 @@ function GlobalStyles() {
       .yyc-cites { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; align-items: center; }
       .yyc-why-toggle { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; padding: 2px 0; font-family: inherit; font-size: 11.5px; font-weight: 650; color: ${P.sub}; cursor: pointer; }
       .yyc-why-toggle:hover { color: ${P.crimson}; }
+      .yyc-ans-note { margin-top: 7px; padding: 7px 10px; border-radius: 8px; background: ${P.goldSoft}; border: 1px solid ${P.gold}; color: ${P.ink}; font-size: 12px; line-height: 1.5; }
+      .yyc-fb { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; color: ${P.faint}; }
+      .yyc-fb button { background: none; border: 1px solid ${P.lineDark}; border-radius: 999px; padding: 2px 10px; font-family: inherit; font-size: 11.5px; color: ${P.sub}; cursor: pointer; }
+      .yyc-fb button:hover { border-color: ${P.crimson}; color: ${P.crimson}; }
+      .yyc-fb button.is-on { background: ${P.greenSoft}; border-color: ${P.green}; color: ${P.green}; }
+      .yyc-fb button.is-on.is-down { background: ${P.redSoft}; border-color: ${P.red}; color: ${P.red}; }
       .yyc-why-panel { margin-top: 6px; border: 1px solid ${P.line}; border-left: 3px solid ${P.gold}; border-radius: 10px; background: ${P.card}; padding: 10px 12px; box-shadow: ${P.s1}; animation: yycFadeUp .2s ease-out; }
       .yyc-why-row { padding: 8px 8px; border-radius: 8px; cursor: pointer; transition: background .15s; }
       .yyc-why-row:hover { background: ${P.wash}; }
@@ -3819,7 +3739,6 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
   const [suggBusy, setSuggBusy] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const bottomRef = useRef(null);
-  const searchDocsCacheRef = useRef({ fp: "", at: 0, docs: [] });
 
   useEffect(() => {
     (async () => {
@@ -3834,8 +3753,8 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     }
   }, []);
 
-  // the first question reads every document: fetch them in the background as soon as the chat opens (remote storage only)
-  useEffect(() => { window.db?.warmDocuments(index.map((d) => d.id)); }, [index]);
+  // only the in-browser mode reads every document for each question; on the hosted site the server searches, so nothing is downloaded
+  useEffect(() => { if (!window.db?.ask) window.db?.warmDocuments(index.map((d) => d.id)); }, [index]);
 
   const dismissHint = () => {
     setShowHint(false);
@@ -3912,238 +3831,60 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
     if (e.key === "Enter") send();
   };
 
+  /* Ask the Brain. With the shared database (the hosted site) the SERVER does the work (POST /api/ask: search, AI, references, logging).
+     Without it, the very same pipeline (server/ask/pipeline.js) runs here in the browser on the documents this browser holds. */
+  const liveRef = useRef({ index, levers });
+  liveRef.current = { index, levers };
+  const localRetriever = useMemo(() => makeLocalRetriever(() => window.db.getDocuments(liveRef.current.index.map((d) => d.id)), { ttlMs: 30000 }), []);
+  const askInBrowser = (payload) => runAsk(payload, {
+    llm: { json: (prompt, o = {}) => askAI(prompt, o.maxTokens || 1500, o.retries ?? 1) },
+    retrieve: localRetriever.retrieve,
+    records: async () => liveRef.current.levers,
+    docIndex: async () => liveRef.current.index,
+  });
+  const hosted = !!window.db?.ask;
+
   const send = async (forcedText) => {
     const question = (typeof forcedText === "string" ? forcedText : q).trim();
     if (!question || busy) return;
     setQ("");
     if (isSmallTalk(question)) {
       setMsgs((m) => [...m, { role: "user", text: question }, { role: "ai", text: t.greetReply }]);
-      return; // no retrieval, no API call, no Gap Log entry
+      return; // no search, no AI call, no log entry
     }
     setMsgs((m) => [...m, { role: "user", text: question }]);
     setBusy(true);
+    const payload = {
+      question,
+      history: msgs.slice(-4).map((m) => ({ role: m.role, text: m.text || "" })),
+      taggedIds: taggedDocs.filter((td) => question.includes(td.title)).map((td) => td.id),
+    };
+    setTaggedDocs([]);
     try {
-      const history = msgs.slice(-4)
-        .map((m, k, arr) => `${m.role === "user" ? "Q" : "A"}: ${(m.text || "").slice(0, k === arr.length - 1 ? 900 : 300)}`).join("\n");
-      // Synonym/keyword expansion runs while the documents load; it falls back to [] so a failure never blocks the search.
-      const kwPromise = expandQuery(question, history);
-      // Reuse the corpus briefly so follow-up questions avoid rereading every document.
-      const docsFp = index.map((d) => d.id).sort().join(",");
-      let docs = searchDocsCacheRef.current.docs;
-      if (searchDocsCacheRef.current.fp !== docsFp || Date.now() - searchDocsCacheRef.current.at > 30000) {
-        docs = await window.db.getDocuments(index.map((d) => d.id));
-        searchDocsCacheRef.current = { fp: docsFp, at: Date.now(), docs, chunks: docs.flatMap((doc) => chunkDocument(doc)) };
+      let r;
+      if (hosted) {
+        try { r = await window.db.ask(payload); } catch (e) { if (e.kind !== "unavailable") throw e; } // this server has no /api/ask yet: do it here instead
       }
-      const chunks = searchDocsCacheRef.current.chunks || [];
-      const kw = await kwPromise;
-      const kwText = kw.join(" ");
-      const qTerms = tokenizeQuery(`${question} ${kwText}`);
-      console.info("[search] expanded with:", kw);
-      const docById = new Map(docs.map((doc) => [doc.id, doc]));
-      const docText = (doc) => [doc.title, doc.industry, doc.problem_signature,
-        (doc.sections || []).map((s) => `${s.heading} ${s.summary_en || ""} ${s.summary_zh || ""}`).join(" "),
-        doc.full_text].filter(Boolean).join(" ");
-      /* rank paragraphs (chunks), not whole documents: max 3 chunks per document, 12 overall, then group them by document */
-      const rankedChunks = bm25Rank(question, chunks, (c) => `${c.title} ${c.industry || ""} ${c.heading} ${c.text}`, kwText);
-      const perDocCount = new Map();
-      const pickedChunks = [];
-      for (const { item, score } of rankedChunks) {
-        if (pickedChunks.length >= 12) break;
-        const n = perDocCount.get(item.doc_id) || 0;
-        if (n >= 3 || !docById.has(item.doc_id)) continue;
-        perDocCount.set(item.doc_id, n + 1);
-        pickedChunks.push({ ...item, score });
-      }
-      const chunksByDoc = new Map();
-      pickedChunks.forEach((c) => chunksByDoc.set(c.doc_id, [...(chunksByDoc.get(c.doc_id) || []), c]));
-      let scored = [...chunksByDoc.keys()].map((id) => ({ doc: docById.get(id), score: Math.max(...chunksByDoc.get(id).map((c) => c.score)) }))
-        .sort((a, b) => b.score - a.score);
-      // no usable chunks (e.g. documents without full text): fall back to ranking whole documents
-      if (!scored.length) scored = bm25Rank(question, docs, docText, kwText).map(({ item: doc, score }) => ({ doc, score }));
-      const recordPool = (levers || []).filter((r) => docById.has(r.doc_id));
-      const rankedRecords = bm25Rank(question, recordPool, (r) => {
-        const meta = docById.get(r.doc_id);
-        return [r.lever, r.other_category, r.claim_en, r.claim_zh, r.quote, r.impact, r.section, meta?.title, meta?.industry].filter(Boolean).join(" ");
-      }, kwText);
-      const requestedCount = question.match(/\b(?:top|first|show|give|provide|list)(?:\s+me)?\s+(\d{1,2})\b/i)
-        || question.match(/\b(\d{1,2})\s+(?:\w+\s+)?(?:examples?|strateg(?:y|ies)|levers?|ideas?)\b/i);
-      const resultLimit = requestedCount ? Math.min(20, Number(requestedCount[1])) : 10;
-      const exampleIntent = /\b(example|examples|lever|strateg(?:y|ies)|volume)\b/i.test(question);
-      const selectedRecords = rankedRecords.slice(0, resultLimit).map(({ item, score }) => ({ ...item, _score: score }));
-
-      const activeTagIds = taggedDocs.filter((td) => question.includes(td.title)).map((td) => td.id);
-      const forced = docs.filter((doc) => activeTagIds.includes(doc.id)).map((doc) => ({ doc, score: Infinity }));
-      const rest = scored
-        .filter((s) => !activeTagIds.includes(s.doc.id))
-        .slice(0, 6);
-      const recordDocs = exampleIntent ? selectedRecords.map((r) => docById.get(r.doc_id)).filter(Boolean) : [];
-      const ranked = [...forced, ...rest, ...recordDocs.map((doc) => ({ doc, score: 0 }))]
-        .filter((entry, i, all) => all.findIndex((other) => other.doc.id === entry.doc.id) === i)
-        .slice(0, 8);
-      setTaggedDocs([]);
-
-      const passagesFor = (fullText, terms, maxChars) => {
-        const low = (fullText || "").toLowerCase();
-        const spans = [];
-        terms.forEach((w) => {
-          let pos = low.indexOf(w);
-          let guard = 0;
-          while (pos !== -1 && guard < 5) {
-            spans.push([Math.max(0, pos - 400), Math.min(fullText.length, pos + 500)]);
-            pos = low.indexOf(w, pos + w.length);
-            guard++;
-          }
-        });
-        if (!spans.length) return (fullText || "").slice(0, maxChars);
-        spans.sort((a, b) => a[0] - b[0]);
-        const merged = [spans[0]];
-        for (let k = 1; k < spans.length; k++) {
-          const last = merged[merged.length - 1];
-          if (spans[k][0] <= last[1] + 100) last[1] = Math.max(last[1], spans[k][1]);
-          else merged.push(spans[k]);
-        }
-        let out = "";
-        for (const [a, b] of merged) {
-          if (out.length >= maxChars) break;
-          out += (out ? "\n[…]\n" : "") + fullText.slice(a, Math.min(b, a + (maxChars - out.length)));
-        }
-        return out;
-      };
-
-      let charBudget = 11000;
-      const ctxParts = ranked.map(({ doc: d }) => {
-        const sec = (d.sections || []).slice(0, 6)
-          .map((s) => `  - ${s.heading}: ${(s.summary_en || "").slice(0, 160)}`).join("\n");
-        /* curated lever records for this doc — highest signal per character */
-        const docRecords = exampleIntent ? selectedRecords.filter((r) => r.doc_id === d.id) : (levers || []).filter((r) => r.doc_id === d.id).slice(0, 5);
-        const recs = docRecords
-          .map((r) => `  * [${r.lever}${r.other_category ? "/" + r.other_category : ""}] ${r.claim_en || r.claim_zh || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`).join("\n");
-        const header = `### DOC id=${d.id} | title=${d.title} | type=${d.doc_type} | industry=${d.industry}`;
-        const overhead = header.length + sec.length + recs.length + 60;
-        const room = Math.max(0, charBudget - overhead);
-        /* the best-matching paragraphs of this document, in reading order; whole chunks only (tagged / chunk-less docs use keyword snippets) */
-        let body = "";
-        for (const c of [...(chunksByDoc.get(d.id) || [])].sort((a, b) => a.pos - b.pos)) {
-          const piece = `${c.heading ? `[${c.heading}] ` : ""}${c.text}`;
-          if (body.length + piece.length + 6 > Math.min(2600, room)) break;
-          body += (body ? "\n[…]\n" : "") + piece;
-        }
-        if (!body) body = passagesFor(d.full_text || "", qTerms, Math.min(1300, room));
-        charBudget -= overhead + body.length;
-        return `${header}\nSections:\n${sec}${recs ? `\nKey lever strategies:\n${recs}` : ""}\nText:\n${body}`;
-      });
-      const matchedRecordsContext = exampleIntent ? selectedRecords.map((r, i) => {
-        const meta = docById.get(r.doc_id);
-        return `[R${i + 1}] [doc_id=${r.doc_id}; source=${meta?.title || "Unknown"}; lever=${r.lever}${r.other_category ? `/${r.other_category}` : ""}] ${r.claim_en || r.claim_zh || r.quote || ""}${impactOf(r) && impactOf(r) !== "N/A" ? ` (Actual impact: ${impactOf(r)})` : ""}`;
-      }).join("\n") : "";
-      /* answer language is decided by the words OUTSIDE @-tagged titles — a long
-         English doc title must not drag a Chinese instruction into an English answer */
-      const qOutsideTags = taggedDocs.reduce(
-        (acc, td) => acc.split("@" + td.title).join(" ").split(td.title).join(" "),
-        question
-      );
-      // [ZH disabled for now - English only] original: answerLang was Simplified Chinese whenever the question contained CJK characters
-      void qOutsideTags;
-      const answerLang = "English";
-
-      const prompt = `You are the closed-book Q&A engine of YYC's internal advisory knowledge base. You may ONLY use the documents below. You must NOT use any external or general knowledge, even if you know the answer.
-
-Return ONLY a JSON object, no fences:
-{"answerable": true|false, "answer": "<the answer, or empty string if not answerable>", "citations": [{"doc_id": "<id>", "section": "<section heading used>"}], "evidence": [{"doc_id": "<id>", "section": "<section heading>", "passage": "<short VERBATIM quote copied exactly from the documents, max 30 words>", "relevance": <0-100>}], "closest": {"doc_id": "<id>", "relevance": <0-100>, "reason": "<one short line>"} | null}
-
-Rules:
-- If the documents do not contain enough information to answer, set answerable=false. Never guess, never pad with general knowledge.
-- Treat keyword-style queries as valid questions: a fragment like "volume in Build-A-Bear" or "Gymshark 价格" means "summarize everything the documents say about that topic for that company". Do not refuse a query just because it is not phrased as a full sentence.
-- PARTIAL ANSWERS: if the documents contain relevant information that addresses the question or its underlying concern, even without the question's exact wording (e.g. the question asks whether something is "mandatory" but the documents describe what a company did and why), set answerable=true. State what the documents say and clearly note anything they do not state. Set answerable=false only when nothing in the documents is relevant.
-- Formatting: put each bullet on its own line starting with "- " using real line breaks. Never write the two characters backslash and n as text.
-- When a bullet is based on a MATCHED LEVER RECORD, end that bullet with the record's tag exactly as shown, e.g. [R3]. Use only tags that appear in the list.
-- evidence.passage must be copied verbatim from the DOCUMENTS text. For list answers built from MATCHED LEVER RECORDS, leave passage as an empty string.
-- "@DocumentTitle" in the question marks documents the advisor explicitly wants used — prioritise those documents when answering.
-- Every claim in the answer must come from the documents. Cite every document you used.
-- evidence: 1-4 items when answerable — the exact passages that support the answer, quoted verbatim; relevance = how strongly that passage answers the question (0-100). Never fabricate a passage.
-- closest: when answerable=false, set it to the single most related document with its relevance (0-100) and a short reason in the question's language; when answerable=true set it to null.
-- ANSWER LANGUAGE: ${answerLang}. Mandatory — write the ENTIRE answer in ${answerLang}, regardless of the documents' language or any @DocumentTitle text in the question (titles are references, not language signals).
-- Be concise and practical — the reader is a YYC advisor preparing for a client conversation.
-- For requests for examples, strategies, or levers, list up to ${resultLimit} distinct matching lever records when that many are present in the retrieved records. Use one bullet per record and include its source document title. Do not stop after two examples. If fewer are available, return all available matching records.
-- If it's a greeting message like 'hi', 'hello', 'how are you', reply in short like 'Hi! How can I help you?'
-- Treat keyword-style queries as valid questions: a fragment like "volume in Build-A-Bear" or "Gymshark 价格" means "summarize everything the documents say about that topic for that company". Do not refuse a query just because it is not phrased as a full sentence.
-
-RECENT CONVERSATION:
-${history || "(none)"}
-
-DOCUMENTS:
-${ctxParts.join("\n\n")}
-
-MATCHED LEVER RECORDS (BM25-ranked across the full knowledge base; use these for example/lever requests):
-${matchedRecordsContext || "(none)"}
-
-QUESTION: ${question}`;
-
-      const j = await askAI(prompt, 2500);
-      const titleOf = (id) => index.find((d) => d.id === id)?.title || null;
-      const retrieved = ranked.map(({ doc, score }) => ({ doc_id: doc.id, title: doc.title, score: Number.isFinite(score) ? Number(score.toFixed(3)) : null }));
-      if (!j.answerable) {
-        const closest = j.closest && titleOf(j.closest.doc_id)
-          ? { ...j.closest, doc_title: titleOf(j.closest.doc_id) }
-          : null;
-        setMsgs((m) => [...m, { role: "ai", refused: true, text: t.refused, closest, retrieved }]);
-        await window.db.gapAdd(question);
+      if (!r) r = await askInBrowser(payload);
+      if (!r.answerable) {
+        setMsgs((m) => [...m, { role: "ai", refused: true, text: t.refused, closest: r.closest, retrieved: r.retrieved, logId: r.logId }]);
+        if (!r.gapLogged) await window.db.gapAdd(question); // on the hosted site the server has already put it on the Gap list
       } else {
-        const cits = (j.citations || [])
-          .map((c) => {
-            const meta = index.find((d) => d.id === c.doc_id);
-            return meta ? { ...c, doc_title: meta.title } : null;
-          })
-          .filter(Boolean);
-        /* a "quote" is shown only if it really occurs in that document; the model's own wording is not evidence */
-        const squash = (s) => String(s || "").toLowerCase().replace(/[\s]+/g, " ").trim();
-        const quoteIsReal = (e) => {
-          const p = squash(e.passage);
-          return p.length >= 8 && squash(docById.get(e.doc_id)?.full_text).includes(p);
-        };
-        const evidence = (j.evidence || [])
-          .map((e) => (titleOf(e.doc_id) ? { ...e, passage: quoteIsReal(e) ? e.passage : "", doc_title: titleOf(e.doc_id), relevance: Math.max(0, Math.min(100, Number(e.relevance) || 0)) } : null))
-          .filter(Boolean)
-          .slice(0, 4);
-        /* some replies arrive with line breaks written as the literal characters \n */
-        const rawAnswer = String(j.answer || "").replace(/\\r\\n|\\n/g, "\n");
-        /* list answers: point each bullet's reference at the exact lever record; bullets that cannot be linked keep the section-level reference */
-        const linked = linkBulletsToRecords(rawAnswer, exampleIntent ? selectedRecords : []);
-        const answerText = linked.text;
-        let finalCits = cits;
-        let finalEvidence = evidence;
-        /* "Why this answer" rows for list answers come from the records themselves (not from what the model chooses to report):
-           match % = this record's search score relative to the best-scoring record */
-        const topScore = Math.max(0, ...selectedRecords.map((r) => r._score || 0));
-        const recordRow = (r) => ({
-          doc_id: r.doc_id, record_id: r.id, section: r.section || "", doc_title: titleOf(r.doc_id),
-          passage: String(r.claim_en || r.claim_zh || "").replace(/\s+/g, " ").trim().slice(0, 220),
-          relevance: topScore > 0 ? Math.max(1, Math.min(100, Math.round((100 * (r._score || 0)) / topScore))) : 0,
-        });
-        if (exampleIntent) {
-          const rows = (linked.records.length ? linked.records : selectedRecords.slice(0, 4)).filter((r) => titleOf(r.doc_id));
-          const seenRow = new Set();
-          const recordRows = rows.filter((r) => !seenRow.has(r.id) && seenRow.add(r.id)).map(recordRow);
-          if (recordRows.length) finalEvidence = recordRows;
-        }
-        if (linked.records.length) {
-          const claimLabel = (r) => {
-            const name = splitClaim(r.claim_en || r.claim_zh || "").name || String(r.claim_en || r.claim_zh || "").split(/\s+/).slice(0, 7).join(" ");
-            return name.length > 52 ? `${name.slice(0, 50)}…` : name;
-          };
-          const seen = new Set();
-          const recCits = linked.records
-            .filter((r) => !seen.has(r.id) && seen.add(r.id) && titleOf(r.doc_id))
-            .map((r) => ({ doc_id: r.doc_id, record_id: r.id, section: r.section || "", doc_title: titleOf(r.doc_id), claim: claimLabel(r) }));
-          const covered = new Set(recCits.map((c) => c.doc_id));
-          finalCits = [...recCits, ...cits.filter((c) => !covered.has(c.doc_id))];
-        }
-        setMsgs((m) => [...m, { role: "ai", text: answerText, citations: finalCits, evidence: finalEvidence, retrieved }]);
+        setMsgs((m) => [...m, { role: "ai", text: r.text, citations: r.citations, evidence: r.evidence, retrieved: r.retrieved, unsupportedFigures: r.unsupportedFigures, uncited: r.uncited, logId: r.logId }]);
       }
     } catch (e) {
-      setMsgs((m) => [...m, { role: "ai", refused: true, text: describeAIError(e, t) }]);
+      setMsgs((m) => [...m, { role: "ai", refused: true, text: describeAskError(e, t) }]);
     }
     setBusy(false);
+  };
+
+  /* thumbs up / down on an answer; pressing the same one again takes it back */
+  const rate = async (i, rating) => {
+    const m = msgs[i];
+    if (!m || !m.logId || !window.db?.askFeedback) return;
+    const next = m.rating === rating ? 0 : rating;
+    setMsgs((ms) => ms.map((x, k) => (k === i ? { ...x, rating: next || null } : x)));
+    try { await window.db.askFeedback(m.logId, next); } catch { setMsgs((ms) => ms.map((x, k) => (k === i ? { ...x, rating: m.rating || null } : x))); }
   };
 
   const clearChat = () => setMsgs([]);
@@ -4201,8 +3942,7 @@ QUESTION: ${question}`;
                       <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${P.lineDark}`, fontStyle: "normal", fontSize: 12.5 }}>
                         <b>{t.closestMatch}:</b>{" "}
                         <button className="yyc-why-doclink" onClick={() => openPreview(m.closest.doc_id)}>{m.closest.doc_title}</button>
-                        {" — "}{m.closest.relevance}% · {t.belowThresholdNote}
-                        {m.closest.reason ? <div style={{ color: P.sub, marginTop: 3 }}>{m.closest.reason}</div> : null}
+                        {m.closest.section ? ` · ${m.closest.section}` : ""}{" — "}{t.belowThresholdNote}
                       </div>
                     )}
                   </div>
@@ -4215,6 +3955,12 @@ QUESTION: ${question}`;
                           {c.doc_title}{c.section ? ` · ${c.section}` : ""}{c.claim ? ` · ${c.claim}` : ""}
                         </button>
                       ))}
+                    </div>
+                  )}
+                  {m.role === "ai" && !m.refused && (m.unsupportedFigures?.length > 0 || m.uncited) && (
+                    <div className="yyc-ans-note">
+                      {m.unsupportedFigures?.length > 0 && <div>{t.figuresWarn.replace("{list}", m.unsupportedFigures.join(", "))}</div>}
+                      {m.uncited && <div>{t.uncitedNote}</div>}
                     </div>
                   )}
                   {m.role === "ai" && (m.evidence?.length > 0 || m.retrieved?.length > 0) && (
@@ -4256,6 +4002,13 @@ QUESTION: ${question}`;
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+                  {m.role === "ai" && m.logId && (
+                    <div className="yyc-fb">
+                      <span>{t.fbAsk}</span>
+                      <button className={m.rating === 1 ? "is-on" : ""} onClick={() => rate(i, 1)}>{t.fbUp}</button>
+                      <button className={m.rating === -1 ? "is-on is-down" : ""} onClick={() => rate(i, -1)}>{t.fbDown}</button>
                     </div>
                   )}
                 </div>
@@ -4717,6 +4470,62 @@ function ExplorerPanel({ t, lang, levers, index, openPreview, isAdmin, config, s
   );
 }
 
+/* Admin: what people asked and how it went (the ask_log table). Filters: refused, thumbs down, answers with figures nobody could match. */
+function AskLogPanel({ t }) {
+  const [filter, setFilter] = useState("refused");
+  const [data, setData] = useState({ filter: null, rows: [] });
+  useEffect(() => {
+    let off = false;
+    window.db.askLog(filter).then((rows) => { if (!off) setData({ filter, rows }); }).catch(() => { if (!off) setData({ filter, rows: [] }); });
+    return () => { off = true; };
+  }, [filter]);
+  const loading = data.filter !== filter;
+  const chip = (key, label) => (
+    <button key={key} className={filter === key ? "yyc-btn-primary" : "yyc-btn-secondary"} style={{ padding: "6px 12px", fontSize: 12.5 }} onClick={() => setFilter(key)}>{label}</button>
+  );
+  const badge = (text, bg, fg) => <span style={{ background: bg, color: fg, borderRadius: 999, padding: "1px 9px", fontSize: 11, fontWeight: 650, marginRight: 6 }}>{text}</span>;
+  return (
+    <div style={{ marginTop: 34 }}>
+      <div className="yyc-section-head">
+        <div>
+          <h2 className="yyc-section-title" style={{ fontSize: 18 }}>{t.askLogTitle}</h2>
+          <div className="yyc-section-sub">{t.askLogIntro}</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        {chip("refused", t.askLogRefused)}
+        {chip("down", t.askLogDown)}
+        {chip("figures", t.askLogFigures)}
+        {chip("all", t.askLogAll)}
+      </div>
+      {loading ? (
+        <div style={{ color: P.sub }}>…</div>
+      ) : data.rows.length === 0 ? (
+        <div className="yyc-empty">{t.askLogEmpty}</div>
+      ) : (
+        <div style={{ ...S.card, overflow: "hidden" }}>
+          {data.rows.map((r, i) => (
+            <div key={r.id} style={{ padding: "12px 20px", borderTop: i ? `1px solid ${P.line}` : "none" }}>
+              <div style={{ fontSize: 14, lineHeight: 1.55 }}>{r.question}</div>
+              <div style={{ marginTop: 6 }}>
+                {r.error ? badge(t.askLogFailed, P.redSoft, P.red) : r.answerable === false ? badge(t.askLogNotCovered, P.goldSoft, P.goldDark) : badge(t.askLogAnswered, P.greenSoft, P.green)}
+                {r.feedback === -1 && badge(t.fbDown, P.redSoft, P.red)}
+                {r.feedback === 1 && badge(t.fbUp, P.greenSoft, P.green)}
+                {Array.isArray(r.unsupported) && r.unsupported.length > 0 && badge(`${t.askLogFigureTag}: ${r.unsupported.join(", ")}`, P.goldSoft, P.goldDark)}
+              </div>
+              {r.feedback_note && <div style={{ fontSize: 12.5, color: P.sub, marginTop: 5 }}>“{r.feedback_note}”</div>}
+              {r.error && <div style={{ fontSize: 12, color: P.red, marginTop: 4 }}>{r.error}</div>}
+              <div style={{ fontSize: 12, color: P.faint, marginTop: 5 }}>
+                {new Date(r.created_at).toLocaleString("en-MY")} · {r.user_email || "?"}{r.mode ? ` · ${r.mode}` : ""}{r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GapPanel({ t, flash, setConfirm }) {
   const [log, setLog] = useState(null);
   useEffect(() => { (async () => { try { setLog(await window.db.gapList()); } catch { setLog([]); } })(); }, []);
@@ -4757,6 +4566,7 @@ function GapPanel({ t, flash, setConfirm }) {
           ))}
         </div>
       )}
+      {window.db?.askLog && <AskLogPanel t={t} />}
     </div>
   );
 }

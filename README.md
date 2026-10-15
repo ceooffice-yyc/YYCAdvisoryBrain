@@ -70,6 +70,9 @@ Open **http://localhost:5173**.
 | `npm start` | **Builds**, then serves the built app **and** the proxy from one process on **http://localhost:8787**. Best for daily use. Rebuild (stop + `npm start` again) after code changes. |
 | `npm run build` | Production build into `dist/`. |
 | `npm run lint` | ESLint. |
+| `npm test` | Automated tests (see *Tests and evaluation*). |
+| `npm run eval -- --library backup.json` | Measures Ask the Brain on the golden questions (see *Tests and evaluation*). |
+| `npm run reindex` | Builds / rebuilds the Ask the Brain search index (see *Search index for Ask the Brain*). |
 
 ### Environment variables (`.env`, never committed)
 
@@ -79,6 +82,10 @@ Open **http://localhost:5173**.
 | `GROQ_API_KEY_2` … `GROQ_API_KEY_9` | – | Optional extra keys. When a key hits its rate limit (per-minute or per-day) the same request is retried on the next key; see *Multiple Groq keys* below. |
 | `PORT` | `8787` | Port of the Express server. |
 | `HOST` | `127.0.0.1` | Set `HOST=0.0.0.0` only to share `npm start` on your LAN. |
+| `GEMINI_API_KEY` | – | Optional. Meaning-based search for Ask the Brain (see *Search index*). |
+| `ASK_RATE_PER_MIN` | `20` | Questions per person per minute in Ask the Brain. |
+| `ASK_LOG` | on | `off` stops writing the `ask_log` table. |
+| `ASK_REASONING` | `low` | How carefully the AI reads before answering: `low`, `medium` or `high`. Higher reads long sources more carefully but is slower and uses more tokens; test it with `npm run eval`. |
 
 ### Sharing on the office network
 
@@ -151,6 +158,75 @@ How it works (`server/auth.js`, `server/db.js`, `api/db.js`, `src/db.js`, `src/s
 - Each edit saves only what changed (one document, one record, one lever), so two admins no longer overwrite each other's whole library; the last save of the *same* item wins.
 - Free tier: 500 MB, and a project with no activity for about a week is paused (resume it from the dashboard).
 - If `SUPABASE_URL` and the service-role key are set but `SUPABASE_ANON_KEY` is missing, the app shows a "server is not set up correctly" screen instead of silently falling back to browser storage.
+
+## Search index for Ask the Brain (keyword + meaning)
+
+With a big library the browser should not download every document for each question. Instead the server keeps a search index in Supabase:
+each document is cut into ~800-character chunks that never cross a section heading (`doc_chunks` table), searched by keyword (Postgres full-text) **and** by meaning
+(pgvector embeddings from Google's `gemini-embedding-001`, 768 dimensions), and only the best chunks go to the AI. Saving, editing, importing or deleting
+a document updates its chunks automatically. If the index is missing, empty or failing, the server quietly searches the documents in memory instead (slower with a big library, and keyword-only), so Ask the Brain never stops working.
+
+One-time setup:
+
+1. **Supabase → SQL Editor:** run the (re-runnable) `supabase/schema.sql`. The last part enables `vector`, creates `doc_chunks` and the `search_chunks` function.
+2. **`.env`:** add `GEMINI_API_KEY` (Google AI Studio → Get API key). Use a key with billing enabled for the company library; embedding the whole library costs cents.
+   Check Google's current Gemini API terms for how unpaid and paid usage are treated before sending company documents.
+3. `npm run reindex -- --check` tests the key. Then `npm run reindex` indexes the documents already in the library (`-- --missing` only does what is not indexed yet).
+4. Restart the server (or redeploy). Ask a question, then open **Gap → Recent questions → All**: the row shows `hybrid` when the keyword + meaning search is working, `keyword` when no `GEMINI_API_KEY` is set (or Gemini was unreachable), and `browser` when the server had to fall back to searching in memory.
+
+Notes: without `GEMINI_API_KEY` the index still works for keywords only. The index is derived data and can always be rebuilt with `npm run reindex`.
+Changing the embedding model or size means changing `EMBEDDING_DIMS` in `server/embeddings.js` **and** `vector(768)` in `schema.sql`, then re-indexing.
+The SQL is plain Postgres + pgvector, so it also works if the company later self-hosts Supabase or Postgres.
+
+## How Ask the Brain works
+
+```
+ browser ──POST /api/ask──▶  handler (sign-in, limits, log)  ──▶  pipeline
+                                                                   1 understand   one small AI call: list or question? which lever? follow-up rewritten, keywords added
+                                                                   2 retrieve     search index (keyword + meaning), falls back to searching documents in memory
+                                                                   3 context      best lever records + best passages, tagged [R1] [C2]..., within a size budget
+                                                                   4 answer       the AI answers only from those, tagging each statement with its source
+                                                                   5 finalize     references, "Why this answer" rows, match %, closest document: built in code from the tags
+                                                                   6 verify       figures in the answer that appear nowhere in the sources are flagged
+```
+
+The AI only writes the answer text and the source tags. Everything the screen shows about *where an answer came from* is built in code from those tags,
+so a reference or a quoted passage can never be invented. A figure that cannot be found in the sources gets a visible warning.
+
+Without the shared database (local mode) the very same pipeline runs inside the browser, on the documents that browser holds.
+
+| Where | What |
+|---|---|
+| `server/ask/pipeline.js` | The pipeline above. Pure: no network or database of its own, so it runs on the server, in the browser and in tests. |
+| `server/ask/router.js` `context.js` `prompt.js` `postprocess.js` `verify.js` `text.js` | One file per step. Also pure. |
+| `server/ask/localRetrieval.js` | Search by BM25 over in-memory chunks: local mode, the server's fallback, and the evaluation script. |
+| `server/ask/serverDeps.js` | Connects the pipeline to Supabase: indexed search first, in-memory fallback if the index is missing or failing. |
+| `server/ask/llm.js` | The server's AI client: one shared per-minute token budget for everybody, key failover, typed rate-limit errors. |
+| `server/ask/handler.js` | `POST /api/ask`: sign-in, input checks, per-person rate limit, error mapping, logging. Used by `server/index.js` and `api/ask.js`. |
+| `server/indexing.js` `embeddings.js` `chunking.js` | The search index (see *Search index for Ask the Brain*). |
+
+### Operating it
+
+- **Who can ask:** signed-in people only (guests cannot; every question costs AI tokens). `ASK_RATE_PER_MIN` (default 20) limits each person.
+- **How many people can ask at once** is set by your Groq plan, not by this app. Each Groq key allows about 8,000 tokens a minute, and one question uses roughly 4,000-6,000 (two AI calls), so each key serves only one or two questions a minute; with 4 keys, about 5-6 questions a minute for the whole company. The server smooths traffic (a call waits a few seconds for room, then goes ahead and Groq decides; if every key is limited and the wait is under 20 s it waits and retries, otherwise people see "AI per-minute limit, wait about N seconds"). For more than a handful of simultaneous users, move the Groq account to a plan with higher limits or add keys (`GROQ_API_KEY_2` ...).
+- **Errors people see:** the AI service's per-minute or daily limit with the time to wait, "you are asking very quickly" (your own per-minute limit), or a generic message. Internals are never sent to the browser.
+- **Hosting:** `npm start` (one Node process serves the site and the API) on a company server; or Vercel, where `api/ask.js` is the same endpoint (`maxDuration` 60 s).
+  The server needs outbound HTTPS to Supabase, Groq and (optionally) Google's Gemini API. Per-person limits and the AI budget are kept per server instance, so with several instances each enforces its own share.
+- **The log:** every question is written to `ask_log` (set `ASK_LOG=off` to stop; delete old rows whenever you like). Admins see it under **Gap → Recent questions**:
+  not-covered questions, thumbs-down answers (people can rate any answer), and answers with figures nobody could match. Refused questions also go on the Gap list.
+  `supabase/schema.sql` ends with ready-made SQL for refused questions, thumbs-down answers, unmatched figures and answer times (median and 95th percentile).
+- **The match %** in *Why this answer* is how strongly a passage or record matched the search (for the server search: how well the keyword and meaning rankings agree), **not** the probability that the answer is right.
+
+### Tests and evaluation
+
+| Command | What it does |
+|---|---|
+| `npm test` | About 40 automated tests with fakes (no network, no real data): the pipeline, router, references, number checks, rate limits, the HTTP handler, and the server wired to a fake database. |
+| `npm run eval -- --library backup.json` | Offline: runs the questions in `eval/golden.json` through the search and reports how often the right documents rank on top, and how well "N volume strategies" style requests stay on the right lever. Fails (exit 1) below the thresholds in that file. |
+| `npm run eval -- --library backup.json --live` | Also runs the whole pipeline with the AI (uses your Groq keys, a few minutes) and checks each answer is given or refused correctly, cites the right documents, has no unmatched figures and no leaked tags. Writes `eval/reports/`. |
+| `... --live --hosted` | Same, but searches through your real Supabase index (keyword + meaning), exactly as the website does, so you can measure what the embeddings add. Needs `SUPABASE_*` (and `GEMINI_API_KEY`) in `.env`; reads your real library. |
+
+**Habit that keeps the chatbot good:** whenever a real question goes wrong, add it to `eval/golden.json` (with the documents that should answer it), then fix, then run `npm run eval`.
 
 ## Deploy to Vercel
 
@@ -267,16 +343,23 @@ If you see `429` in the browser console, this is the cause.
 
 ```
 api/groq/chat.js     Vercel serverless proxy to Groq (production)
+api/ask.js           Vercel twin of POST /api/ask (Ask the Brain)
 server/index.js      Express proxy + static server (local / npm start)
 src/App.jsx          The whole app: UI, extraction pipeline, chat, storage helpers
 src/main.jsx         Entry point (starts the storage layer, then the app)
 src/storage.js       window.storage: this browser's storage + Supabase sign-in (guest mode, session token)
 src/db.js            window.db: every read/write of the library; Supabase through /api/db, or localStorage
 src/Root.jsx         Sign-in screen + error screen shown before the app
+server/ask/             Ask the Brain: pipeline, router, prompt, references, number checks, AI client, HTTP handler (see above)
+server/indexing.js   Search index: chunks + Gemini embeddings in Supabase, hybrid search
+server/chunking.js   Cuts documents into section-exact chunks (shared with the browser)
+scripts/             reindex.mjs (build the search index), eval.mjs (measure the chatbot)
+eval/golden.json     The questions the chatbot is measured on
+test/                Automated tests and a small invented library for them
 server/auth.js       Verifies the Supabase session on every request; decides who is an admin
 server/db.js           /api/db: documents, records, levers, gap log, chats; roles; soft delete
 api/db.js              Vercel twin of the /api/db route
-supabase/schema.sql  The tables to create in Supabase (documents, records, levers, gap_log, chats, suggestions)
+supabase/schema.sql  The tables to create in Supabase (documents, records, levers, gap_log, chats, suggestions, doc_chunks, ask_log)
 public/logo.png      YYC logo (served at /logo.png)
 index.html           HTML shell
 vite.config.js       Dev proxy: /api → http://127.0.0.1:8787

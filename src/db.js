@@ -203,6 +203,25 @@ export function makeRemoteDb(storage) {
       }
       return ids.map((i) => got.get(i)).filter(Boolean);
     },
+    /* Ask the Brain, answered on the server (POST /api/ask). Throws an Error with { kind, waitSec } for rate limits, so the screen can say how
+       long to wait, and kind "unavailable" when this server has no /api/ask (the caller then runs the same pipeline in the browser). */
+    async ask(payload) {
+      const res = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json", ...(await storage.authHeader()) }, body: JSON.stringify(payload) });
+      let data = null;
+      try { data = await res.json(); } catch { /* empty body */ }
+      if (res.status === 401) window.dispatchEvent(new Event("yyc-auth-expired"));
+      if (!res.ok) {
+        const err = new Error((data && data.error) || `Ask the Brain failed (${res.status})`);
+        err.status = res.status;
+        err.kind = res.status === 404 || res.status === 501 ? "unavailable" : data && data.kind;
+        err.waitSec = data && data.waitSec;
+        throw err;
+      }
+      return data;
+    },
+    async askLog(filter) { return (await call("ask_log_list", { filter, limit: 100 })).log || []; }, // admin: recent questions and how they went
+    async askFeedback(id, rating, note) { await call("ask_feedback", { id, rating, note }, { quiet: true }); },
+
     /* Load documents into memory in the background (hover, opening Ask the Brain). Never throws. */
     async warmDocuments(ids) { try { await db.getDocuments([...new Set(ids)].slice(0, DOC_MAX)); } catch { /* fetched when needed */ } },
 

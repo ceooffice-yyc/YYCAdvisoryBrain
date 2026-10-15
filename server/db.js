@@ -18,6 +18,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { authConfigured, authenticate } from './auth.js';
+import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
 export const dbConfigured = (env = process.env) => !!(String(env.SUPABASE_URL || '').trim() && String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
 export const guestAllowed = (env = process.env) => String(env.ALLOW_GUEST || '').trim().toLowerCase() !== 'false';
@@ -31,7 +32,7 @@ const REC_COLS = ['id', 'doc_id', 'doc_title', 'lever', 'other_category', 'relat
 const REC_SYSTEM = new Set([...REC_COLS, 'status', 'created_by', 'updated_by', 'deleted_by', 'deleted_at', 'position', 'extra', 'created_at', 'updated_at', '_score']);
 
 let client = null;
-const getClient = (env) => (client ||= createClient(String(env.SUPABASE_URL).trim(), String(env.SUPABASE_SERVICE_ROLE_KEY).trim(), { auth: { persistSession: false, autoRefreshToken: false } }));
+export const getClient = (env) => (client ||= createClient(String(env.SUPABASE_URL).trim(), String(env.SUPABASE_SERVICE_ROLE_KEY).trim(), { auth: { persistSession: false, autoRefreshToken: false } }));
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const bad = (m) => new HttpError(400, m);
@@ -109,6 +110,24 @@ const loadLevers = async (sb) => configFromRows(await selectAll((a, b) => sb.fro
 const loadIndex = async (sb) => (await selectAll((a, b) => sb.from('documents').select(DOC_META.join(',')).eq('status', 'active').order('created', { ascending: true }).order('id').range(a, b), 'read documents')).map(indexFromRow);
 const loadRecords = async (sb) => (await selectAll((a, b) => sb.from('records').select('*').eq('status', 'active').order('created_at', { ascending: true }).order('position', { ascending: true }).order('id').range(a, b), 'read records')).map(recordFromRow);
 
+/* Documents with their full text (but not the large html copy), for the search fallback and for @-tagged documents. */
+const DOC_SEARCH = ['id', 'title', 'doc_type', 'industry', 'sections', 'full_text'];
+export async function loadDocsForSearch(sb, ids) {
+  if (ids) return ids.length ? must(await sb.from('documents').select(DOC_SEARCH.join(',')).in('id', ids).eq('status', 'active'), 'read documents') : [];
+  return selectAll((a, b) => sb.from('documents').select(DOC_SEARCH.join(',')).eq('status', 'active').order('created', { ascending: true }).order('id').range(a, b), 'read documents');
+}
+
+/* The document index and lever records, kept in memory for a minute: Ask the Brain needs them on every question. Any change below clears them.
+   (Another server instance sees a change within the minute.) */
+let snapshot = null;
+export async function getLibrarySnapshot(sb, ttlMs = 60_000) {
+  if (snapshot && Date.now() - snapshot.at < ttlMs) return snapshot.data;
+  const [index, records] = await Promise.all([loadIndex(sb), loadRecords(sb)]);
+  snapshot = { at: Date.now(), data: { index, records } };
+  return snapshot.data;
+}
+const dirty = () => { snapshot = null; };
+
 async function replaceLevers(ctx, cfg) {
   const { sb, user } = ctx;
   const want = rowsFromConfig(cfg, user.email);
@@ -142,6 +161,16 @@ const OPS = {
   },
 
   // ── any signed-in user ──
+  ask_feedback: { // thumbs up / down (and an optional note) on one of the person's own answers; rating 0 takes it back
+    level: 'user',
+    run: async ({ sb, user }, a) => {
+      const id = trim(a.id, 60);
+      const rating = Number(a.rating);
+      if (!/^[0-9a-f-]{36}$/i.test(id) || ![-1, 0, 1].includes(rating)) throw bad('Bad feedback');
+      must(await sb.from('ask_log').update({ feedback: rating === 0 ? null : rating, feedback_note: trim(a.note, 1000) || null, feedback_at: nowIso() }).eq('id', id).eq('user_id', user.id), 'save feedback');
+      return {};
+    },
+  },
   gap_add: {
     level: 'user',
     run: async ({ sb, user, now }, a) => {
@@ -173,18 +202,20 @@ const OPS = {
   // ── admin ──
   doc_save: {
     level: 'admin',
-    run: async ({ sb, user }, a) => {
+    run: async ({ sb, user, env }, a) => {
       const doc = { ...docToRow(a.doc, user.email), created_by: user.email };
       const records = Array.isArray(a.records) ? a.records : [];
       must(await sb.from('documents').upsert(doc), 'write document');
       const rows = records.map((r, i) => ({ ...recordToRow({ ...r, doc_id: doc.id }, i, user.email), created_by: user.email }));
       for (const part of chunks(rows)) must(await sb.from('records').upsert(part), 'write records');
-      return { id: doc.id };
+      dirty();
+      const indexed = await reindexDocSafe(sb, env, doc);
+      return { id: doc.id, indexed };
     },
   },
   doc_update: {
     level: 'admin',
-    run: async ({ sb, user }, a) => {
+    run: async ({ sb, user, env }, a) => {
       const doc = docToRow(a.doc, user.email);
       const records = Array.isArray(a.records) ? a.records : [];
       const existing = must(await sb.from('records').select('id,created_by,status').eq('doc_id', doc.id), 'read records');
@@ -195,7 +226,9 @@ const OPS = {
       const keep = new Set(rows.map((r) => r.id));
       const gone = existing.filter((r) => r.status === 'active' && !keep.has(r.id)).map((r) => r.id); // removed on the edit screen: marked deleted, kept
       for (const part of chunks(gone)) must(await sb.from('records').update({ status: 'deleted', deleted_at: nowIso(), deleted_by: user.email, updated_by: user.email, updated_at: nowIso() }).in('id', part), 'delete records');
-      return { id: doc.id };
+      dirty();
+      const indexed = await reindexDocSafe(sb, env, doc);
+      return { id: doc.id, indexed };
     },
   },
   doc_delete: {
@@ -205,6 +238,8 @@ const OPS = {
       const patch = { status: 'deleted', deleted_at: nowIso(), deleted_by: user.email, updated_by: user.email, updated_at: nowIso() };
       must(await sb.from('documents').update(patch).eq('id', id).eq('status', 'active'), 'delete document');
       must(await sb.from('records').update(patch).eq('doc_id', id).eq('status', 'active'), 'delete records');
+      dirty();
+      try { await deleteDocChunks(sb, id); } catch (e) { console.error(`removing search chunks of ${id} failed:`, e.message); } // search also ignores deleted documents
       return {};
     },
   },
@@ -214,6 +249,7 @@ const OPS = {
       const row = recordToRow(a.record, 0, user.email);
       delete row.position; // keep the record's place inside its document
       must(await sb.from('records').upsert(row), 'write record');
+      dirty();
       return {};
     },
   },
@@ -222,6 +258,7 @@ const OPS = {
     run: async ({ sb, user }, a) => {
       const id = trim(a.id, 100); if (!id) throw bad('Bad id');
       must(await sb.from('records').update({ status: 'deleted', deleted_at: nowIso(), deleted_by: user.email, updated_by: user.email, updated_at: nowIso() }).eq('id', id).eq('status', 'active'), 'delete record');
+      dirty();
       return {};
     },
   },
@@ -230,6 +267,7 @@ const OPS = {
     run: async ({ sb, user }, a) => {
       const from = trim(a.from, 200), to = trim(a.to, 200); if (!from || !to) throw bad('Bad category');
       must(await sb.from('records').update({ other_category: to, updated_by: user.email, updated_at: nowIso() }).eq('lever', 'others').eq('other_category', from).eq('status', 'active'), 'update records');
+      dirty();
       return {};
     },
   },
@@ -244,18 +282,23 @@ const OPS = {
   config_save: { level: 'admin', run: async (ctx, a) => { if (!a.config || typeof a.config !== 'object') throw bad('Bad config'); await replaceLevers(ctx, a.config); return {}; } },
   import_docs: {
     level: 'admin',
-    run: async ({ sb, user }, a) => {
+    run: async ({ sb, user, env }, a) => {
       const docs = (Array.isArray(a.docs) ? a.docs : []).slice(0, 20);
       const recs = (Array.isArray(a.records) ? a.records : []).slice(0, 2000);
       const have = new Set(must(await sb.from('documents').select('id').in('id', docs.map((d) => String(d && d.id))), 'read documents').map((r) => r.id)); // any status: a deleted one is not resurrected
       const fresh = docs.filter((d) => d && typeof d.id === 'string' && !have.has(d.id));
-      for (const d of fresh) must(await sb.from('documents').upsert({ ...docToRow(d, user.email), created_by: (d.created_by || user.email) }), 'write document');
+      for (const d of fresh) {
+        const row = { ...docToRow(d, user.email), created_by: (d.created_by || user.email) };
+        must(await sb.from('documents').upsert(row), 'write document');
+        await reindexDocSafe(sb, env, row);
+      }
       const docIds = new Set([...have, ...fresh.map((d) => d.id)]);
       const mine = recs.filter((r) => r && typeof r.id === 'string' && docIds.has(r.doc_id));
       const haveRec = new Set();
       for (const part of chunks(mine.map((r) => r.id))) must(await sb.from('records').select('id').in('id', part), 'read records').forEach((r) => haveRec.add(r.id));
       const rows = mine.filter((r) => !haveRec.has(r.id)).map((r, i) => ({ ...recordToRow(r, i, user.email), created_by: (typeof r.created_by === 'string' && r.created_by) || user.email }));
       for (const part of chunks(rows)) must(await sb.from('records').upsert(part), 'write records');
+      dirty();
       return { added: fresh.length, records: rows.length };
     },
   },
@@ -273,6 +316,18 @@ const OPS = {
       };
       await replaceLevers(ctx, merged);
       return { config: await loadLevers(ctx.sb) };
+    },
+  },
+  ask_log_list: { // admin: recent questions with how they went. filter: "all" | "refused" | "down" (thumbs down) | "figures" (unmatched numbers)
+    level: 'admin',
+    run: async ({ sb }, a) => {
+      const limit = Math.min(Math.max(Number(a.limit) || 100, 1), 500);
+      let q = sb.from('ask_log').select('id,created_at,user_email,question,standalone,intent,mode,answerable,answer,unsupported,ms,error,feedback,feedback_note').order('created_at', { ascending: false }).limit(a.filter === 'figures' ? 500 : limit);
+      if (a.filter === 'refused') q = q.eq('answerable', false);
+      else if (a.filter === 'down') q = q.eq('feedback', -1);
+      const rows = must(await q, 'read ask log');
+      // the "unmatched figures" filter is applied here rather than in the query, so it does not depend on how JSON columns are compared
+      return { log: a.filter === 'figures' ? rows.filter((r) => Array.isArray(r.unsupported) && r.unsupported.length).slice(0, limit) : rows };
     },
   },
   gap_list: {
@@ -317,7 +372,7 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   if (op.level === 'admin' && !user.isAdmin) return json(403, { error: 'You need an admin account to do that.' });
 
   try {
-    const out = await op.run({ sb: getClient(env), user, now }, req.body || {});
+    const out = await op.run({ sb: getClient(env), user, now, env }, req.body || {});
     return json(200, out || {});
   } catch (err) {
     if (err instanceof HttpError) return json(err.status, { error: err.message });
