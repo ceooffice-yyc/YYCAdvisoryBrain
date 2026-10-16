@@ -4,6 +4,8 @@ import { tokenizeQuery } from "../server/ask/text.js"; // the Ask the Brain pipe
 import { isSmallTalk } from "../server/ask/router.js";
 import { runAsk } from "../server/ask/pipeline.js";
 import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
+import { splitClaim, removeLever, undoRemoveLever } from "./claim.js";
+import ClaimFields from "./ClaimFields.jsx";
 
 const P = {
   paper: "#FAF7F2", paperDeep: "#F3EDE3", card: "#FFFFFF",
@@ -147,11 +149,6 @@ function normalizeOther(r) {
 
 /* claim_en is always stored as "Strategy name: description". The name is shown in bold, the
    document's actual impact sits in a light-brown box underneath (older records fall back to their quote). */
-function splitClaim(text) {
-  const s = String(text || "").trim();
-  const i = s.indexOf(": ");
-  return i > 0 && i <= 120 ? { name: s.slice(0, i), desc: s.slice(i + 2) } : { name: "", desc: s };
-}
 // The UI prints its own "Actual impact:" heading, so a label copied from the document ("Actual Impact: …") must never stay in the text
 function stripImpactLabel(s) {
   let out = String(s || "").trim();
@@ -325,6 +322,9 @@ const T = {
     kbarLever: "Filter by lever",
     similarExisting: "Similar existing claim",
     skipRecord: "Don't save",
+    removeRecord: "Remove this record",
+    removedNote: "{n} removed from this review (nothing is deleted from your library).",
+    undo: "Undo",
     skippedNote: "Skipped — click to keep",
     levers: {
       price: "Price", volume: "Volume", cogs: "COGS", overheads: "Overheads",
@@ -457,6 +457,9 @@ const T = {
     kbarLever: "按杠杆筛选",
     similarExisting: "与现有记录相似",
     skipRecord: "不保存",
+    removeRecord: "移除此记录",
+    removedNote: "已从本次审核中移除 {n} 条（不会影响知识库）。",
+    undo: "撤销",
     skippedNote: "已跳过——点击恢复",
     levers: {
       price: "价格", volume: "销量", cogs: "销售成本", overheads: "经常开销",
@@ -2535,6 +2538,7 @@ function KnowledgePanel({
     </div>
   );
   const [extraction, setExtraction] = useState(null);
+  const [reviewEpoch, setReviewEpoch] = useState(0);        // changes when a record is removed / restored, so the boxes below it are rebuilt from the data
   const [editDoc, setEditDoc] = useState(null);
   const [editLevers, setEditLevers] = useState([]);
   const [editLeverRecord, setEditLeverRecord] = useState(null);
@@ -3074,6 +3078,9 @@ function KnowledgePanel({
       industry_sub: extraction.industry_sub,
     };
     const { main, sub } = parseIndustry(extraction.industry || "", previewMeta);
+    // take a record out before saving (it can be brought back with Undo); nothing is saved until "Save"
+    const dropRecord = (i) => { setExtraction((x) => removeLever(x, i)); setReviewEpoch((n) => n + 1); };
+    const restoreRecord = () => { setExtraction((x) => undoRemoveLever(x)); setReviewEpoch((n) => n + 1); };
 
     return (
       <div>
@@ -3110,12 +3117,13 @@ function KnowledgePanel({
           <div style={{ fontWeight: 750, fontSize: 14, marginTop: 20, color: P.maroon }}>
             {t.leverRecords} <span style={{ color: P.faint }}>({(extraction.levers || []).length})</span>
           </div>
+          {(extraction.removed || []).length > 0 && (
+            <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: P.wash, border: `1px solid ${P.lineDark}`, fontSize: 12.5, display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+              <span>{t.removedNote.replace("{n}", String(extraction.removed.length))}</span>
+              <button className="yyc-btn-secondary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={restoreRecord}>{t.undo}</button>
+            </div>
+          )}
           {(extraction.levers || []).map((l, i) => {
-            const claimParts = splitClaim(l.claim_en);
-            const updateClaim = (name, description) => {
-              const claim = name.trim() ? `${name.trim()}: ${description.trim()}` : description.trim();
-              setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, claim_en: claim } : v)) }));
-            };
             return (
             <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", borderTop: i ? `1px solid ${P.line}` : "none", padding: "12px 0", opacity: l.skip ? 0.45 : 1 }}>
               <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "3px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
@@ -3125,10 +3133,12 @@ function KnowledgePanel({
                 {l.lever === "others" && l.related_to && (
                   <div style={{ fontSize: 12, color: P.sub, marginBottom: 3 }}>{t.relatedTo}: <b style={{ color: P.ink }}>{l.related_to}</b></div>
                 )}
-                <label style={S.label}>Strategy title</label>
-                <input className="yyc-input" value={claimParts.name} onChange={(e) => updateClaim(e.target.value, claimParts.desc)} />
-                <label className="yyc-edit-record-field" style={S.label}>Description</label>
-                <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={claimParts.desc} onChange={(e) => updateClaim(claimParts.name, e.target.value)} />
+                <ClaimFields
+                  key={`${reviewEpoch}-${i}`}
+                  claim={l.claim_en}
+                  labelStyle={S.label}
+                  onChange={(claim) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, claim_en: claim } : v)) }))}
+                />
                 <label className="yyc-edit-record-field" style={S.label}>Actual impact</label>
                 <textarea className="yyc-input yyc-edit-record-textarea" rows={2} value={l.impact || ""} onChange={(e) => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, impact: e.target.value } : v)) }))} />
                 <div style={{ fontSize: 12, color: P.faint, marginTop: 4 }}>{l.section}</div>
@@ -3169,15 +3179,18 @@ function KnowledgePanel({
                   </div>
                 )}
               </div>
-              {conflicts[i] && (
-                <button
-                  className="yyc-btn-secondary"
-                  style={{ flexShrink: 0, padding: "5px 12px", fontSize: 12, ...(l.skip ? { borderColor: P.goldDark, color: P.goldDark } : {}) }}
-                  onClick={() => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, skip: !v.skip } : v)) }))}
-                >
-                  {l.skip ? t.skippedNote : t.skipRecord}
-                </button>
-              )}
+              <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+                <button className="yyc-icon-btn is-danger" onClick={() => dropRecord(i)} title={t.removeRecord} aria-label={t.removeRecord}><Icon name="trash" size={13} /></button>
+                {conflicts[i] && (
+                  <button
+                    className="yyc-btn-secondary"
+                    style={{ padding: "5px 12px", fontSize: 12, ...(l.skip ? { borderColor: P.goldDark, color: P.goldDark } : {}) }}
+                    onClick={() => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, skip: !v.skip } : v)) }))}
+                  >
+                    {l.skip ? t.skippedNote : t.skipRecord}
+                  </button>
+                )}
+              </div>
             </div>
             );
           })}
