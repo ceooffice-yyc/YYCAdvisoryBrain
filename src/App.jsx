@@ -6,6 +6,9 @@ import { runAsk } from "../server/ask/pipeline.js";
 import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
 import { splitClaim, removeLever, undoRemoveLever } from "./claim.js";
 import ClaimFields from "./ClaimFields.jsx";
+import { extractCollectionFrameworkRecords, detectOutlineDocument } from "./collectionExtraction.js";
+import { FULL_TEXT_LIMIT, saveLimitNotice, withNotices } from "./extractionNotices.js";
+import { parseSummaryStrategyCards, restoreSummaryStrategyCards } from "./summaryCardExtraction.js";
 
 const P = {
   paper: "#FAF7F2", paperDeep: "#F3EDE3", card: "#FFFFFF",
@@ -160,8 +163,28 @@ function stripImpactLabel(s) {
   return out;
 }
 const impactOf = (r) => stripImpactLabel(r?.impact || r?.quote || "");
-function ClaimText({ text }) {
+const citationLabel = (citation, limit = 30) => {
+  const full = [citation.doc_title, citation.section, citation.claim].filter(Boolean).join(" · ");
+  return { full, short: full.length > limit ? `${full.slice(0, limit - 1)}…` : full };
+};
+function summaryCardRealizedImpact(value) {
+  const sentences = String(value || "").split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  const metricsOnly = /\b(?:KPI|target|NPS|Net Promoter Score|score|scored|utili[sz]ation|rebooking rate|acquisitions? in \d+ years?)\b/i;
+  const realized = /\b(?:increased|grew|reduced|raised|improved|doubled|tripled|saved|generated|earned|became|revalued|turned into|turnaround|achieved|reached|cut|lowered|eliminated)\b/i;
+  const directionalResult = /\b(?:revenue|profit(?:ability)?|sales|cash flow|valuation|margin|cost|debt)\b.{0,55}\b\d[\d,.]*(?:[kmb])?\s*(?:→|to|from)\s*(?:US\$|RM|\$)?\d[\d,.]*(?:[kmb])?/i;
+  const kept = sentences.filter((s) => !metricsOnly.test(s) && (realized.test(s) || directionalResult.test(s)));
+  return kept.length ? kept.join(" ") : "N/A";
+}
+function ClaimText({ text, stacked = false }) {
   const { name, desc } = splitClaim(text);
+  if (stacked) {
+    return (
+      <span style={{ display: "block"}}>
+        {name && <span style={{ display: "block", fontWeight: 700 }}>{name}</span>}
+        <span style={{ display: "block", whiteSpace:"pre-line" }}>{desc}</span>
+      </span>
+    )
+  }
   return <>{name && <b>{name}</b>}{name && ": "}<span style={{ whiteSpace: "pre-line" }}>{desc}</span></>; // pre-line keeps the bullet lines
 }
 function ImpactBox({ record, style }) {
@@ -229,6 +252,7 @@ const T = {
     extracting: "Reading, categorizing and plucking the 10 levers…",
     reviewTitle: "Review extraction before saving",
     reviewNote: "Check the tags and lever records — your confirmation keeps the knowledge base clean.",
+    noticesTitle: "Please check before saving",
     saveDoc: "Confirm & save", discard: "Discard",
     docType: "Type", industry: "Industry", problemSig: "Problem signature",
     sections: "Sections", leverRecords: "Lever records",
@@ -364,6 +388,7 @@ const T = {
     extract: "AI 提取", extracting: "正在阅读、分类并提取十大杠杆…",
     reviewTitle: "保存前请核对提取结果",
     reviewNote: "请检查标签与杠杆记录——您的确认能保持知识库干净。",
+    noticesTitle: "保存前请核对",
     saveDoc: "确认并保存", discard: "放弃",
     docType: "类型", industry: "行业", problemSig: "问题特征",
     sections: "章节", leverRecords: "杠杆记录",
@@ -1419,7 +1444,7 @@ function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, onEdit,
       {record.lever === "others" && record.related_to && (
         <div className="yyc-lever-record-meta">{t.relatedTo}: <b style={{ color: P.ink }}>{record.related_to}</b></div>
       )}
-      {claim && <div className="yyc-lever-record-claim"><ClaimText text={claim} /></div>}
+      {claim && <div className="yyc-lever-record-claim"><ClaimText text={claim} stacked /></div>}
       <ImpactBox record={record} />
 
 
@@ -1506,19 +1531,6 @@ function LeverPickerModal({ t, currentLever, counts, onSelect, onClose, onOpenSo
 }
 
 /* ---------- extraction pipeline (shared by single + bulk upload) ---------- */
-function capMaterial(text) {
-  const BUDGET = 16500; // whole doc is kept and sent in ~5.5k-char chunks (see extractDocument), so each call still fits one 8k-TPM minute
-  if (text.length <= BUDGET) return text;
-  const m = text.search(/Power Cash Links|Analysis/);
-  if (m > 0) {
-    const tail = text.slice(m, m + BUDGET);
-    const headroom = BUDGET - tail.length;
-    const head = headroom > 500 ? text.slice(0, headroom) : "";
-    return head + (head ? "\n[\u2026narrative trimmed\u2026]\n" : "") + tail;
-  }
-  return text.slice(0, BUDGET);
-}
-
 /* Split on blank lines so a named strategy's paragraphs stay together. One giant call
    made the model (and its hidden reasoning) run out of output budget and silently drop
    the LAST sections (Talent, Other Strategies, Failed Strategies). Small chunks = every
@@ -1712,6 +1724,77 @@ function scopeMaterial(text) {
   const end = body.search(/^\s*(Failed Strategies|Problems? Encountered|Problems? (and|&) Solutions?|Lessons? Learn|Financial Milestones|Timeline|Key (Dates|Milestones)|Chronology)|^.{0,40}\bwebsite\s*:/im);
   if (end > 0) body = body.slice(0, end);
   return { context: text.slice(0, start).slice(0, 1500), body };
+}
+
+// Collection manuals mix operational policies with call scripts, soft skills, and examples.
+// Keep only the sections that describe collection management or explicit collection policies.
+const COLLECTION_TOP_SECTIONS = [
+  [/^Management Approach to Collection Performance\b/i, true],
+  [/^Win the Internal War First\b/i, true],
+  [/^Current Collection Strategies Identified in YYC\b/i, true],
+  [/^Telephone Collection skills\b/i, false],
+  [/^Opening a Collection Call\b/i, false],
+  [/^Dealing with Difficult Customers by Telephone\b/i, false],
+  [/^Collection Persuasion Skills\b/i, false],
+  [/^Barriers to Successful Persuasion\b/i, false],
+  [/^Strategies to Reduce Debt\b/i, true],
+  [/^Burning Issues in Debt Recovery\b/i, false],
+  [/^Different Types of Difficult Customers\b/i, false],
+  [/^Profiling Debtors\b/i, false],
+  [/^Handling Difficult Customers\b/i, false],
+  [/^Focus on Large Customers\b/i, false],
+  [/^Common Client Objections and Suggested Responses\b/i, false],
+  [/^Negotiation Tactics\b/i, false],
+  [/^Debt Planning and Measurement\b/i, false],
+  [/^Action Plan by Function\b/i, false],
+  [/^Recommended YYC Collection Excellence Framework\b/i, false],
+];
+function detectCollectionFramework(text, title) {
+  const head = String(text || "").slice(0, 18000);
+  const isCollectionDoc = /collection|receivables?|debt recovery/i.test(`${title || ""} ${head.slice(0, 900)}`);
+  const lines = head.split(/\r?\n/).map((line) => line.trim());
+  const headingCount = COLLECTION_TOP_SECTIONS.filter(([re]) => lines.some((line) => re.test(line))).length;
+  return isCollectionDoc && headingCount >= 3 && !/Power Cash (Links?|Strategy)|^\s*Analysis\s*$/im.test(head);
+}
+function scopeCollectionFramework(text) {
+  const paras = String(text || "").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const selected = [];
+  let active = false;
+  let included = 0;
+  let internalWarTitle = "";
+  let internalWarLines = [];
+  let inInternalWarPractices = false;
+  const flushInternalWar = () => {
+    if (!internalWarTitle) return;
+    selected.push(internalWarTitle);
+    if (internalWarLines.length) selected.push(internalWarLines.join("\n"));
+    internalWarTitle = "";
+    internalWarLines = [];
+    inInternalWarPractices = false;
+  };
+  for (const para of paras) {
+    const heading = COLLECTION_TOP_SECTIONS.find(([re]) => re.test(para));
+    if (heading) {
+      flushInternalWar();
+      active = heading[1];
+      if (active) {
+        included++;
+        if (/^Win the Internal War First\b/i.test(para)) internalWarTitle = para;
+        else selected.push(para);
+      }
+      continue;
+    }
+    if (internalWarTitle) {
+      if (/^The internal war is won when:\s*$/i.test(para)) {
+        internalWarLines.push(para);
+        inInternalWarPractices = true;
+      } else if (inInternalWarPractices) internalWarLines.push(para);
+      continue;
+    }
+    if (active) selected.push(para);
+  }
+  flushInternalWar();
+  return { context: "", body: included >= 3 ? selected.join("\n\n") : String(text || "") };
 }
 
 // M&A extraction is deliberately limited in code to the sections the advisor
@@ -1974,14 +2057,20 @@ function withBullets(desc, items) {
   return rest ? `${res}\n${rest}` : res;
 }
 
-async function extractDocument(text, title, customLevers = [], html = "") {
+export async function extractDocument(text, title, customLevers = [], html = "") {
   const listItems = listItemsOf(html);
   const isMnaDocument = detectMnaDocument(text, title); // by section headings, never by the word "acquisition" appearing somewhere in the text
-  const scoped = isMnaDocument ? scopeMnaSections(text) : scopeMaterial(text);
+  // a collection / receivables playbook written as a numbered outline is read by code (no AI): by its Word headings, or its numbering
+  const isCollectionFramework = !isMnaDocument && (detectOutlineDocument(text, title) || detectCollectionFramework(text, title));
+  if (isCollectionFramework) return withNotices(extractCollectionFrameworkRecords(text, title, html), saveLimitNotice(text));
+  const isSummaryCardDocument = !isMnaDocument && !isCollectionFramework && (String(text || "").match(/^\s*Key Strategy\s*[:：]/gim) || []).length >= 2;
+  const scoped = isMnaDocument ? scopeMnaSections(text) : isCollectionFramework ? scopeCollectionFramework(text) : scopeMaterial(text);
   const { context, body: rawBody } = scoped;
-  const bodyParas = isMnaDocument ? structureMnaParas(rawBody) : normalizeParas(rawBody);
+    const bodyParas = isMnaDocument ? structureMnaParas(rawBody) : normalizeParas(rawBody);
   const body = bodyParas.join("\n\n");
-  const chunks = chunkMaterial(capMaterial(body));
+  // Keep the full in-scope source. A fixed character cap silently removed later strategies
+  // from long documents before chunking could preserve them.
+  const chunks = chunkMaterial(body);
   if (context) chunks[0] = `[BACKGROUND ONLY — use just to identify title/industry; extract NOTHING from this block]
 ${context}
 [END BACKGROUND]
@@ -1999,15 +2088,21 @@ ${context}
       if (!key || seenSec.has(key)) continue;
       seenSec.add(key); merged.sections.push(s);
     }
-    for (const l of j.levers || []) {
+    for (let l of (Array.isArray(j.levers) ? j.levers : [])) {
+      // Some model responses serialize an individual lever object as a JSON string inside the levers array.
+      // Recover that object instead of aborting the entire document extraction.
+      if (typeof l === "string") { try { l = JSON.parse(l); } catch { continue; } }
+      if (!l || typeof l !== "object" || Array.isArray(l)) continue;
       // model returns name + description separately; store them as ONE claim ("Name: description") so search/chat/edit keep working
       // the model likes to swap "-" for a non-breaking hyphen (U+2011) and use odd spaces: restore plain characters so text matches the document exactly
       const plain = (x) => String(x || "").split(String.fromCharCode(0x2011)).join("-").split(String.fromCharCode(0xA0)).join(" ").split(String.fromCharCode(0x202F)).join(" ");
-      l.strategy_name = plain(l.strategy_name); l.description = plain(l.description); l.impact = plain(l.impact);
+      l.strategy_name = plain(l.strategy_name).trim().replace(/^\s*\d+(?:\.\d+)*[.)]?\s+/, "");
+      l.description = plain(l.description); l.impact = plain(l.impact);
+      if (isSummaryCardDocument) l.impact = summaryCardRealizedImpact(l.impact);
       // table/template cells ("What Sweetwater Did", "Differentiation", a lever heading) are never strategies
       {
         const nm0 = String(l.strategy_name || "").trim(), ds0 = String(l.description || "").trim();
-        if (/^what\b.{0,40}\bdid$/i.test(nm0) || leverHeadingOf(nm0) || (nm0 && !ds0 && wordCount(nm0) < 5)) continue;
+        if (/^what\b.{0,40}\bdid$/i.test(nm0) || leverHeadingOf(nm0) || (nm0 && normWs(nm0) === normWs(l.section || "")) || (nm0 && !ds0 && wordCount(nm0) < 5)) continue;
       }
       if (l.strategy_name) {
         const nm = String(l.strategy_name).trim().replace(/[:：]\s*$/, "");
@@ -2038,7 +2133,7 @@ ${context}
   // the model's answers for one piece of material, in order (a piece whose answer is not valid JSON is halved and retried)
   const extractResults = async (material, part, totalParts = chunks.length, depth = 0) => {
     try {
-      return [await askAI(buildExtractionPrompt(material, title, part, totalParts, customLevers, isMnaDocument), 3000)];
+      return [await askAI(buildExtractionPrompt(material, title, part, totalParts, customLevers, isMnaDocument, isCollectionFramework), 3000)];
     } catch (error) {
       if (!(error instanceof AIError) || error.kind !== "json_output") throw error;
       const halves = depth < 7 ? splitMaterialForRetry(material) : null;
@@ -2067,7 +2162,7 @@ ${context}
      Actual Impact). Find every "Title: description" paragraph in the strategy part of the document; any title without a
      record gets re-sent, alone with its own paragraphs, in ONE recovery call. */
   const have = () => merged.levers.map((l) => normWs(l.claim_en));
-  const missing = findStrategyParas(body).filter((p) => {
+  const missing = (isCollectionFramework ? [] : findStrategyParas(body)).filter((p) => {
     const probe = normWs(p.title).slice(0, 25);
     return !have().some((c) => c.includes(probe));
   }).slice(0, 12);
@@ -2163,8 +2258,17 @@ ${context}
       const h = pos < 0 ? null : [...heads].reverse().find((x) => x.pos <= pos);
       return h ? { ...l, section: h.text } : l;
     })
-    // lever follows the heading (Pricing → price even if the strategy reads like differentiation; "Other…" headings → others)
-    .map((l) => { const fixed = leverFromHeading(l.section); if (isMnaDocument && fixed === "others" && l.lever === "acquisition_expansion_valuation") return l; return fixed && fixed !== l.lever ? { ...l, lever: fixed } : l; })
+    // Collection framework records all describe receivables or collection control. Their section names are not lever headings,
+    // so the generic heading mapper returns "others"; force the domain-specific AR lever and discard Others-only metadata.
+    .map((l) => {
+      if (isCollectionFramework) {
+        const { other_category, related_to, ...record } = l;
+        return { ...record, lever: "ar_days" };
+      }
+      const fixed = leverFromHeading(l.section);
+      if (isMnaDocument && fixed === "others" && l.lever === "acquisition_expansion_valuation") return l;
+      return fixed && fixed !== l.lever ? { ...l, lever: fixed } : l;
+    })
     // description + impact = the document's ORIGINAL sentences (no length limit), whatever the model made of them
     .map((l) => {
       const k = regionIndex(l);
@@ -2250,6 +2354,28 @@ ${context}
     .sort((a, b) => (a.k === b.k ? a.i - b.i : a.k - b.k))
     .map((x) => x.l)
     .slice(0, 60);
+  // This section is explicitly one coordinated practice. The model sometimes promotes each checklist bullet
+  // to a separate record; rebuild it from the selected source paragraphs as one verbatim record.
+  if (isCollectionFramework) {
+    const winHeadingIndex = bodyParas.findIndex((p) => /^Win the Internal War First\s*:?$/i.test(p));
+    if (winHeadingIndex >= 0) {
+      let end = bodyParas.length;
+      for (let i = winHeadingIndex + 1; i < bodyParas.length; i++) {
+        if (COLLECTION_TOP_SECTIONS.some(([re]) => re.test(bodyParas[i]))) { end = i; break; }
+      }
+      const detail = bodyParas.slice(winHeadingIndex + 1, end).filter((p) => !/^Win the Internal War First\s*:?$/i.test(p));
+      if (detail.length) {
+        merged.levers = merged.levers.filter((l) => normWs(l.section) !== normWs("Win the Internal War First"));
+        const description = detail.map((p) => /^The internal war is won when:/i.test(p) ? p : `• ${p.replace(/^•\s*/, "")}`).join("\n");
+        merged.levers.push({ lever: "ar_days", section: "Win the Internal War First", claim_en: `Win the Internal War First: ${description}`, impact: "N/A" });
+      }
+    }
+  }
+  // Restore exact strategy text and results from explicitly labeled summary cards after model classification.
+  if (isSummaryCardDocument) {
+    const cards = parseSummaryStrategyCards(text);
+    if (cards.length) merged.levers = restoreSummaryStrategyCards(merged.levers, cards);
+  }
   // every section a record points to must exist in the sections list (headings detected in code may be new to the model's list)
   const haveSec = new Set(merged.sections.map((s) => normWs(s.heading)));
   merged.levers.forEach((l) => {
@@ -2258,7 +2384,7 @@ ${context}
   });
   merged.levers = await classifyOthers(merged.levers); // one small call: every Others record gets exactly one category
   merged.levers = sortByLever(merged.levers); // then group by lever, in the fixed lever order (document order kept inside each lever)
-  return merged;
+  return withNotices(merged, saveLimitNotice(text)); // tell the person when part of a very long document will not be saved
 }
 
 /* "14. YETI d" / "13. Bobbie-d" -> "YETI" / "Bobbie": drops the leading list number and a trailing lone lowercase marker letter (a draft suffix) */
@@ -2284,7 +2410,7 @@ async function parseDocxFile(f) {
   };
 }
 
-function buildExtractionPrompt(capped, title, part = 1, parts = 1, customLevers = [], forceMna = false) {
+function buildExtractionPrompt(capped, title, part = 1, parts = 1, customLevers = [], forceMna = false, forceCollectionFramework = false) {
   const customs = customLevers.length ? customLevers : CUSTOM_LEVERS; // custom levers come from the lever definitions, exactly like the built-in ones
   const customBlock = customs.length ? `
 CUSTOM LEVERS (added by the administrator in Admin settings; they are as real as the levers above and take precedence over "others"):
@@ -2292,6 +2418,7 @@ ${customs.map((l) => `- ${l.id} ("${l.name}"): ${l.description}${l.example ? ` E
 When a strategy clearly matches a custom lever's definition, or sits under one of its headings, set lever to that custom id (never "others"). Keep a built-in lever when it fits better.
 ` : "";
   const isMnaDoc = !!forceMna; // decided in code from the document's section headings, not by keywords in the chunk
+  const isCollectionDoc = !!forceCollectionFramework;
   const mnaRules = isMnaDoc ? `
 M&A DOCUMENT MODE. The material was prefiltered in code to these sections only: "M&A Appetite", "Acquisition Criteria", "Post-Acquisition Strategy" and "What [Company] Brings to Acquired Companies" (headings may be numbered). Extract NOTHING from the background block or from anything outside those sections. No "Key Strategies" heading is needed: in an M&A document a strategy is an explicit acquisition action, policy, target-selection criterion, deal structure or operating approach.
 
@@ -2302,12 +2429,23 @@ HOW THE MATERIAL IS LAID OUT (already structured for you by code):
 
 RULES:
 1. One record per "Title: text" paragraph — every numbered criterion and every appetite point gets its own record; do not skip any. Never create a record from a quote line, a list item or a bullet that sits inside a paragraph (for example a quoted remark, "Valuation" / "People / Culture Fit" in a list of reasons, or "Catcha HQ;" in a list of sourcing channels). A list that only introduces sources ("Acquisition opportunities may come from:") is part of its strategy's description, not a separate record.
-2. strategy_name = the exact title as written, without its number. Copy it ONLY into strategy_name; never repeat it at the start of description. Use the exact section heading (without its number) as "section"; never substitute a lever word such as "Valuation" for a heading.
+2. strategy_name = the title text without its outline numbering (for example "10.2 Long-Term Ownership" becomes "Long-Term Ownership"). Copy the remaining title text faithfully into strategy_name; never include the number or repeat the title at the start of description. Document section headings are labels only, not strategies: do not create a lever record from a main heading such as "Acquisition Criteria" or "Post-Acquisition Strategy". Use the exact section heading (without its number) as "section"; never substitute a lever word such as "Valuation" for a heading.
 3. Untitled block: extract the explicit approach or policy it states. strategy_name must be a short phrase copied word for word from that block (for example its opening words) — never an invented label such as "Decentralized Operating Model" unless those exact words appear. Role labels ("Operating Companies", "[Company] HQ") and bullets under them are parts of ONE operating model: create ONE record for a coordinated approach (a decentralized model with its role split; a support offering with its list of capabilities). Only a separate, explicit learning or policy in the same block (for example "not every acquisition needs to be fully integrated") may be its own record. Under a "What [Company] Brings…" heading create at most ONE record, titled with the block's introductory phrase, with the full list and every sentence kept together.
 4. description = the complete original text of the paragraph, exact words and order (this includes list items and quoted remarks inside it), minus only the sentence(s) that report a realised result.
 5. impact = a sentence that reports a result that actually happened (for example revenue that was multiplied after an acquisition). Counts or ratios that merely support a policy ("1 company out of every 100 reviewed") stay in the description. If no realised result is stated, impact = "N/A". Never use theory or Power Cash Link text as impact.
 6. Do not make a strategy from company size, revenue/EBITDA figures, sector descriptions, deal counts, aspirations or capabilities. Ignore a concluding one-line summary that only repeats strategies already stated.
 7. lever = acquisition_expansion_valuation for all M&A records. All exact-copy, impact and no-invention rules below still apply.
+` : "";
+  const collectionRules = isCollectionDoc ? `
+COLLECTION FRAMEWORK MODE. The source is a reusable collection/debt-recovery framework, not a single-company case-study narrative. Code has selected explicit management, internal-alignment, current-practice, and debt-reduction sections. Do not extract generic mindset material, call scripts, etiquette, persuasion examples, debtor scenarios, objections, negotiation techniques, formulas, or KPIs.
+
+RULES:
+1. Set doc_type to "framework". Label advice as a recommendation; describe an existing YYC practice as current only when the source explicitly says it is already used.
+2. COVERAGE IS REQUIRED: extract every named practice and every numbered strategy/subheading in the selected sections, from the first through the last. In particular, create separate records for each 4.1–4.4 strategy under "Current Collection Strategies Identified in YYC" and each 10.1–10.6 strategy under "Strategies to Reduce Debt" when present. Do not omit earlier entries, stop after one section, or combine separate titled strategies into one record. In "Win the Internal War First", make at most one record for the coordinated approach in that section.
+3. Keep examples and supporting bullet points with their parent policy. They are not separate records.
+4. Remove outline numbering from strategy_name (for example "10.2 Review credit assessment" becomes "Review credit assessment"). Do not create a record from a main section heading; it belongs in "section" only. Use the remaining policy or practice title faithfully, and copy the supporting source wording exactly into description. Do not turn a heading fragment, example, metric, or client scenario into a strategy.
+5. Use ar_days for policies that directly affect receivables, payment terms, billing, credit control, monitoring, collection escalation, or continuation of work. Use another lever only when the described action clearly fits it better.
+6. Set impact to "N/A" unless this material states a realized result tied to that specific policy. Targets, formulas, planned actions, and general benefits are not impacts.
 ` : "";
   // Only the document formats this material can contain are sent (fewer tokens per call, fewer irrelevant rules)
   const hasKeyStrategyCard = /key\s+strateg(?:y|ies)\s*[:\uFF1A]/i.test(capped);
@@ -2330,9 +2468,10 @@ RULES:
   const formatB = `FORMAT B — SUMMARY CARD with labelled fields:
   <Company> (<Industry> / <Person>)
   Problem: ...   Key Strategy: ...   Formula/Theory: ...   Result: ...
-  ONLY the "Key Strategy" field is a strategy. One Key Strategy sentence = ONE record, even if it has several clauses (keep its focus areas in the claim, e.g. "...focused on rebooking and utilization"). Problem and Formula/Theory are context only. For this format: strategy_name = a SHORT title of at most 6 words taken from the Key Strategy wording (e.g. "Buy-and-improve acquisition engine") — NOT the whole sentence; description = the rest of the Key Strategy sentence, WITHOUT repeating the title (e.g. "funded by external partners, focused on rebooking and utilization; exit at high multiple"); impact = the Result field (WORDING RULE applies). "section" is the company/case heading — never a field label like "Key Strategy" or "Result".`;
+  ONLY the "Key Strategy" field is a strategy. One Key Strategy sentence = ONE record, even if it has several clauses. Problem and Formula/Theory are context only. Return one record for every Key Strategy field in source order. strategy_name = a SHORT title of 3-8 words: the exact OPENING words of the Key Strategy sentence, ending at a natural boundary (before ";", "—", a comma, or a joining word such as "funded", "focused", "per", "and"). Never the whole sentence, never blank, never ending in punctuation or in a word like "of"/"the"/"and". description = the exact REMAINING words of the sentence, in order, WITHOUT the separator that followed the title (no leading ";", "—", ":" or ","). If the whole sentence is 8 words or fewer, use it as strategy_name and leave description empty. Set impact to the matching Result field, or "N/A" if absent. "section" is the company/case heading — never a field label like "Key Strategy" or "Result".`;
   const formatC = "FORMAT C — M&A narrative/criteria: apply M&A DOCUMENT MODE above even without strategy headings. Extract only explicitly stated approaches or criteria; never infer a strategy from a capability, benefit, aspiration, or scale fact.";
-  const formatSection = isMnaDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatC}` : `═══ 4. DOCUMENT FORMATS (learn them before extracting) ═══\n${formatA}${hasKeyStrategyCard ? `\n\n${formatB}` : ""}`;
+  const formatD = `FORMAT D — COLLECTION FRAMEWORK. This is a reusable collection operating framework rather than one company's case-study narrative. Use COLLECTION FRAMEWORK MODE above. A numbered policy heading starts one record; examples and bullets remain with that policy. Ignore action-plan-by-function tables and staged framework checklists outside the selected policy sections.`;
+  const formatSection = isMnaDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatC}` : isCollectionDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatD}` : `═══ 4. DOCUMENT FORMATS (learn them before extracting) ═══\n${formatA}${hasKeyStrategyCard ? `\n\n${formatB}` : ""}`;
   return `You are the ingestion engine of YYC's internal advisory knowledge base (Malaysian accounting & advisory firm). Analyse the material below and return ONLY a JSON object, no markdown fences, no commentary.
 
 
@@ -2359,7 +2498,7 @@ OUT OF SCOPE — never create a record from these, and never list them as strate
   • Table headers, column labels and template leftovers (e.g. "Differentiation", "What Sweetwater Did", "Strategy", "Actual Impact") — these are NOT strategies; a strategy always has a real title AND a description.
   • Problem statements, formulas/theories, KPIs, metrics, targets, multiples and outcomes standing on their own (see section 3).
 Do not add out-of-scope headings to the sections array either.
-${mnaRules}
+${mnaRules}${collectionRules}
 
 ═══ 3. EVIDENCE = THE DESCRIPTION BENEATH EACH STRATEGY; RESULTS ARE NEVER STRATEGIES ═══
 The supporting points for a strategy are its own source text plus any actual-impact statement explicitly attached to it. "Power Cash Link:" explains theory, not impact; never copy it. Do not use evidence from unrelated sections. ${isMnaDoc ? "In M&A mode, the exact supporting sentence(s) may appear anywhere in this material part; copy them verbatim and attach them only to the explicit action/criterion they support." : ""}
@@ -2702,7 +2841,7 @@ function KnowledgePanel({
         language: extraction.language || "en",
         problem_signature: extraction.problem_signature || "",
         sections: extraction.sections || [],
-        full_text: text.slice(0, 60000),
+        full_text: text.slice(0, FULL_TEXT_LIMIT),
         html: html || "",
         created: Date.now(),
       };
@@ -3090,6 +3229,15 @@ function KnowledgePanel({
             <div className="yyc-section-sub">{t.reviewNote}</div>
           </div>
         </div>
+
+        {(extraction.notices || []).length > 0 && (
+          <div role="status" style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 10, fontSize: 12.5, lineHeight: 1.6, background: (extraction.notices || []).some((n) => n.level === "warn") ? P.goldSoft : P.wash, border: `1px solid ${(extraction.notices || []).some((n) => n.level === "warn") ? P.gold : P.lineDark}` }}>
+            <div style={{ fontWeight: 750, marginBottom: 4 }}>{t.noticesTitle}</div>
+            {(extraction.notices || []).map((n, k) => (
+              <div key={k} style={{ marginTop: k ? 6 : 0 }}>{n.level === "warn" ? "⚠ " : "ℹ "}{n.text}</div>
+            ))}
+          </div>
+        )}
 
         <div style={{ ...S.card, padding: 24 }}>
           <label style={S.label}>Document title</label>
@@ -3962,12 +4110,15 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
                   {m.citations?.length > 0 && (
                     <div className="yyc-cites">
                       <span className="yyc-cites-label">{t.refs}:</span>
-                      {m.citations.map((c, j) => (
-                        <button key={j} className="yyc-cite-btn" title={c.claim || undefined} onClick={() => openPreview(c.doc_id, c.section, c.record_id)}>
-                          <Icon name="file" size={11} />
-                          {c.doc_title}{c.section ? ` · ${c.section}` : ""}{c.claim ? ` · ${c.claim}` : ""}
-                        </button>
-                      ))}
+                      {m.citations.map((c, j) => {
+                        const label = citationLabel(c);
+                        return (
+                          <button key={j} className="yyc-cite-btn" title={label.full} aria-label={label.full} onClick={() => openPreview(c.doc_id, c.section, c.record_id)}>
+                            <Icon name="file" size={11} />
+                            {label.short}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                   {m.role === "ai" && !m.refused && (m.unsupportedFigures?.length > 0 || m.uncited) && (
@@ -4465,7 +4616,7 @@ function ExplorerPanel({ t, lang, levers, index, openPreview, isAdmin, config, s
                       {r.related_to && <span style={{ fontSize: 12, color: P.sub }}>{t.relatedTo}: <b style={{ color: P.ink }}>{r.related_to}</b></span>}
                     </div>
                   )}
-                  <div style={{ fontSize: 13.5, lineHeight: 1.6 }}><ClaimText text={r.claim_en || r.claim_zh} /></div>
+                  <div style={{ fontSize: 13.5, lineHeight: 1.6 }}><ClaimText text={r.claim_en || r.claim_zh} stacked /></div>
                   <ImpactBox record={r} style={{ marginTop: 6 }} />
                   {r.section && (
                     <button onClick={() => openPreview(docId, r.section)}
@@ -4667,7 +4818,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
                       <div style={{ fontSize: 12, color: P.sub, marginBottom: 4 }}>{t.relatedTo}: <b style={{ color: P.ink }}>{r.related_to}</b></div>
                     )}
                     <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
-                      <ClaimText text={r.claim_en || r.claim_zh} />
+                      <ClaimText text={r.claim_en || r.claim_zh} stacked />
                     </div>
                     <ImpactBox record={r} style={{ marginTop: 10, padding: "10px 14px", borderRadius: 9 }} />
                     {r.section && <div style={{ fontSize: 11.5, color: P.faint, marginTop: 8, fontWeight: 600 }}>{r.section}</div>}

@@ -30,7 +30,11 @@ dist-ssr
 
 # live evaluation reports (they hold questions and answers)
 eval/reports/
+prompts/
 
 # library exports hold company documents: never commit them
 backup*.json
 *-backup-*.json
+
+# editor/tool backup copies
+*.bak

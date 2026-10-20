@@ -5,7 +5,10 @@
 export function splitClaim(text) {
   const s = String(text || "").trim();
   const i = s.indexOf(": ");
-  return i > 0 && i <= 120 ? { name: s.slice(0, i), desc: s.slice(i + 2) } : { name: "", desc: s };
+  if (i > 0 && i <= 120) return { name: s.slice(0, i), desc: s.slice(i + 2) };
+  // Also support a title-only strategy stored as "Title:" with an empty description.
+  if (s.endsWith(":") && s.length > 1 && s.length <= 121) return { name: s.slice(0, -1), desc: "" };
+  return { name: "", desc: s };
 }
 
 /* The reverse: the trimmed combined text that is stored. */

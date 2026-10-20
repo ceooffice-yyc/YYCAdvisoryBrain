@@ -305,6 +305,13 @@ The extraction is a code + AI pipeline in `src/App.jsx` (`extractDocument`). The
 5. **Coverage guarantee** – the code finds every `Title: description` in the document; any title with no record is re-sent once in a recovery call (`findStrategyParas`).
 6. **Fix up in code** – lever and section come from the heading the strategy actually sits under (not the model's guess); descriptions and impacts are restored to the document's **exact original words, at any length** (labelled "Actual Impact / Impact / Financial Impact / Result" paragraphs are used whole); a Power Cash Link is never accepted as an impact (→ `N/A`); look-alike characters are normalised; records are sorted by lever, then document order.
 
+**Two documents skip this pipeline's AI step or change its path:**
+
+- **Numbered collection / receivables playbooks** (`src/collectionExtraction.js`, no AI call). A document about collection or receivables with at least 8 numbered `n.m` items in 3 or more groups is read by code. Sections come from the Word file's own heading styles, so any heading names work; with plain text (no Word styles) they are inferred from the numbering and a few known YYC headings. Every section becomes records (`ar_days`, `framework`) and anything that did not become a record is listed in a notice on the review screen. In plain-text mode, an unnumbered section with an unknown name can be merged into the record above it, so upload the `.docx`. Records already saved do not change: delete the document and upload it again.
+- **Summary-card documents** (two or more `Key Strategy:` lines, `src/summaryCardExtraction.js`). Each card's title is a short label from the first words of the strategy, set by code (`splitStrategy`) rather than by the model.
+
+**Review-screen notices** (`src/extractionNotices.js`): a "Please check before saving" box appears when something was left out. Only the first **60,000 characters** of a document are saved (and so searchable); a longer document gets a warning to split it.
+
 Closed-book chat (`ChatPanel`) retrieves the most relevant documents and passages, asks the model to answer only from them with verbatim evidence, and logs refused questions to the Gap Log.
 
 ---
