@@ -1,5 +1,4 @@
-// Pure helpers for a lever record's text and for the review screen shown after an AI extraction (before the document is saved).
-// No React and no browser APIs here, so they are covered by `npm test`.
+// Plain helpers for a lever record's text and for the review screen after an AI extraction (before saving); no React or browser code, so `npm test` covers them.
 
 /* A record's claim is one text, "Strategy title: description". -> { name, desc } ("name" is empty when there is no title). */
 export function splitClaim(text) {
@@ -18,8 +17,7 @@ export function combineClaim(name, desc) {
   return n ? `${n}: ${d}` : d;
 }
 
-/* Take lever record number `i` out of an extraction. The removed record is remembered (`removed`, newest last) so it can be brought back.
-   Returns a new extraction; the original is not changed. */
+// Takes lever record number `i` out of an extraction and remembers it in `removed` (newest last) so Undo can bring it back; returns a new extraction.
 export function removeLever(extraction, i) {
   const rec = (extraction.levers || [])[i];
   if (!rec) return extraction;
@@ -28,6 +26,16 @@ export function removeLever(extraction, i) {
     levers: extraction.levers.filter((_, k) => k !== i),
     removed: [...(extraction.removed || []), { rec, index: i }],
   };
+}
+
+// Add an empty lever record at the end of an extraction, so the person can type their own on the review screen.
+export function addLever(extraction, lever = "price") {
+  return { ...extraction, levers: [...(extraction.levers || []), { lever, section: "", claim_en: "", claim_zh: "", impact: "N/A", added: true }] };
+}
+
+// A record with no text is never saved (it is what you get if you press "Add" and then change your mind).
+export function hasClaimText(record) {
+  return !!String((record && record.claim_en) || "").trim();
 }
 
 /* Bring back the most recently removed record, in its old position. */

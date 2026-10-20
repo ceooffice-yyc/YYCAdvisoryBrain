@@ -1,5 +1,4 @@
-// Notices shown at the top of the review screen after an extraction: things the person should look at before saving.
-// A notice is { level: "info" | "warn", text }. No React and no browser APIs here, so it is covered by `npm test`.
+// Notices for the top of the review screen (things to check before saving), each { level: "info" | "warn", text }; plain functions, so `npm test` covers them.
 
 // How much of a document is kept when it is saved (the rest is dropped, and so is not searchable or indexed).
 export const FULL_TEXT_LIMIT = 60000;

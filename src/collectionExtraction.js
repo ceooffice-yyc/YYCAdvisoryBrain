@@ -1,18 +1,4 @@
-// Code-only extraction for numbered-outline collection / receivables playbooks (no AI call: a numbered outline can be read exactly by code).
-//
-// HOW SECTIONS ARE FOUND (no list of heading names is needed):
-//   1. the Word file's own heading styles (<h1>-<h3> in the html), when the document comes from Word;
-//   2. otherwise the numbering: the line just before a group's first "5.1 ..." item is that group's heading;
-//   3. plus a few well-known headings of the YYC playbook, so a plain-text paste of it still works.
-// HOW EACH SECTION BECOMES RECORDS (decided from what is inside it):
-//   numbered  each "1.1 Title" / "24.3 Title" item is one record; an introduction before the first item is kept (as a record named like the
-//             section) only when it contains a list, and dropped when it is a sentence or two
-//   single    no numbered items: the whole section is one record titled with the section name
-//   stages    "Stage 1: Prevent" / "Step 2: ..." lines each start a record
-//   table     the section holds a table: one record, one readable line per row
-//   internal  "Win the Internal War First" only keeps the practices that follow "The internal war is won when:" (as it always did)
-// Every record is lever ar_days (the whole document is about collection); the review screen lets the person change a lever or remove a record.
-// The result also carries `notices`: text that did NOT become a record, so nothing is left out silently.
+// Reads a numbered collection / receivables playbook with plain code (no AI), taking section names from the Word headings, else the numbering, and turns each section into ar_days records.
 
 const TOPICS = [
   { re: /collection|receivables?|debt recovery|credit control/i, lever: "ar_days", industry: "Professional Services", industry_main: "Services", industry_sub: "Professional Services", problem_signature: "Collection performance, billing, and debt recovery", fallbackTitle: "AR Collection Framework", docType: "framework" },
@@ -141,10 +127,7 @@ function introHasList(lines) {
   return i >= 0 && lines.slice(i + 1).filter((l) => wc(l) <= 14).length >= 2;
 }
 
-/**
- * Read the playbook. `html` (optional) is the Word file's html: it gives the real heading styles and the table shapes.
- * Returns the same shape as an AI extraction, plus `notices` (what was not turned into records).
- */
+// Reads the playbook with plain code: pass the Word html if you have it (real headings and table shapes), and anything that did not become a record comes back as a notice.
 export function extractCollectionFrameworkRecords(source, title = "", html = "") {
   const paras = String(source || "").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   const topic = TOPICS.find((x) => x.re.test(`${title} ${String(source || "").slice(0, 900)}`)) || TOPICS[0];
@@ -188,8 +171,7 @@ export function extractCollectionFrameworkRecords(source, title = "", html = "")
     const flush = () => {
       if (!current) return;
       let impact = "N/A";
-      // Word keeps a soft line break inside one paragraph, but it reaches us with nothing between the lines ("...tight.”YYC: ..."):
-      // put each speaker of a dialogue back on its own line
+      // Word drops its soft line breaks, so a dialogue arrives as one glued line ("...tight.”YYC: ..."); put each speaker back on their own line
       const lines = current.lines.map((l) => l.text).flatMap((line) => {
         const found = String(line).match(OUTCOME);
         if (found) { impact = found[0]; const rest = String(line).replace(OUTCOME, "").trim(); return rest ? [rest] : []; }

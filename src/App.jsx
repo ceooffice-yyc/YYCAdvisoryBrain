@@ -4,7 +4,7 @@ import { tokenizeQuery } from "../server/ask/text.js"; // the Ask the Brain pipe
 import { isSmallTalk } from "../server/ask/router.js";
 import { runAsk } from "../server/ask/pipeline.js";
 import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
-import { splitClaim, removeLever, undoRemoveLever } from "./claim.js";
+import { splitClaim, removeLever, undoRemoveLever, addLever, hasClaimText } from "./claim.js";
 import ClaimFields from "./ClaimFields.jsx";
 import { extractCollectionFrameworkRecords, detectOutlineDocument } from "./collectionExtraction.js";
 import { FULL_TEXT_LIMIT, saveLimitNotice, withNotices } from "./extractionNotices.js";
@@ -318,6 +318,8 @@ const T = {
     bulkWaiting: "Rate-limit pacing — next document in",
     bulkReviewBtn: "Review & save",
     bulkRetry: "Retry",
+    bulkDiscard: "Discard",
+    bulkDiscardHint: "Remove this file and its extraction from the list (nothing has been saved)",
     bulkDoneAll: "Queue finished — review and save each document above.",
     backToLibrary: "Back to library",
     statusPending: "queued",
@@ -454,6 +456,8 @@ const T = {
     bulkWaiting: "限速等待——下一份文件还有",
     bulkReviewBtn: "核对并保存",
     bulkRetry: "重试",
+    bulkDiscard: "放弃",
+    bulkDiscardHint: "从列表中移除此文件及其提取结果(尚未保存任何内容)",
     bulkDoneAll: "队列完成——请逐份核对并保存。",
     backToLibrary: "返回知识库",
     statusPending: "排队中",
@@ -1551,7 +1555,7 @@ function leverHeadingRaw(p) {
   }
   if (words <= 8 && /^(other\b[^.]*strateg|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i.test(x)) return x;
   // a short line that ends with a colon and names strategies/growth is a group heading ("Additional Cash & Growth Strategies:")
-  if (words <= 8 && /:\s*$/.test(String(p || "").trim()) && /\b(strateg(y|ies)|growth)\b/i.test(x)) return x;
+  if (words <= 8 && /:\s*$/.test(String(p || "").trim()) && /\b(strateg(y|ies)|growth)\b/i.test(x) && !/^(?:its|their|this|these|those|it|they|we|our)\b/i.test(x)) return x; // "Its growth model therefore combines:" is a sentence, not a heading
   return null;
 }
 // numbering ("4. Acquisition Criteria") is not part of the heading's name
@@ -1564,14 +1568,26 @@ const isHeadingAt = (arr, i) => !!leverHeadingOf(arr[i]) && !(i > 0 && /:\s*$/.t
    "4. Acquisition Criteria", "5. Post-Acquisition Strategy", "6. What <Company> Brings to Acquired Companies".
    Matching is on the WHOLE heading line, never on a keyword somewhere in the text, so an ordinary case study that merely
    mentions an acquisition (Build A Bear's UK acquisition, an "acquisition engine") is NOT treated as an M&A document. */
-const MNA_SECTION_RE = /^(?:\d+\s*[.)]?\s*)?(?:(?:acquisition\s+)?m\s*&\s*a\s+(?:appetite|criteria|approach|thesis|strategy(?:\s+summary)?)|acquisition\s+(?:criteria|appetite|approach)|post[- ]?(?:acquisition|merger|deal)\s+(?:strategy|approach|integration|model)|what\s+.{1,50}?\s+brings?\s+to\s+(?:acquired|portfolio|target)\s+(?:compan(?:y|ies)|businesses))\s*:?\s*$/i;
+const MNA_SECTION_RE = /^(?:\d+\s*[.)]?\s*)?(?:(?:acquisition\s+)?m\s*&\s*a\s+(?:appetite|criteria|approach|thesis|strategy(?:\s+summary)?)(?:\s*(?:&|and)\s+[A-Za-z][A-Za-z ]{2,40})?|acquisition\s+(?:criteria|appetite|approach)|post[- ]?(?:acquisition|merger|deal)\s+(?:strategy|approach|integration|model)|what\s+.{1,50}?\s+(?:brings?|provides?|offers?|gives?)\s+to\s+(?:acquired|portfolio|target)\s+(?:compan(?:y|ies)|businesses))\s*:?\s*$/i;
 function mnaSectionKind(p) {
   const label = String(p || "").trim().replace(/^\s*\d+\s*[.)]\s*/, "").replace(/[:：]\s*$/, "");
   if (!MNA_SECTION_RE.test(label)) return "";
   if (/criteria/i.test(label)) return "criteria";
   if (/post/i.test(label)) return "post_acquisition";
-  if (/brings?\s+to/i.test(label)) return "company_support";
+  if (/(?:brings?|provides?|offers?|gives?)\s+to/i.test(label)) return "company_support";
   return "appetite";
+}
+
+// Which M&A sections are lists of numbered, titled items ("6.1 …", "6.2 …")? Those get one record per item; only an untitled list under "What <Company> Brings…" is folded into one.
+function mnaNumberedKinds(body) {
+  const counts = {};
+  let kind = "";
+  for (const p of String(body || "").split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean)) {
+    const k = mnaSectionKind(p);
+    if (k) { kind = k; continue; }
+    if (kind && /^\d+\.\d+\s+\S/.test(p) && p.length <= 120) counts[kind] = (counts[kind] || 0) + 1;
+  }
+  return new Set(Object.keys(counts).filter((k) => counts[k] >= 2));
 }
 
 /* The lever is decided by the HEADING a strategy sits under, not by how the strategy "sounds" (e.g. a USP or brand-value
@@ -1591,6 +1607,8 @@ const HEADING_LEVER = [
   [/^(other\b|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i, "others"], // "Other Strategies…", "Strategies Used to Grow X", "Shareholder Strategy"
 ];
 const leverFromHeading = (h) => { const x = String(h || "").trim(); const hit = [...EXTRA_HEADING_LEVER, ...HEADING_LEVER].find(([re]) => re.test(x)); return hit ? hit[1] : null; };
+// outline numbering in front of a title: "4." / "4)" / "3.2" / "3.2." (a year such as "2024 results" is not numbering)
+const stripItemNumber = (s) => String(s || "").replace(/^\s*(?:\d+(?:\.\d+)+\s*[.)]?|\d+\s*[.)])\s*/, "");
 const isTitleLike = (p) => { const t = p.trim(); return t.length <= 80 && !/\n/.test(t) && !/[.!?]$/.test(t); };
 
 function chunkMaterial(text, size = 3800) {
@@ -1817,7 +1835,7 @@ function scopeMnaSections(text) {
       selected.push(para);
       continue;
     }
-    const isSummary = /^(?:summary\b|conclusion\b|key takeaway\b|catcha.{0,8}m\s*&\s*a\s+model\s+in\s+one\s+line\b)/i.test(para.replace(/^\s*\d+\s*[.)]\s*/, ""));
+    const isSummary = /^(?:summary\b|conclusion\b|key takeaway\b|[^\n]{0,30}?\bm\s*&\s*a\s+model\s+in\s+one\s+line\b)/i.test(para.replace(/^\s*\d+\s*[.)]\s*/, ""));
     if (active && isSummary) { active = false; activeSection = ""; activeNumber = null; continue; }
     const numberedHeading = para.match(/^\s*(\d+)\s*[.)]\s+(.+)$/);
     // Acquisition criteria often contain numbered criteria (1–6); those belong
@@ -1846,7 +1864,9 @@ function findStrategyParas(body) {
     const p = paras[i];
     if (isHeadingAt(paras, i)) { heading = leverHeadingOf(p); continue; }
     const m = p.match(/^([A-Za-z0-9"“‘'][^:\n]{2,299}?):\s+\S/);
-    if (!m || LABEL_PARA.test(p) || wordCount(m[1]) > 45 || m[1].split(/[\s-]+/).filter(Boolean).length < 2) continue; // "Buy-and-Build" is a title; a one-word "Roy:" bullet is not
+    // "Buy-and-Build" is a title; a one-word "Roy:" bullet is not, except a one-word label ("Packaging") that heads a block of lines under Product Differentiation
+    const labelBlock = leverFromHeading(heading) === "product_differentiation" && /\n/.test(p);
+    if (!m || LABEL_PARA.test(p) || wordCount(m[1]) > 45 || (m[1].split(/[\s-]+/).filter(Boolean).length < 2 && !labelBlock)) continue;
     let full = p;
     for (let j = i + 1; j < paras.length && LABEL_PARA.test(paras[j]); j++) full += "\n\n" + paras[j];
     out.push({ title: m[1].trim(), heading, text: full });
@@ -1860,8 +1880,59 @@ const TITLE_COLON = /^[A-Za-z0-9"“‘'][^:\n]{2,299}?:\s+\S/;
    - drops leftover table-template cells ("What Sweetwater Did") that look like titles;
    - rewrites the table layout  [title line] + [description paragraph]  as  "Title: description",
      so every strategy has ONE shape and the model never has to guess where a strategy starts. */
+// the paragraphs of a body, plus whether the document left an extra empty paragraph in front of each one (it marks a new group of lines)
+function readParas(body) {
+  const pieces = String(body || "").split(/(\n\s*\n)/);
+  const raw = [], bigGap = [];
+  for (let k = 0; k < pieces.length; k += 2) {
+    const t = pieces[k].trim();
+    if (!t) continue;
+    raw.push(t);
+    bigGap.push(k > 0 && (pieces[k - 1].match(/\n/g) || []).length >= 3);
+  }
+  return { raw, bigGap };
+}
+
+/* A numbered strategy ("1. Lean into Strengths"), its intro sentence ending in ":" and the "Label: point" lines under it are ONE strategy; the points only support it. */
+function supportGroupAt(raw, i) {
+  const p = raw[i], intro = raw[i + 1];
+  if (!p || !intro || !/^\d+\s*[.)]\s*\S/.test(p) || /^\d+\.\d/.test(p) || /\n/.test(p) || p.length > 140 || /[.!?:]$/.test(p) || wordCount(p) > 20) return null;
+  if (!/:$/.test(intro) || wordCount(intro) < 6 || TITLE_COLON.test(intro) || LABEL_PARA.test(intro)) return null;
+  const children = [];
+  for (let j = i + 2; j < raw.length; j++) {
+    const q = raw[j];
+    if (!TITLE_COLON.test(q) || LABEL_PARA.test(q) || isHeadingAt(raw, j) || /^\d+\s*[.)]\s*\S/.test(q)) break;
+    children.push(q);
+  }
+  if (!children.length) return null;
+  const title = stripItemNumber(p).trim();
+  return { title, intro, children, text: `${title}: ${intro}\n${children.join("\n")}`, end: i + 1 + children.length };
+}
+function findSupportGroups(body) {
+  const { raw } = readParas(body);
+  const groups = [];
+  for (let i = 0; i < raw.length; i++) { const g = supportGroupAt(raw, i); if (g) { groups.push(g); i = g.end; } }
+  return groups;
+}
+// If the model still made a record of each supporting point, fold them back into the one numbered strategy they belong to.
+function foldSupportGroups(levers, groups) {
+  let out = levers.slice();
+  for (const g of groups) {
+    const kidNames = new Set(g.children.map((c) => normWs(c.split(/:\s/)[0])));
+    const isKid = (l) => kidNames.has(normWs(splitClaim(l.claim_en).name));
+    const kids = out.filter(isKid);
+    if (!kids.length) continue;
+    const hasParent = out.some((l) => normWs(splitClaim(l.claim_en).name).startsWith(normWs(g.title).slice(0, 25)));
+    const best = kids.find((l) => l.impact && l.impact !== "N/A");
+    if (hasParent) { out = out.filter((l) => !isKid(l)); continue; }
+    const first = kids[0];
+    out = out.filter((l) => l === first || !isKid(l)).map((l) => (l === first ? { ...l, claim_en: `${g.title}: ${g.intro}`, impact: (best && best.impact) || l.impact || "N/A" } : l));
+  }
+  return out;
+}
+
 function normalizeParas(body) {
-  const raw = String(body || "").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const { raw, bigGap } = readParas(body);
   const out = [];
   let curLever = null; // lever of the heading we are currently under
   const shortPlain = (q) => q.length <= 80 && !/\n/.test(q) && !/[.!?:]$/.test(q);
@@ -1869,6 +1940,23 @@ function normalizeParas(body) {
     const p = raw[i], next = raw[i + 1];
     if (isHeadingAt(raw, i)) curLever = leverFromHeading(leverHeadingOf(p));
     if (/^what\b.{0,40}\bdid$/i.test(p)) continue; // leftover table-template cell
+    // a numbered strategy + its intro sentence + labelled supporting points = ONE strategy
+    const support = supportGroupAt(raw, i);
+    if (support) { out.push(support.text); i = support.end; continue; }
+    // Product Differentiation often lists plain lines instead of title + paragraph: a short label (3 words or fewer, like "Packaging") keeps the lines under it as one strategy, anything else becomes one strategy per line, and the document's own empty paragraph ends a group.
+    if (curLever === "product_differentiation" && !leverHeadingOf(p) && !/[.!?:]$/.test(p) && !/\n/.test(p) && wordCount(p) <= 45 && !TITLE_COLON.test(p) && !LABEL_PARA.test(p)
+        && next && wordCount(next) <= 12 && !bigGap[i + 1] && !isHeadingAt(raw, i + 1) && !TITLE_COLON.test(next) && !LABEL_PARA.test(next) && !(out.length && /:$/.test(out[out.length - 1]))) {
+      const run = [p];
+      for (let j = i + 1; j < raw.length; j++) {
+        const q = raw[j];
+        if (bigGap[j] || isHeadingAt(raw, j) || TITLE_COLON.test(q) || LABEL_PARA.test(q) || /:$/.test(q) || /\n/.test(q) || wordCount(q) > 45) break;
+        run.push(q);
+      }
+      if (wordCount(p) <= 3) out.push(`${p}: ${run.slice(1).join("\n")}`);
+      else run.forEach((line) => { const m = line.match(/^(.{3,80}?)\s*\((.{3,})\)\s*\.?$/); out.push(m ? `${m[1].trim()}: ${m[2].trim()}` : `${line}: ${line}`); });
+      i += run.length - 1;
+      continue;
+    }
     // numbered GROUP heading ("1.Understand the Business Well") directly above "Title: description" paragraphs: not a strategy
     if (out.length && /^\d+\s*[.)]\s*\S/.test(p) && next && TITLE_COLON.test(next) && !/^problem\b/i.test(next)) continue;
     // a description may itself contain a colon ("…three needs at once: parents wanted…"), so a colon in `next` does not disqualify it
@@ -1884,7 +1972,7 @@ function normalizeParas(body) {
     const prev = out[out.length - 1];
     const afterBullet = prev && ((shortPlain(prev) && !leverHeadingOf(prev)) || /:$/.test(prev)); // also: the line after a list intro ("They settled on:") is a list item
     if (titleLine && (nextIsProse || shortMnaEvidence) && !afterBullet && !leverHeadingOf(p) && !/^(analysis|power cash)/i.test(p)) {
-      out.push(`${p.replace(/^\d+\s*[.)]\s*/, "")}: ${next}`);
+      out.push(`${stripItemNumber(p)}: ${next}`);
       i++;
       continue;
     }
@@ -1952,13 +2040,13 @@ const mnaIsIntro = (p) => /:\s*$/.test(String(p || "").trim());
 // prose = a real paragraph, not a list item: 8+ words, not a list intro, and either ends like a sentence, contains a sentence break, or is long
 const mnaIsProse = (p) => { const t = String(p || "").trim(); return wordCount(t) >= 8 && !/[:;]$/.test(t) && (/[.!?]["”’']?$/.test(t) || /[.!?]\s+[A-Z“"]/.test(t) || wordCount(t) >= 14); };
 const mnaTitleCase = (p) => {
-  const sig = String(p || "").replace(/^\s*\d+\s*[.)]\s*/, "").split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w));
+  const sig = stripItemNumber(p).split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w));
   return sig.length > 0 && sig.every((w) => w.split("-").every((part) => !part || MNA_SMALL_WORDS.has(part.toLowerCase()) || /^[A-Z0-9“"(]/.test(part)));
 };
 function mnaIsTitleAt(paras, i) {
   const p = paras[i], prev = paras[i - 1], next = paras[i + 1];
   if (!next || !mnaIsShort(p)) return false;
-  if (/^\d+\s*[.)]\s*\S/.test(p)) return true; // numbered criterion
+  if (stripItemNumber(p) !== p.trim()) return true; // numbered criterion ("5. Title", "3.2 Title")
   if (!mnaTitleCase(p)) return false;
   if (mnaIsProse(next) && !(prev && mnaIsIntro(prev))) return true;
   if (mnaIsIntro(next) && wordCount(next) >= 6 && !(prev && mnaIsIntro(prev))) return true;
@@ -1978,8 +2066,10 @@ function structureMnaParas(body) {
   for (let i = 0; i < paras.length; i++) {
     const p = paras[i];
     if (isHeadingAt(paras, i)) { flush(); out.push(p); continue; }
+    // a short "Label: value" line inside a numbered item ("Target acquisition multiple: approximately 8× EBITDA") is part of that item
+    if (cur && cur.numbered && TITLE_COLON.test(p) && wordCount(p) <= 12 && !LABEL_PARA.test(p)) { cur.lines.push(p); continue; }
     if (TITLE_COLON.test(p) && !LABEL_PARA.test(p)) { flush(); cur = { raw: p, lines: [] }; continue; }
-    if (mnaIsTitleAt(paras, i)) { flush(); cur = { title: p.replace(/^\s*\d+\s*[.)]\s*/, "").trim(), lines: [] }; continue; }
+    if (mnaIsTitleAt(paras, i)) { flush(); cur = { title: stripItemNumber(p).trim(), numbered: stripItemNumber(p) !== p.trim(), lines: [] }; continue; }
     if (!cur) cur = { title: "", lines: [] };
     cur.lines.push(p);
   }
@@ -2066,6 +2156,7 @@ export async function extractDocument(text, title, customLevers = [], html = "")
   const isSummaryCardDocument = !isMnaDocument && !isCollectionFramework && (String(text || "").match(/^\s*Key Strategy\s*[:：]/gim) || []).length >= 2;
   const scoped = isMnaDocument ? scopeMnaSections(text) : isCollectionFramework ? scopeCollectionFramework(text) : scopeMaterial(text);
   const { context, body: rawBody } = scoped;
+  const mnaTitledSupport = isMnaDocument && mnaNumberedKinds(rawBody).has("company_support"); // "6.1 …", "6.2 …": one record each, not one for the whole section
     const bodyParas = isMnaDocument ? structureMnaParas(rawBody) : normalizeParas(rawBody);
   const body = bodyParas.join("\n\n");
   // Keep the full in-scope source. A fixed character cap silently removed later strategies
@@ -2161,6 +2252,7 @@ ${context}
   /* COVERAGE GUARANTEE — the model sometimes quietly skips a strategy (esp. ones with only a Power Cash Link and no
      Actual Impact). Find every "Title: description" paragraph in the strategy part of the document; any title without a
      record gets re-sent, alone with its own paragraphs, in ONE recovery call. */
+  if (!isMnaDocument && !isCollectionFramework) merged.levers = foldSupportGroups(merged.levers, findSupportGroups(rawBody)); // "1. Strategy" + labelled points = one record
   const have = () => merged.levers.map((l) => normWs(l.claim_en));
   const missing = (isCollectionFramework ? [] : findStrategyParas(body)).filter((p) => {
     const probe = normWs(p.title).slice(0, 25);
@@ -2284,7 +2376,7 @@ ${context}
       const impSents = [...descSents, ...paras.slice(1).filter((q) => !/^power\s+cash\s+link/i.test(q)).flatMap((q) => sentencesOf(stripImpactLabel(q)))];
       const labelled = paras.slice(1).filter((q) => /^(actual\s+impacts?|impacts?|financial\s+impact|results?)\b[^:：\n]{0,30}[:：]/i.test(q));
       // M&A "What <Company> Brings…" section = ONE record: the block's own introductory phrase as the title, the whole block (every list item) as the description
-      if (isMnaDocument && mnaSectionKind(l.section) === "company_support") {
+      if (isMnaDocument && !mnaTitledSupport && mnaSectionKind(l.section) === "company_support") {
         const introTitle = TITLE_COLON.test(paras[0]) ? paras[0].match(/^([^:\n]{2,299}?):/)[1].trim() : name;
         const whole = descSents.join(" ");
         return { ...l, claim_en: introTitle ? `${introTitle}: ${whole}` : whole, impact: "N/A" };
@@ -2346,7 +2438,7 @@ ${context}
       if (/model\s+in\s+one\s+line|^\s*summary\b/i.test(l.section || "")) return false;
       return true;
     })
-    .filter((l, i, arr) => !isMnaDocument || mnaSectionKind(l.section) !== "company_support" || arr.findIndex((x) => mnaSectionKind(x.section) === "company_support") === i)
+    .filter((l, i, arr) => !isMnaDocument || mnaTitledSupport || mnaSectionKind(l.section) !== "company_support" || arr.findIndex((x) => mnaSectionKind(x.section) === "company_support") === i)
     // enforce the "verbatim" rule: drop a quote the model paraphrased or invented
     .map((l) => (l.quote && !src.includes(normWs(l.quote)) ? { ...l, quote: "" } : l))
     // keep the document's own order (recovered strategies are appended last by the coverage check)
@@ -2420,7 +2512,7 @@ When a strategy clearly matches a custom lever's definition, or sits under one o
   const isMnaDoc = !!forceMna; // decided in code from the document's section headings, not by keywords in the chunk
   const isCollectionDoc = !!forceCollectionFramework;
   const mnaRules = isMnaDoc ? `
-M&A DOCUMENT MODE. The material was prefiltered in code to these sections only: "M&A Appetite", "Acquisition Criteria", "Post-Acquisition Strategy" and "What [Company] Brings to Acquired Companies" (headings may be numbered). Extract NOTHING from the background block or from anything outside those sections. No "Key Strategies" heading is needed: in an M&A document a strategy is an explicit acquisition action, policy, target-selection criterion, deal structure or operating approach.
+M&A DOCUMENT MODE. The material was prefiltered in code to these sections only: "M&A Appetite" (the heading may continue, e.g. "M&A Appetite & Capital Allocation"), "Acquisition Criteria", "Post-Acquisition Strategy" and "What [Company] Brings/Provides to Acquired Companies" (headings may be numbered). Extract NOTHING from the background block or from anything outside those sections. No "Key Strategies" heading is needed: in an M&A document a strategy is an explicit acquisition action, policy, target-selection criterion, deal structure or operating approach.
 
 HOW THE MATERIAL IS LAID OUT (already structured for you by code):
 - A strategy or criterion is ONE paragraph that starts with "Title: text". Every further line inside that paragraph (sentences, quote lines, list items, bullet fragments) belongs to THAT SAME strategy — it is its description.
@@ -2430,7 +2522,7 @@ HOW THE MATERIAL IS LAID OUT (already structured for you by code):
 RULES:
 1. One record per "Title: text" paragraph — every numbered criterion and every appetite point gets its own record; do not skip any. Never create a record from a quote line, a list item or a bullet that sits inside a paragraph (for example a quoted remark, "Valuation" / "People / Culture Fit" in a list of reasons, or "Catcha HQ;" in a list of sourcing channels). A list that only introduces sources ("Acquisition opportunities may come from:") is part of its strategy's description, not a separate record.
 2. strategy_name = the title text without its outline numbering (for example "10.2 Long-Term Ownership" becomes "Long-Term Ownership"). Copy the remaining title text faithfully into strategy_name; never include the number or repeat the title at the start of description. Document section headings are labels only, not strategies: do not create a lever record from a main heading such as "Acquisition Criteria" or "Post-Acquisition Strategy". Use the exact section heading (without its number) as "section"; never substitute a lever word such as "Valuation" for a heading.
-3. Untitled block: extract the explicit approach or policy it states. strategy_name must be a short phrase copied word for word from that block (for example its opening words) — never an invented label such as "Decentralized Operating Model" unless those exact words appear. Role labels ("Operating Companies", "[Company] HQ") and bullets under them are parts of ONE operating model: create ONE record for a coordinated approach (a decentralized model with its role split; a support offering with its list of capabilities). Only a separate, explicit learning or policy in the same block (for example "not every acquisition needs to be fully integrated") may be its own record. Under a "What [Company] Brings…" heading create at most ONE record, titled with the block's introductory phrase, with the full list and every sentence kept together.
+3. Untitled block: extract the explicit approach or policy it states. strategy_name must be a short phrase copied word for word from that block (for example its opening words) — never an invented label such as "Decentralized Operating Model" unless those exact words appear. Role labels ("Operating Companies", "[Company] HQ") and bullets under them are parts of ONE operating model: create ONE record for a coordinated approach (a decentralized model with its role split; a support offering with its list of capabilities). Only a separate, explicit learning or policy in the same block (for example "not every acquisition needs to be fully integrated") may be its own record. Under a "What [Company] Brings…" (or "Provides…") heading whose material is an UNTITLED list, create at most ONE record, titled with the block's introductory phrase, with the full list and every sentence kept together; if that heading holds numbered, titled items (6.1, 6.2 …), each titled item is its own record (rule 1).
 4. description = the complete original text of the paragraph, exact words and order (this includes list items and quoted remarks inside it), minus only the sentence(s) that report a realised result.
 5. impact = a sentence that reports a result that actually happened (for example revenue that was multiplied after an acquisition). Counts or ratios that merely support a policy ("1 company out of every 100 reviewed") stay in the description. If no realised result is stated, impact = "N/A". Never use theory or Power Cash Link text as impact.
 6. Do not make a strategy from company size, revenue/EBITDA figures, sector descriptions, deal counts, aspirations or capabilities. Ignore a concluding one-line summary that only repeats strategies already stated.
@@ -2464,6 +2556,8 @@ RULES:
     (iii) Short noun-phrase titles, e.g. "Find-A-Bear identification system" then its description
   Every such title inside an in-scope heading (Pricing … Talent Strategy, Other Strategies) is a strategy — even short ones and ones that repeat a title used under another lever.
     (iv)  OUTLINE: a short title line (no colon) followed by several short lines or bullets — e.g. "Avoid 50:50 ownership" then lines about the ownership split; "Divide roles clearly" then "Roy: …" / "Ryan: …". The title is ONE strategy; the lines under it are that strategy's description (copy their own words, in order — do not summarise). Do NOT make a separate record from each bullet ("Roy: …", "Ryan: …", "Equity was not given for free…").
+    (v)   PRODUCT DIFFERENTIATION LISTS: under "Product Differentiation" the document often only lists what makes the product different, as plain lines with no action verb and no "Actual Impact" — e.g. a label "Packaging" with lines "Colourful, fun, bright, playful" / "Some have transparent packaging…", then lines such as "Selling high quality and fresh products", "Fast delivery (within 1-2 days)", "Good & personalised shopping experience (…)". These ARE the strategies of that heading; never skip them for lacking a decision verb. One record per label (its lines are the description) and one record per remaining line that names a separate differentiator (a parenthesis after it stays with it). strategy_name = the label or the line's own opening words, copied exactly; impact "N/A" unless an Actual Impact is attached. Never merge different differentiators into one record.
+    (vi)  NUMBERED STRATEGY WITH SUPPORTING POINTS: one paragraph "Title: intro sentence ending in a colon" followed by lines of the form "Label: point" (e.g. "Lean into Strengths (…): Jeff recognized … :" then "Recognizing Personal Strengths: …" and "Stepping Down as CEO: …"). The FIRST title is the ONE strategy; the labelled lines are its supporting points and belong in its description. Never make a separate record from a supporting point's label.
   The SAME title under TWO different lever headings (e.g. "Simplify the Manufacturing Experience" under Cost of Goods Sold AND under Overhead) is NOT a duplicate: the descriptions explain different lever effects, so output one record under EACH heading.`;
   const formatB = `FORMAT B — SUMMARY CARD with labelled fields:
   <Company> (<Industry> / <Person>)
@@ -2798,6 +2892,13 @@ function KnowledgePanel({
     }
   };
 
+  // throw one file out of the bulk list (its extraction is not saved anywhere, so nothing else to clean up)
+  const discardBulkItem = (itemId) => {
+    const remaining = bulkItems.filter((x) => x.id !== itemId);
+    setBulkItems(remaining);
+    if (!remaining.length && !bulkRunning) setMode("list");
+  };
+
   const reviewBulkItem = (itemId) => {
     const it = bulkItems.find((x) => x.id === itemId);
     if (!it || !it.extraction) return;
@@ -2847,8 +2948,9 @@ function KnowledgePanel({
       };
       const records = [];
       (extraction.levers || []).forEach((lr) => {
-        if (leverKeys.includes(lr.lever) && !lr.skip) {
+        if (leverKeys.includes(lr.lever) && !lr.skip && hasClaimText(lr)) {
           const { skip, ...clean } = lr;
+          delete clean.added; // only marks a record typed in by hand on the review screen
           records.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
         }
       });
@@ -3220,6 +3322,12 @@ function KnowledgePanel({
     // take a record out before saving (it can be brought back with Undo); nothing is saved until "Save"
     const dropRecord = (i) => { setExtraction((x) => removeLever(x, i)); setReviewEpoch((n) => n + 1); };
     const restoreRecord = () => { setExtraction((x) => undoRemoveLever(x)); setReviewEpoch((n) => n + 1); };
+    // add an empty record at the bottom and scroll to it, so you can type your own
+    const addRecord = () => {
+      const at = (extraction.levers || []).length;
+      setExtraction((x) => addLever(x));
+      setTimeout(() => document.getElementById(`review-record-${at}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+    };
 
     return (
       <div>
@@ -3262,8 +3370,13 @@ function KnowledgePanel({
             </div>
           ))}
 
-          <div style={{ fontWeight: 750, fontSize: 14, marginTop: 20, color: P.maroon }}>
-            {t.leverRecords} <span style={{ color: P.faint }}>({(extraction.levers || []).length})</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
+            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroon }}>
+              {t.leverRecords} <span style={{ color: P.faint }}>({(extraction.levers || []).length})</span>
+            </div>
+            <button className="yyc-btn-secondary" onClick={addRecord} style={{ padding: "6px 12px", fontSize: 12 }}>
+              <Icon name="plus" size={12} /> {t.addRecord.replace("+ ", "")}
+            </button>
           </div>
           {(extraction.removed || []).length > 0 && (
             <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: P.wash, border: `1px solid ${P.lineDark}`, fontSize: 12.5, display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
@@ -3273,7 +3386,7 @@ function KnowledgePanel({
           )}
           {(extraction.levers || []).map((l, i) => {
             return (
-            <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", borderTop: i ? `1px solid ${P.line}` : "none", padding: "12px 0", opacity: l.skip ? 0.45 : 1 }}>
+            <div id={`review-record-${i}`} key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", borderTop: i ? `1px solid ${P.line}` : "none", padding: "12px 0", opacity: l.skip ? 0.45 : 1 }}>
               <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "3px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
                 {leverTag(t, l)}
               </span>
@@ -3405,6 +3518,11 @@ function KnowledgePanel({
               {it.status === "error" && !bulkRunning && (
                 <button className="yyc-btn-secondary" style={{ padding: "6px 14px", fontSize: 12.5 }} onClick={() => retryBulkItem(it.id)}>
                   {t.bulkRetry}
+                </button>
+              )}
+              {(it.status === "done" || it.status === "error" || (it.status === "pending" && !bulkRunning)) && (
+                <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.red }} onClick={() => discardBulkItem(it.id)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
+                  <Icon name="trash" size={13} /> {t.bulkDiscard}
                 </button>
               )}
             </div>

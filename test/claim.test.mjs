@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitClaim, combineClaim, removeLever, undoRemoveLever } from '../src/claim.js';
+import { splitClaim, combineClaim, removeLever, undoRemoveLever, addLever, hasClaimText } from '../src/claim.js';
 
 test('claim text: split and combine are inverses for tidy text', () => {
   assert.deepEqual(splitClaim('Premium pricing: Charge more for value'), { name: 'Premium pricing', desc: 'Charge more for value' });
@@ -53,4 +53,24 @@ test('review: the removal list lives on the extraction, never inside a record, s
   const y = removeLever(sample(), 0);
   assert.ok(y.levers.every((l) => !('removed' in l)));
   assert.ok(!JSON.stringify(y.levers).includes('removed'));
+});
+
+test('review: adding a record appends an empty one at the end and leaves the others alone', () => {
+  const before = sample();
+  const after = addLever(before);
+  assert.equal(after.levers.length, before.levers.length + 1);
+  assert.deepEqual(after.levers.slice(0, before.levers.length), before.levers);
+  assert.equal(after.levers[after.levers.length - 1].claim_en, '');
+  assert.equal(after.levers[after.levers.length - 1].impact, 'N/A');
+  assert.equal(before.levers.length, sample().levers.length); // the original is not changed
+  assert.equal(addLever({}).levers.length, 1);
+});
+
+test('review: a record with no text is not saved, a typed one is, and Undo still works around an added record', () => {
+  const x = addLever(sample());
+  assert.equal(hasClaimText(x.levers[x.levers.length - 1]), false);
+  assert.equal(hasClaimText({ claim_en: '   ' }), false);
+  assert.equal(hasClaimText({ claim_en: 'My idea: do it' }), true);
+  const y = undoRemoveLever(removeLever(x, 0));
+  assert.deepEqual(y.levers, x.levers);
 });

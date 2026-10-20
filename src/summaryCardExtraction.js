@@ -28,15 +28,7 @@ function tidyTitle(value) {
   return t.trim();
 }
 
-/**
- * Split one "Key Strategy" sentence into a SHORT title and the rest of its own words. Pure code, so the result is the same every time:
- *  1. a natural separator (\u2014 \u2013 ; :) after a lead of up to 10 words  -> the lead is the title, the separator is dropped
- *  2. a sentence of 8 words or fewer                               -> the whole sentence is the title
- *  3. a comma after a lead of 3-8 words                             -> the lead is the title
- *  4. a joining word (funded, focused, per, and, ...) in words 3-10 -> the title is what comes before it
- *  5. otherwise the first 8 words, never ending on "of", "the", "and"...
- * Only punctuation at the cut is removed: every word of the sentence is kept, in order, between title and description.
- */
+// Splits one "Key Strategy" sentence into a short title and the rest of its own words (a dash or colon, a short sentence, a comma, a joining word like "funded", else the first 8 words); only the cut punctuation is dropped, so every word stays, in order.
 export function splitStrategy(source) {
   const text = cleanField(source);
   if (!text) return { title: "", description: "" };
@@ -124,8 +116,7 @@ export function restoreSummaryStrategyCards(levers, cards) {
     else best = null;
     const base = best?.candidate.lever || { lever: "others", other_category: "uncategorized", related_to: "case study strategy" };
     const matchedTitle = best?.candidate.lever.claim_en?.match(/^(.{1,120}?):\s/)?.[1]?.trim();
-    // The model's title is used only when it is short and really is the opening words of the sentence; anything else (a whole sentence, a
-    // paraphrase) is replaced by the code's own split, so every record gets a short title and no leftover punctuation.
+    // Use the model's title only if it is short and really is the opening words of the sentence; otherwise the code's own split wins, so every record gets a short, clean title.
     const modelTitleOk = matchedTitle && wordsOf(matchedTitle).length <= MAX_TITLE_WORDS && normalized(card.strategy).startsWith(normalized(matchedTitle));
     const title = modelTitleOk ? tidyTitle(matchedTitle) : card.title;
     const description = modelTitleOk ? tidyDescription(wordsOf(card.strategy).slice(wordsOf(matchedTitle).length).join(" ")) : card.description;
