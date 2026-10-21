@@ -56,6 +56,23 @@ export function splitStrategy(source) {
   return { title: tidyTitle(words.slice(0, cut).join(" ")), description: tidyDescription(words.slice(cut).join(" ")) };
 }
 
+const wordKey = (w) => String(w || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5); // "pricing" and "price" share a key, so a label may use another form of the word
+const contentWords = (s) => wordsOf(s).map(wordKey).filter((k) => k.length >= 4);
+
+// A title the AI wrote for a strategy that has none: short, not the whole sentence, and clearly about this sentence (it shares at least one real word with it); otherwise "".
+export function usableTitle(title, strategy) {
+  const t = tidyTitle(cleanField(title).replace(/^(?:key strategy|title)\s*[:-]\s*/i, "").replace(/^["“]+|["”]+$/g, ""));
+  const n = wordsOf(t).length;
+  if (n < 2 || n > MAX_TITLE_WORDS || t.length > 80) return "";
+  if (normalizedText(t) === normalizedText(strategy)) return "";
+  const have = new Set(contentWords(strategy));
+  return contentWords(t).some((k) => have.has(k)) ? t : "";
+}
+
+function normalizedText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
 /** Kept for existing callers: title + description of a Key Strategy field. */
 function strategyParts(source) {
   return splitStrategy(source);
@@ -116,10 +133,11 @@ export function restoreSummaryStrategyCards(levers, cards) {
     else best = null;
     const base = best?.candidate.lever || { lever: "others", other_category: "uncategorized", related_to: "case study strategy" };
     const matchedTitle = best?.candidate.lever.claim_en?.match(/^(.{1,120}?):\s/)?.[1]?.trim();
-    // Use the model's title only if it is short and really is the opening words of the sentence; otherwise the code's own split wins, so every record gets a short, clean title.
-    const modelTitleOk = matchedTitle && wordsOf(matchedTitle).length <= MAX_TITLE_WORDS && normalized(card.strategy).startsWith(normalized(matchedTitle));
-    const title = modelTitleOk ? tidyTitle(matchedTitle) : card.title;
-    const description = modelTitleOk ? tidyDescription(wordsOf(card.strategy).slice(wordsOf(matchedTitle).length).join(" ")) : card.description;
+    // The model's label is used when it fits the sentence: the description is then the WHOLE original sentence (nothing cut), unless the label is just the sentence's own opening words, in which case the rest is the description. With no usable label the code's own split is the fallback.
+    const label = usableTitle(matchedTitle, card.strategy);
+    const opening = !!label && normalized(card.strategy).startsWith(normalized(label));
+    const title = label || card.title;
+    const description = !label ? card.description : opening ? tidyDescription(wordsOf(card.strategy).slice(wordsOf(label).length).join(" ")) : card.strategy;
     const claim = description ? `${title}: ${description}` : `${title}:`;
     return { ...base, section: card.heading || base.section || "General", claim_en: claim, impact: card.impact || "N/A" };
   });

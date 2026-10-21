@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitStrategy, tidyDescription, parseSummaryStrategyCards, restoreSummaryStrategyCards } from '../src/summaryCardExtraction.js';
+import { splitStrategy, tidyDescription, parseSummaryStrategyCards, restoreSummaryStrategyCards, usableTitle } from '../src/summaryCardExtraction.js';
 import { splitClaim } from '../src/claim.js';
 
 // Invented sentences with the same SHAPES as real "Key Strategy" lines (so no company content is stored in the repo).
@@ -97,4 +97,33 @@ test('restore: a card the model missed still becomes a record (never lost), unde
   const out = restoreSummaryStrategyCards([], parseSummaryStrategyCards(DOC));
   assert.equal(out.length, 2);
   assert.ok(out.every((r) => r.lever === 'others' && splitClaim(r.claim_en).name));
+});
+
+test('usableTitle: a short label that shares a real word with its sentence is kept, anything else is refused', () => {
+  const s = 'Open a second warehouse — cut delivery time to one day; hire local drivers.';
+  assert.equal(usableTitle('Faster delivery with local drivers', s), 'Faster delivery with local drivers');
+  assert.equal(usableTitle('"Faster delivery."', s), 'Faster delivery');                 // quotes and a final full stop are tidied
+  assert.equal(usableTitle('Key Strategy: Second warehouse for speed', s), 'Second warehouse for speed');
+  assert.equal(usableTitle('Great growth plan', s), '');                                 // about nothing in the sentence
+  assert.equal(usableTitle('Strategy', s), '');                                          // one word
+  assert.equal(usableTitle('Open a second warehouse cut delivery time to one day hire local drivers', s), ''); // the whole sentence
+  assert.equal(usableTitle('One two three four five six seven eight nine ten eleven warehouse', s), ''); // too long to be a title
+  assert.equal(usableTitle('', s), '');
+});
+
+test('restore: a label the model WROTE is used with the whole original sentence as the description (nothing cut, nothing dropped)', () => {
+  const cards = parseSummaryStrategyCards(DOC);
+  const out = restoreSummaryStrategyCards([
+    { lever: 'volume', section: 'Alpha Co (Retail)', claim_en: 'Faster delivery with a second warehouse: a model-written description that is ignored', impact: 'x' },
+    { lever: 'ap_days', section: 'Beta Ltd (Services)', claim_en: 'Quicker supplier payment: whatever', impact: 'N/A' },
+  ], cards);
+  assert.deepEqual(splitClaim(out[0].claim_en), { name: 'Faster delivery with a second warehouse', desc: 'Open a second warehouse — cut delivery time to one day; hire local drivers.' });
+  assert.deepEqual(splitClaim(out[1].claim_en), { name: 'Quicker supplier payment', desc: 'Pay suppliers faster.' });
+  assert.equal(out[0].lever, 'volume');
+  assert.equal(out[0].impact, 'Sales up 30% in a year.');
+});
+
+test('restore: a label that is only the sentence\'s own opening words does not repeat them in the description', () => {
+  const out = restoreSummaryStrategyCards([{ lever: 'volume', section: 'Alpha Co (Retail)', claim_en: 'Open a second warehouse: x', impact: '' }], parseSummaryStrategyCards(DOC));
+  assert.deepEqual(splitClaim(out[0].claim_en), { name: 'Open a second warehouse', desc: 'cut delivery time to one day; hire local drivers.' });
 });

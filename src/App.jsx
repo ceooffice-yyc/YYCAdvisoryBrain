@@ -5,6 +5,8 @@ import { isSmallTalk } from "../server/ask/router.js";
 import { runAsk } from "../server/ask/pipeline.js";
 import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
 import { splitClaim, removeLever, undoRemoveLever, addLever, hasClaimText } from "./claim.js";
+import { planSplit, buildClassifyPrompt, readClassification, buildCardExtraction } from "./compilationSplit.js";
+import { itemFlags, isTicked, summarizeTicked, saveMany } from "./bulkSave.js";
 import ClaimFields from "./ClaimFields.jsx";
 import { extractCollectionFrameworkRecords, detectOutlineDocument } from "./collectionExtraction.js";
 import { FULL_TEXT_LIMIT, saveLimitNotice, withNotices } from "./extractionNotices.js";
@@ -325,6 +327,13 @@ const T = {
     statusPending: "queued",
     statusExtracting: "extracting…",
     statusDone: "ready to review",
+    statusOffer: "needs your choice",
+    splitTitle: "This file looks like {n} separate case studies",
+    splitBody: "Split it into {n} cards, one per story, each saved as its own case study? The text is cut at the story headings and never reworded. Nothing is saved until you review each card.",
+    splitDo: "Split into {n} cards",
+    splitKeep: "Keep as one document",
+    splitWorking: "Preparing the cards…",
+    splitFrom: "from",
     statusError: "failed",
     stageReading: "Reading document",
     stageAnalyze: "Categorizing & summarizing",
@@ -463,6 +472,13 @@ const T = {
     statusPending: "排队中",
     statusExtracting: "提取中…",
     statusDone: "待核对",
+    statusOffer: "等待您选择",
+    splitTitle: "此文件看起来包含 {n} 个独立案例",
+    splitBody: "是否拆分为 {n} 张卡片(每个故事一张),各自保存为独立案例?文本仅按案例标题切开,不会改写。逐张核对后才会保存。",
+    splitDo: "拆分为 {n} 张卡片",
+    splitKeep: "保留为一份文档",
+    splitWorking: "正在准备卡片…",
+    splitFrom: "来自",
     statusError: "失败",
     stageReading: "读取文件",
     stageAnalyze: "分类与摘要",
@@ -1006,7 +1022,7 @@ export default function App() {
           onLever={(id) => { setTab("kb"); setPaletteLever(id); }}
         />
       )}
-      {confirm && <ConfirmModal message={confirm.message} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
+      {confirm && <ConfirmModal {...confirm} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
       {toast && (<div className="yyc-toast"><div className="yyc-toast-dot" />{toast}</div>)}
     </div>
   );
@@ -1356,19 +1372,29 @@ function CommandPalette({ t, index, isAdmin, isGuest, onClose, onTab, onDoc, onL
   );
 }
 
-function ConfirmModal({ message, onCancel, onConfirm }) {
+// A question before an action. Only `message` is needed; `title`, `details` (a list of lines), `confirmLabel`, `cancelLabel` and `tone` ("danger" or "primary") are optional, so the older calls look as they always did.
+function ConfirmModal({ message, title, details, confirmLabel = "Confirm", cancelLabel = "Cancel", tone = "danger", onCancel, onConfirm }) {
+  const danger = tone !== "primary";
   return (
     <div className="yyc-modal-backdrop" onClick={onCancel}>
-      <div className="yyc-modal" style={{ width: 400, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+      <div className="yyc-modal" role="dialog" aria-modal="true" aria-label={title || message} style={{ width: 440, maxWidth: "94vw", padding: 24 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 18 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: P.redSoft, color: P.red, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Icon name="alert" size={18} />
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: danger ? P.redSoft : P.goldSoft, color: danger ? P.red : P.goldDark, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Icon name={danger ? "alert" : "check"} size={18} />
           </div>
-          <div style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.5, paddingTop: 6 }}>{message}</div>
+          <div style={{ paddingTop: title ? 0 : 6 }}>
+            {title && <div style={{ fontSize: 15.5, fontWeight: 750, marginBottom: 4 }}>{title}</div>}
+            <div style={{ fontSize: 14, fontWeight: title ? 500 : 600, lineHeight: 1.5, whiteSpace: "pre-line" }}>{message}</div>
+            {details && details.length > 0 && (
+              <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: P.sub }}>
+                {details.map((d, i) => <li key={i}>{d}</li>)}
+              </ul>
+            )}
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="yyc-btn-secondary" onClick={onCancel}>Cancel</button>
-          <button className="yyc-btn-primary" style={{ background: P.red }} onClick={onConfirm}>Confirm</button>
+          <button className="yyc-btn-secondary" onClick={onCancel}>{cancelLabel}</button>
+          <button className="yyc-btn-primary" style={danger ? { background: P.red } : undefined} onClick={onConfirm} autoFocus>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -2479,6 +2505,23 @@ ${context}
   return withNotices(merged, saveLimitNotice(text)); // tell the person when part of a very long document will not be saved
 }
 
+// One small AI call for the whole collection: which lever and which industry each story has. If it fails the cards just land under Others with a warning.
+async function classifyCompilationCards(cards) {
+  const leverIds = [...LEVERS, ...CUSTOM_LEVERS.map((l) => l.id)];
+  const leverLines = [...LEVERS.filter((id) => id !== "others").map((id) => leverDefLine(id)), ...CUSTOM_LEVERS.map((l) => `- ${l.id}: ${l.description}`)];
+  const prompt = buildClassifyPrompt(cards, { leverLines, otherCats: OTHER_CATS, otherCatDefs: otherCatDefs() });
+  try { return readClassification(await askAI(prompt, 600 + 100 * cards.length), cards, { leverIds, otherCats: OTHER_CATS }); } catch { return null; }
+}
+
+// Turns an accepted split offer into list items, one per story, each with its extraction already built (so it goes through the normal review and save screens).
+async function buildCompilationItems(offer, parentTitle) {
+  const classes = await classifyCompilationCards(offer.cards);
+  return offer.cards.map((card, i) => ({
+    id: uid(), name: `${parentTitle} (${card.n}/${offer.cards.length})`, title: card.title, text: card.text, html: "", status: "done", error: "", elapsed: 0, parent: parentTitle,
+    extraction: buildCardExtraction({ card, total: offer.cards.length, parentTitle, classification: classes ? classes[i] : null, intro: offer.intro }),
+  }));
+}
+
 /* "14. YETI d" / "13. Bobbie-d" -> "YETI" / "Bobbie": drops the leading list number and a trailing lone lowercase marker letter (a draft suffix) */
 function cleanDocTitle(s) {
   const t = String(s || "")
@@ -2562,7 +2605,7 @@ RULES:
   const formatB = `FORMAT B — SUMMARY CARD with labelled fields:
   <Company> (<Industry> / <Person>)
   Problem: ...   Key Strategy: ...   Formula/Theory: ...   Result: ...
-  ONLY the "Key Strategy" field is a strategy. One Key Strategy sentence = ONE record, even if it has several clauses. Problem and Formula/Theory are context only. Return one record for every Key Strategy field in source order. strategy_name = a SHORT title of 3-8 words: the exact OPENING words of the Key Strategy sentence, ending at a natural boundary (before ";", "—", a comma, or a joining word such as "funded", "focused", "per", "and"). Never the whole sentence, never blank, never ending in punctuation or in a word like "of"/"the"/"and". description = the exact REMAINING words of the sentence, in order, WITHOUT the separator that followed the title (no leading ";", "—", ":" or ","). If the whole sentence is 8 words or fewer, use it as strategy_name and leave description empty. Set impact to the matching Result field, or "N/A" if absent. "section" is the company/case heading — never a field label like "Key Strategy" or "Result".`;
+  ONLY the "Key Strategy" field is a strategy. One Key Strategy sentence = ONE record, even if it has several clauses. Problem and Formula/Theory are context only. Return one record for every Key Strategy field in source order. The Key Strategy has no title of its own, so YOU write one: strategy_name = a SHORT label of 3-8 words saying what the strategy IS, in plain words that clearly match the sentence (reuse its key words); never the whole sentence, never blank, never ending in punctuation. description = the Key Strategy sentence copied in full, exactly as written (do not cut it, do not drop its opening words). Set impact to the matching Result field, or "N/A" if absent. "section" is the company/case heading — never a field label like "Key Strategy" or "Result".`;
   const formatC = "FORMAT C — M&A narrative/criteria: apply M&A DOCUMENT MODE above even without strategy headings. Extract only explicitly stated approaches or criteria; never infer a strategy from a capability, benefit, aspiration, or scale fact.";
   const formatD = `FORMAT D — COLLECTION FRAMEWORK. This is a reusable collection operating framework rather than one company's case-study narrative. Use COLLECTION FRAMEWORK MODE above. A numbered policy heading starts one record; examples and bullets remain with that policy. Ignore action-plan-by-function tables and staged framework checklists outside the selected policy sections.`;
   const formatSection = isMnaDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatC}` : isCollectionDoc ? `═══ 4. DOCUMENT FORMAT ═══\n${formatD}` : `═══ 4. DOCUMENT FORMATS (learn them before extracting) ═══\n${formatA}${hasKeyStrategyCard ? `\n\n${formatB}` : ""}`;
@@ -2756,9 +2799,17 @@ function KnowledgePanel({
   const [bulkWait, setBulkWait] = useState(0);            // countdown between docs (TPM pacing)
   const [bulkReviewId, setBulkReviewId] = useState(null); // review screen came from bulk
   const bulkCancelRef = useRef(false);
+  const bulkRunIdRef = useRef(0);                      // changes when the queue is cancelled or left, so a queue that is still finishing cannot touch the next one
+  const extractRunRef = useRef(0);                     // changes when a running extraction is cancelled, so its late answer is ignored
+  const [bulkTicks, setBulkTicks] = useState({});      // what the person ticked or unticked by hand, by item id (anything not here follows the "safe to save" rule)
+  const [bulkSaving, setBulkSaving] = useState(null);  // { done, total } while "Save selected" is running
+  const [editBase, setEditBase] = useState("");        // the edit screen as it was opened, to tell whether anything changed
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [html, setHtml] = useState("");
+  const [splitOffer, setSplitOffer] = useState(null);   // a file that looks like several stories: waiting for "split" or "keep as one"
+  const [splitBusyId, setSplitBusyId] = useState(null); // the bulk item whose cards are being prepared
+  const splitDeclinedRef = useRef(false);               // "keep as one document" was chosen: extract without asking again
   const [fastMode, setFastMode] = useState(fastExtraction()); // tick box on the Add material screen
   const [importPlan, setImportPlan] = useState(null); // the Import Backup preview window
   const [busy, setBusy] = useState(false);
@@ -2805,8 +2856,16 @@ function KnowledgePanel({
     return () => setAdminLocked(false);
   }, [mode, busy, editLeverRecord, pickerRecord, statPicker, importPlan, setAdminLocked]);
 
+  // for each extracted item in the bulk list: how many records it would save, how many resemble records already in the library, and its warnings
+  const bulkFlags = useMemo(() => {
+    const out = {};
+    bulkItems.filter((x) => x.status === "done").forEach((x) => { out[x.id] = itemFlags(x, levers, (a, b) => Math.max(claimSimilarity(a, b), 0)); });
+    return out;
+  }, [bulkItems, levers]);
+  const flagsOf = (it) => bulkFlags[it.id] || { records: 0, similar: 0, warnings: [] };
+
   // tell the app when something is running, and warn before the page is closed/refreshed with work in progress or an unsaved review
-  const working = busy || bulkRunning;
+  const working = busy || bulkRunning || !!bulkSaving;
   useEffect(() => { if (onWorking) onWorking(working); }, [working]);
   useEffect(() => {
     const unsaved = working || mode === "review" || (mode === "bulk" && bulkItems.some((x) => x.status === "done"));
@@ -2846,11 +2905,14 @@ function KnowledgePanel({
      so docs are spaced ~70s apart; askAI's 429 handling is the safety net */
   const runBulk = async (items) => {
     bulkCancelRef.current = false;
+    const runId = ++bulkRunIdRef.current;
     setErrMsg("");
     setBulkRunning(true);
     for (let i = 0; i < items.length; i++) {
-      if (bulkCancelRef.current) break;
+      if (bulkCancelRef.current || runId !== bulkRunIdRef.current) break;
       const it = items[i];
+      const offer = planSplit(it.text, it.html); // a file of separate stories waits for the person's choice instead of being extracted whole
+      if (offer) { setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "offer", offer } : x))); continue; }
       setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "extracting" } : x)));
       const startedAt = Date.now();
       try {
@@ -2863,18 +2925,17 @@ function KnowledgePanel({
         // daily quota gone: every remaining document would fail the same way — stop the queue, leave them pending
         if (e instanceof AIError && e.kind === "daily") break;
       }
-      if (i < items.length - 1 && !bulkCancelRef.current) {
+      if (i < items.length - 1 && !bulkCancelRef.current && runId === bulkRunIdRef.current) {
         const pauseSec = (await keysInUse()) > 1 ? 0 : 45; // several keys: the token budget does the pacing; one key: the original 45 s gap
         for (let sLeft = pauseSec; sLeft > 0; sLeft--) {
-          if (bulkCancelRef.current) break;
+          if (bulkCancelRef.current || runId !== bulkRunIdRef.current) break;
           setBulkWait(sLeft);
           await new Promise((r) => setTimeout(r, 1000));
         }
-        setBulkWait(0);
+        if (runId === bulkRunIdRef.current) setBulkWait(0);
       }
     }
-    setBulkWait(0);
-    setBulkRunning(false);
+    if (runId === bulkRunIdRef.current) { setBulkWait(0); setBulkRunning(false); } // a queue that was left is already switched off
   };
 
   const retryBulkItem = async (itemId) => {
@@ -2892,13 +2953,6 @@ function KnowledgePanel({
     }
   };
 
-  // throw one file out of the bulk list (its extraction is not saved anywhere, so nothing else to clean up)
-  const discardBulkItem = (itemId) => {
-    const remaining = bulkItems.filter((x) => x.id !== itemId);
-    setBulkItems(remaining);
-    if (!remaining.length && !bulkRunning) setMode("list");
-  };
-
   const reviewBulkItem = (itemId) => {
     const it = bulkItems.find((x) => x.id === itemId);
     if (!it || !it.extraction) return;
@@ -2912,49 +2966,187 @@ function KnowledgePanel({
 
   const runExtract = async () => {
     if (!text.trim()) return;
+    const declined = splitDeclinedRef.current;
+    splitDeclinedRef.current = false;
+    setSplitOffer(null);
+    if (!declined) {
+      const offer = planSplit(text, html); // a file of separate stories: ask before spending any AI on it
+      if (offer) { setSplitOffer({ ...offer, forText: text, parentTitle: cleanDocTitle(title) || "Uploaded file" }); return; }
+    }
+    const runId = ++extractRunRef.current;
     setBusy(true); setErrMsg(""); setStage("analyze");
     const stageTimer = setTimeout(() => setStage("levers"), 7000); // presentational: one AI call, staged for confidence
     const startedAt = Date.now();
+    let cancelled = false; // the person went back while this was running: its answer is thrown away
     try {
       const j = await extractDocument(text, title, config?.customLevers || [], html);
-      setExtraction(j);
-      setMode("review");
-      flash(`Extracted in ${fmtElapsed(Date.now() - startedAt)} (${fastExtraction() ? "fast mode" : "normal mode"})`);
-    } catch (e) { setErrMsg(describeAIError(e, t)); }
+      if (runId !== extractRunRef.current) cancelled = true;
+      else {
+        setExtraction(j);
+        setMode("review");
+        flash(`Extracted in ${fmtElapsed(Date.now() - startedAt)} (${fastExtraction() ? "fast mode" : "normal mode"})`);
+      }
+    } catch (e) { if (runId !== extractRunRef.current) cancelled = true; else setErrMsg(describeAIError(e, t)); }
     clearTimeout(stageTimer);
-    setStage("");
+    if (!cancelled) { setStage(""); setBusy(false); }
+  };
+
+  // "Split into N cards": the cards go into the bulk list (already extracted), where each one is reviewed and saved on its own
+  const acceptSplit = async () => {
+    if (!splitOffer) return;
+    setBusy(true); setErrMsg("");
+    try {
+      const items = await buildCompilationItems(splitOffer, splitOffer.parentTitle);
+      setBulkItems(items);
+      setSplitOffer(null);
+      setTitle(""); setText(""); setHtml("");
+      setMode("bulk");
+      flash(`Split into ${items.length} cards`);
+    } catch (e) { setErrMsg(describeAIError(e, t)); }
     setBusy(false);
+  };
+  const keepWhole = () => { splitDeclinedRef.current = true; runExtract(); };
+
+  // the same choice for a file that arrived in a bulk upload
+  const acceptBulkSplit = async (itemId) => {
+    const it = bulkItems.find((x) => x.id === itemId);
+    if (!it || !it.offer) return;
+    setSplitBusyId(itemId); setErrMsg("");
+    try {
+      const items = await buildCompilationItems(it.offer, it.title);
+      setBulkItems((arr) => { const at = arr.findIndex((x) => x.id === itemId); return at < 0 ? arr : [...arr.slice(0, at), ...items, ...arr.slice(at + 1)]; });
+    } catch (e) { setErrMsg(describeAIError(e, t)); }
+    setSplitBusyId(null);
+  };
+  const keepBulkWhole = (itemId) => {
+    setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "pending", offer: null } : x)));
+    setTimeout(() => retryBulkItem(itemId), 0); // only offered while the queue is idle, so it can run straight away
+  };
+
+  // builds and stores ONE document with its records, with no screen changes; used by the single "Confirm & save" and by "Save selected"
+  const saveExtraction = async ({ extraction: ex, text: fullText, html: fullHtml, title: fallbackTitle }) => {
+    const id = uid();
+    const doc = {
+      id,
+      status: "active",
+      created_by: me(),
+      title: cleanDocTitle(ex.title || fallbackTitle) || "Untitled",
+      doc_type: ex.doc_type || "notes",
+      industry: ex.industry || "General",
+      industry_main: ex.industry_main || normalizeMainCategory(ex.industry || "General"),
+      industry_sub: ex.industry_sub || "",
+      language: ex.language || "en",
+      problem_signature: ex.problem_signature || "",
+      sections: ex.sections || [],
+      full_text: String(fullText || "").slice(0, FULL_TEXT_LIMIT),
+      html: fullHtml || "",
+      created: Date.now(),
+    };
+    const records = [];
+    (ex.levers || []).forEach((lr) => {
+      if (leverKeys.includes(lr.lever) && !lr.skip && hasClaimText(lr)) {
+        const { skip, ...clean } = lr;
+        delete clean.added; // only marks a record typed in by hand on the review screen
+        records.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
+      }
+    });
+    await window.db.saveDocument(doc, records);
+    return doc;
+  };
+
+  // ── bulk list: tick what to save or discard ──
+  const setTick = (id, on) => setBulkTicks((m) => ({ ...m, [id]: on }));
+  const setAllTicks = (on) => setBulkTicks(Object.fromEntries(bulkItems.filter((x) => x.status === "done").map((x) => [x.id, on])));
+  const saveTicked = async () => {
+    const sum = summarizeTicked(bulkItems, bulkTicks, flagsOf);
+    const items = bulkItems.filter((x) => sum.ids.includes(x.id));
+    if (!items.length) return;
+    setErrMsg(""); setBulkSaving({ done: 0, total: items.length });
+    const { saved, failed } = await saveMany(items, (it) => saveExtraction({ extraction: it.extraction, text: it.text, html: it.html, title: it.title }), setBulkSaving);
+    try { if (saved.length) await refreshKB(); } catch { /* the documents are saved; the library list refreshes on the next load */ }
+    setBulkItems((arr) => arr.filter((x) => !saved.includes(x.id)));
+    setBulkTicks({});
+    setBulkSaving(null);
+    if (failed.length) setErrMsg(`${failed.length} of ${items.length} could not be saved and stay in the list (${failed[0].error}). The other ${saved.length} were saved.`);
+    else flash(`${saved.length} ${saved.length === 1 ? "document" : "documents"} saved`);
+    if (!failed.length && !bulkRunning && bulkItems.every((x) => saved.includes(x.id))) setMode("list");
+  };
+
+  // ── a question before each action that saves, discards or leaves ──
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const askSaveSelected = () => {
+    const sum = summarizeTicked(bulkItems, bulkTicks, flagsOf);
+    if (!sum.docs) return;
+    const readyLeft = bulkItems.filter((x) => x.status === "done").length - sum.docs;
+    const details = [`${plural(sum.records, "lever record")} will be added to the library.`];
+    if (sum.flagged) details.push(`${plural(sum.flagged, "ticked item")} still ${sum.flagged === 1 ? "has" : "have"} a warning or a record similar to one already in the library. You ticked ${sum.flagged === 1 ? "it" : "them"} yourself, so ${sum.flagged === 1 ? "it is" : "they are"} saved too.`);
+    if (readyLeft > 0) details.push(`${plural(readyLeft, "ready item")} stay${readyLeft === 1 ? "s" : ""} in the list, unsaved.`);
+    setConfirm({ title: `Save ${plural(sum.docs, "document")}?`, message: "Each one is saved as its own document in the library.", details, confirmLabel: `Save ${sum.docs}`, tone: "primary", onConfirm: saveTicked });
+  };
+  const dropItems = (ids) => {
+    setBulkItems((arr) => arr.filter((x) => !ids.includes(x.id)));
+    setBulkTicks({});
+    if (!bulkRunning && bulkItems.every((x) => ids.includes(x.id))) setMode("list");
+  };
+  const askDiscardSelected = () => {
+    const sum = summarizeTicked(bulkItems, bulkTicks, flagsOf);
+    if (!sum.docs) return;
+    setConfirm({ title: `Discard ${plural(sum.docs, "ready item")}?`, message: "Their extractions are removed from this list. Nothing was saved, so this cannot be undone.", confirmLabel: `Discard ${sum.docs}`, onConfirm: () => dropItems(sum.ids) });
+  };
+  const askDiscardItem = (it) => {
+    setConfirm({ title: "Discard this file?", message: `"${it.title}" and its extraction are removed from the list. Nothing was saved, so this cannot be undone.`, confirmLabel: "Discard", onConfirm: () => dropItems([it.id]) });
+  };
+  const askStopQueue = () => {
+    setConfirm({ title: "Stop the queue?", message: "The file being extracted right now will finish. The files still waiting are not started. Everything already extracted stays in the list.", confirmLabel: "Stop queue", onConfirm: () => { bulkCancelRef.current = true; } });
+  };
+  const leaveBulk = () => { bulkRunIdRef.current++; bulkCancelRef.current = true; setBulkRunning(false); setBulkWait(0); setBulkItems([]); setBulkTicks({}); setErrMsg(""); setMode("list"); };
+  const askLeaveBulk = () => {
+    if (!bulkItems.length) { leaveBulk(); return; }
+    const ready = bulkItems.filter((x) => x.status === "done").length;
+    const details = [];
+    if (ready) details.push(`${plural(ready, "extracted item")} not saved yet will be lost.`);
+    if (bulkRunning) details.push("The extraction in progress stops, and the AI calls already started finish in the background with no result used.");
+    setConfirm({ title: bulkRunning ? "Extraction is still running" : "Leave without saving?", message: bulkRunning ? "If you go back to the library now, the queue stops and everything in this list is discarded." : "If you go back to the library now, everything in this list is discarded.", details, confirmLabel: "Discard and go back", onConfirm: leaveBulk });
+  };
+  const goHomeFromAdd = () => { setSplitOffer(null); setTitle(""); setText(""); setHtml(""); setErrMsg(""); setMode("list"); };
+  const askCancelAdd = () => {
+    if (busy) {
+      setConfirm({ title: "Extraction is still running", message: "Go back and cancel it? The AI calls already started finish in the background, but their result is thrown away.", confirmLabel: "Cancel extraction and go back", onConfirm: () => { extractRunRef.current++; setBusy(false); setStage(""); goHomeFromAdd(); } });
+    } else if (text.trim() || title.trim()) {
+      setConfirm({ title: "Go back without extracting?", message: "The title and text you entered or uploaded here will be cleared.", confirmLabel: "Clear and go back", onConfirm: goHomeFromAdd });
+    } else goHomeFromAdd();
+  };
+  const reviewRecordCounts = () => {
+    const all = (extraction && extraction.levers) || [];
+    return { save: all.filter((l) => leverKeys.includes(l.lever) && !l.skip && hasClaimText(l)).length, skipped: all.filter((l) => l.skip).length };
+  };
+  const askSaveReview = () => {
+    const c = reviewRecordCounts();
+    const name = cleanDocTitle((extraction && extraction.title) || title) || "Untitled";
+    const details = [];
+    if (c.skipped) details.push(`${plural(c.skipped, "record")} marked "skip" ${c.skipped === 1 ? "is" : "are"} not saved.`);
+    setConfirm({ title: "Save to the library?", message: `"${name}" will be saved as a new document with ${plural(c.save, "lever record")}.`, details, confirmLabel: "Save", tone: "primary", onConfirm: saveDoc });
+  };
+  const leaveReview = () => { if (bulkReviewId) { setBulkReviewId(null); setMode("bulk"); } else setMode("add"); };
+  const askLeaveReview = () => {
+    if (bulkReviewId) setConfirm({ title: "Leave this review?", message: "Your edits on this screen are lost. The extraction stays in the list, unsaved.", confirmLabel: "Back to the list", onConfirm: leaveReview });
+    else setConfirm({ title: "Discard this extraction?", message: "Your edits on this screen are lost and nothing is saved. The text you pasted or uploaded stays on the previous screen so you can extract it again.", confirmLabel: "Discard", onConfirm: leaveReview });
+  };
+  const leaveEdit = () => { setMode("list"); setEditDoc(null); setEditLevers([]); };
+  const askLeaveEdit = () => {
+    const changed = !!editDoc && JSON.stringify({ d: editDoc, l: editLevers }) !== editBase;
+    if (!changed) { leaveEdit(); return; }
+    setConfirm({ title: "Discard your changes?", message: "You changed this document and have not saved. Going back loses those changes.", confirmLabel: "Discard changes", onConfirm: leaveEdit });
+  };
+
+  const askSaveEdit = () => {
+    setConfirm({ title: "Save your changes?", message: `Your changes to "${(editDoc && editDoc.title) || "this document"}" and its lever records will be saved.`, confirmLabel: "Save changes", tone: "primary", onConfirm: saveEdit });
   };
 
   const saveDoc = async () => {
     setBusy(true); setErrMsg("");
     try {
-      const id = uid();
-      const doc = {
-        id,
-        status: "active",
-        created_by: me(),
-        title: cleanDocTitle(extraction.title || title) || "Untitled",
-        doc_type: extraction.doc_type || "notes",
-        industry: extraction.industry || "General",
-        industry_main: extraction.industry_main || normalizeMainCategory(extraction.industry || "General"),
-        industry_sub: extraction.industry_sub || "",
-        language: extraction.language || "en",
-        problem_signature: extraction.problem_signature || "",
-        sections: extraction.sections || [],
-        full_text: text.slice(0, FULL_TEXT_LIMIT),
-        html: html || "",
-        created: Date.now(),
-      };
-      const records = [];
-      (extraction.levers || []).forEach((lr) => {
-        if (leverKeys.includes(lr.lever) && !lr.skip && hasClaimText(lr)) {
-          const { skip, ...clean } = lr;
-          delete clean.added; // only marks a record typed in by hand on the review screen
-          records.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
-        }
-      });
-      await window.db.saveDocument(doc, records);
+      await saveExtraction({ extraction, text, html, title });
       await refreshKB();
       if (bulkReviewId) {
         const remaining = bulkItems.filter((x) => x.id !== bulkReviewId);
@@ -2983,8 +3175,11 @@ function KnowledgePanel({
   const startEdit = async (docId) => {
     const doc = await window.db.getDocument(docId, { fresh: true });
     if (!doc) return;
-    setEditDoc(JSON.parse(JSON.stringify(doc)));
-    setEditLevers(sortByLever(levers.filter((l) => l.doc_id === docId)).map((l) => ({ ...l })));
+    const docCopy = JSON.parse(JSON.stringify(doc));
+    const leverCopy = sortByLever(levers.filter((l) => l.doc_id === docId)).map((l) => ({ ...l }));
+    setEditDoc(docCopy);
+    setEditLevers(leverCopy);
+    setEditBase(JSON.stringify({ d: docCopy, l: leverCopy })); // what "unchanged" means when the person goes back
     setMode("edit");
   };
 
@@ -3187,7 +3382,7 @@ function KnowledgePanel({
       <div>
         <div className="yyc-section-head">
           <div>
-            <button className="yyc-btn-secondary" onClick={() => { setMode("list"); setEditDoc(null); setEditLevers([]); }} style={{ padding: "7px 12px", marginBottom: 10 }}>
+            <button className="yyc-btn-secondary" onClick={askLeaveEdit} style={{ padding: "7px 12px", marginBottom: 10 }}>
               <Icon name="arrowLeft" size={13} /> {t.cancel}
             </button>
             <h1 className="yyc-section-title">{t.editTitle}</h1>
@@ -3286,8 +3481,8 @@ function KnowledgePanel({
         {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
 
         <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-          <button className="yyc-btn-primary" onClick={saveEdit} disabled={busy}>{busy ? "…" : t.saveChanges}</button>
-          <button className="yyc-btn-secondary" onClick={() => { setMode("list"); setEditDoc(null); setEditLevers([]); }}>{t.cancel}</button>
+          <button className="yyc-btn-primary" onClick={askSaveEdit} disabled={busy}>{busy ? "…" : t.saveChanges}</button>
+          <button className="yyc-btn-secondary" onClick={askLeaveEdit}>{t.cancel}</button>
         </div>
       </div>
     );
@@ -3460,8 +3655,8 @@ function KnowledgePanel({
         {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
 
         <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-          <button className="yyc-btn-primary" onClick={saveDoc} disabled={busy}>{busy ? "…" : t.saveDoc}</button>
-          <button className="yyc-btn-secondary" onClick={() => { if (bulkReviewId) { setBulkReviewId(null); setMode("bulk"); } else setMode("add"); }}>{t.discard}</button>
+          <button className="yyc-btn-primary" onClick={askSaveReview} disabled={busy}>{busy ? "…" : t.saveDoc}</button>
+          <button className="yyc-btn-secondary" onClick={askLeaveReview} disabled={busy}>{t.discard}</button>
         </div>
       </div>
     );
@@ -3470,36 +3665,58 @@ function KnowledgePanel({
   if (mode === "bulk" && isAdmin) {
     const doneN = bulkItems.filter((x) => x.status === "done").length;
     const pendingN = bulkItems.filter((x) => x.status === "pending" || x.status === "extracting").length;
-    const statusLabel = { pending: t.statusPending, extracting: t.statusExtracting, done: t.statusDone, error: t.statusError };
+    const statusLabel = { pending: t.statusPending, extracting: t.statusExtracting, done: t.statusDone, error: t.statusError, offer: t.statusOffer };
     const fmtDone = (it) => (it.status === "done" && it.elapsed ? `${statusLabel.done} · ${fmtElapsed(it.elapsed)}` : statusLabel[it.status]);
-    const statusColor = { pending: P.faint, extracting: P.maroon, done: P.green, error: P.red };
+    const statusColor = { pending: P.faint, extracting: P.maroon, done: P.green, error: P.red, offer: P.goldDark };
+    const sum = summarizeTicked(bulkItems, bulkTicks, flagsOf);
+    const allTicked = doneN > 0 && sum.docs === doneN;
+    const saving = !!bulkSaving;
     return (
       <div>
         <div className="yyc-section-head">
           <div>
-            {!bulkRunning && (
-              <button className="yyc-btn-secondary" onClick={() => { setBulkItems([]); setMode("list"); }} style={{ padding: "7px 12px", marginBottom: 10 }}>
-                <Icon name="arrowLeft" size={13} /> {t.backToLibrary}
-              </button>
-            )}
+            <button className="yyc-btn-secondary" onClick={askLeaveBulk} disabled={saving} style={{ padding: "7px 12px", marginBottom: 10 }}>
+              <Icon name="arrowLeft" size={13} /> {t.backToLibrary}
+            </button>
             <h1 className="yyc-section-title">{t.bulkTitle} ({bulkItems.length})</h1>
             <div className="yyc-section-sub">{t.bulkHint}</div>
           </div>
           {bulkRunning && (
-            <button className="yyc-btn-secondary" onClick={() => { bulkCancelRef.current = true; }} style={{ borderColor: P.red, color: P.red }}>
+            <button className="yyc-btn-secondary" onClick={askStopQueue} style={{ borderColor: P.red, color: P.red }}>
               {t.bulkStop}
             </button>
           )}
         </div>
 
         <div style={{ ...S.card, padding: 8 }}>
+          {doneN > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderBottom: `1px solid ${P.line}`, background: P.wash, borderRadius: 8, marginBottom: 4 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 650, cursor: saving ? "default" : "pointer" }}>
+                <input type="checkbox" checked={allTicked} disabled={saving} ref={(el) => { if (el) el.indeterminate = sum.docs > 0 && !allTicked; }} onChange={(e) => setAllTicks(e.target.checked)} />
+                Select all ready ({doneN})
+              </label>
+              <span style={{ fontSize: 12.5, color: P.sub }}>{sum.docs} selected{sum.docs ? ` · ${plural(sum.records, "lever record")}` : ""}</span>
+              <button className="yyc-btn-secondary" style={{ padding: "4px 10px", fontSize: 12 }} disabled={saving} onClick={() => setBulkTicks({})} title="Tick only the items with no warning and nothing similar already in the library">Select only the safe ones</button>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="yyc-btn-primary" style={{ padding: "7px 14px", fontSize: 12.5 }} disabled={!sum.docs || saving} onClick={askSaveSelected}>
+                  {saving ? `Saving ${bulkSaving.done} of ${bulkSaving.total}…` : `Save selected (${sum.docs})`}
+                </button>
+                <button className="yyc-btn-secondary" style={{ padding: "7px 14px", fontSize: 12.5, borderColor: P.red, color: P.red }} disabled={!sum.docs || saving} onClick={askDiscardSelected}>
+                  <Icon name="trash" size={13} /> Discard selected ({sum.docs})
+                </button>
+              </div>
+            </div>
+          )}
           {bulkItems.map((it) => (
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: `1px solid ${P.line}` }}>
+              {it.status === "done" && (
+                <input type="checkbox" aria-label={`Select ${it.title}`} checked={isTicked(it, bulkTicks, flagsOf(it))} disabled={saving} onChange={(e) => setTick(it.id, e.target.checked)} style={{ flexShrink: 0 }} />
+              )}
               {it.status === "extracting" ? (
                 <span className="yyc-spin" style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${P.line}`, borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />
               ) : (
                 <span style={{ color: statusColor[it.status], fontSize: 15, flexShrink: 0, width: 14, textAlign: "center" }}>
-                  {it.status === "done" ? "✓" : it.status === "error" ? "✗" : "○"}
+                  {it.status === "done" ? "✓" : it.status === "error" ? "✗" : it.status === "offer" ? "?" : "○"}
                 </span>
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -3507,11 +3724,34 @@ function KnowledgePanel({
                 <div style={{ fontSize: 11.5, color: statusColor[it.status], fontWeight: 600 }}>
                   {fmtDone(it)}
                   {it.status === "done" && it.extraction ? ` · ${(it.extraction.levers || []).length} ${t.leverRecords.toLowerCase()}` : ""}
+                  {it.parent ? ` · ${t.splitFrom} “${it.parent}”` : ""}
                 </div>
+                {it.status === "done" && (flagsOf(it).warnings.length > 0 || flagsOf(it).similar > 0 || flagsOf(it).records === 0) && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                    {flagsOf(it).records === 0 && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.redSoft, color: P.red }}>no records to save</span>}
+                    {flagsOf(it).warnings.length > 0 && <span title={flagsOf(it).warnings.join("\n")} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldDark }}>⚠ needs a look: {flagsOf(it).warnings.length === 1 ? "1 warning" : `${flagsOf(it).warnings.length} warnings`}</span>}
+                    {flagsOf(it).similar > 0 && <span title="These records look like records already in the library (same lever, similar wording). Open Review & save to compare them." style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldDark }}>⚠ {plural(flagsOf(it).similar, "record")} similar to the library</span>}
+                  </div>
+                )}
                 {it.status === "error" && it.error && <div style={{ fontSize: 11.5, color: P.red, marginTop: 3, lineHeight: 1.4 }}>{it.error}</div>}
+                {it.status === "offer" && it.offer && (
+                  <div style={{ fontSize: 12, color: P.ink, marginTop: 4, lineHeight: 1.5 }}>
+                    <b>{t.splitTitle.replace("{n}", String(it.offer.cards.length))}.</b> {t.splitBody.replace(/\{n\}/g, String(it.offer.cards.length))}
+                  </div>
+                )}
               </div>
+              {it.status === "offer" && it.offer && (
+                <>
+                  <button className="yyc-btn-primary" style={{ padding: "6px 14px", fontSize: 12.5 }} disabled={splitBusyId === it.id} onClick={() => acceptBulkSplit(it.id)}>
+                    {splitBusyId === it.id ? t.splitWorking : t.splitDo.replace("{n}", String(it.offer.cards.length))}
+                  </button>
+                  <button className="yyc-btn-secondary" style={{ padding: "6px 14px", fontSize: 12.5 }} disabled={bulkRunning || splitBusyId === it.id} title={bulkRunning ? "Wait for the queue to finish" : ""} onClick={() => keepBulkWhole(it.id)}>
+                    {t.splitKeep}
+                  </button>
+                </>
+              )}
               {it.status === "done" && (
-                <button className="yyc-btn-primary" style={{ padding: "6px 14px", fontSize: 12.5 }} onClick={() => reviewBulkItem(it.id)}>
+                <button className="yyc-btn-primary" style={{ padding: "6px 14px", fontSize: 12.5 }} disabled={saving} onClick={() => reviewBulkItem(it.id)}>
                   {t.bulkReviewBtn}
                 </button>
               )}
@@ -3520,8 +3760,8 @@ function KnowledgePanel({
                   {t.bulkRetry}
                 </button>
               )}
-              {(it.status === "done" || it.status === "error" || (it.status === "pending" && !bulkRunning)) && (
-                <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.red }} onClick={() => discardBulkItem(it.id)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
+              {(it.status === "done" || it.status === "error" || (it.status === "offer" && splitBusyId !== it.id) || (it.status === "pending" && !bulkRunning)) && (
+                <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.red }} disabled={saving} onClick={() => askDiscardItem(it)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
                   <Icon name="trash" size={13} /> {t.bulkDiscard}
                 </button>
               )}
@@ -3549,7 +3789,7 @@ function KnowledgePanel({
       <div>
         <div className="yyc-section-head">
           <div>
-            <button className="yyc-btn-secondary" onClick={() => setMode("list")} disabled={busy} title={busy ? "Wait for the extraction to finish" : ""} style={{ padding: "7px 12px", marginBottom: 10 }}>
+            <button className="yyc-btn-secondary" onClick={askCancelAdd} style={{ padding: "7px 12px", marginBottom: 10 }}>
               <Icon name="arrowLeft" size={13} /> {t.cancel}
             </button>
             <h1 className="yyc-section-title">{t.upload}</h1>
@@ -3578,6 +3818,20 @@ function KnowledgePanel({
 
           {aiBanner}
           {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 10, fontWeight: 600 }}>{errMsg}</div>}
+
+          {splitOffer && splitOffer.forText === text && (
+            <div role="status" style={{ marginTop: 14, padding: "14px 16px", borderRadius: 10, background: P.goldSoft, border: `1px solid ${P.gold}`, fontSize: 13, lineHeight: 1.6 }}>
+              <div style={{ fontWeight: 750, marginBottom: 4 }}>{t.splitTitle.replace("{n}", String(splitOffer.cards.length))}</div>
+              <div>{t.splitBody.replace(/\{n\}/g, String(splitOffer.cards.length))}</div>
+              <div style={{ marginTop: 6, color: P.sub, fontSize: 12.5 }}>{splitOffer.cards.slice(0, 6).map((c) => c.title).join(" · ")}{splitOffer.cards.length > 6 ? ` · … +${splitOffer.cards.length - 6}` : ""}</div>
+              <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <button className="yyc-btn-primary" onClick={acceptSplit} disabled={busy}>
+                  {busy ? t.splitWorking : t.splitDo.replace("{n}", String(splitOffer.cards.length))}
+                </button>
+                <button className="yyc-btn-secondary" onClick={keepWhole} disabled={busy}>{t.splitKeep}</button>
+              </div>
+            </div>
+          )}
 
           <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 14, fontSize: 12.5, color: P.sub, lineHeight: 1.5, cursor: busy ? "default" : "pointer" }}>
             <input type="checkbox" checked={fastMode} disabled={busy || bulkRunning}
