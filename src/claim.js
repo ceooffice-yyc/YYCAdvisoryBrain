@@ -1,12 +1,13 @@
 // Plain helpers for a lever record's text and for the review screen after an AI extraction (before saving); no React or browser code, so `npm test` covers them.
 
 /* A record's claim is one text, "Strategy title: description". -> { name, desc } ("name" is empty when there is no title). */
+const MAX_TITLE_CHARS = 250; // titles are kept as the document words them, so long ones must still be recognised and bolded
 export function splitClaim(text) {
   const s = String(text || "").trim();
   const i = s.indexOf(": ");
-  if (i > 0 && i <= 120) return { name: s.slice(0, i), desc: s.slice(i + 2) };
+  if (i > 0 && i <= MAX_TITLE_CHARS) return { name: s.slice(0, i), desc: s.slice(i + 2) };
   // Also support a title-only strategy stored as "Title:" with an empty description.
-  if (s.endsWith(":") && s.length > 1 && s.length <= 121) return { name: s.slice(0, -1), desc: "" };
+  if (s.endsWith(":") && s.length > 1 && s.length <= MAX_TITLE_CHARS + 1) return { name: s.slice(0, -1), desc: "" };
   return { name: "", desc: s };
 }
 

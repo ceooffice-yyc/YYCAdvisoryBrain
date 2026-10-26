@@ -132,7 +132,7 @@ export function restoreSummaryStrategyCards(levers, cards) {
     if (best && (best.sameHeading || best.score >= 0.2)) best.candidate.used = true;
     else best = null;
     const base = best?.candidate.lever || { lever: "others", other_category: "uncategorized", related_to: "case study strategy" };
-    const matchedTitle = best?.candidate.lever.claim_en?.match(/^(.{1,120}?):\s/)?.[1]?.trim();
+    const matchedTitle = best?.candidate.lever.claim_en?.match(/^(.{1,250}?):\s/)?.[1]?.trim();
     // The model's label is used when it fits the sentence: the description is then the WHOLE original sentence (nothing cut), unless the label is just the sentence's own opening words, in which case the rest is the description. With no usable label the code's own split is the fallback.
     const label = usableTitle(matchedTitle, card.strategy);
     const opening = !!label && normalized(card.strategy).startsWith(normalized(label));

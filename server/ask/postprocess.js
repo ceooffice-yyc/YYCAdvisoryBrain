@@ -14,7 +14,7 @@ const BULLET = /^\s*(?:[-*•]|\d+[.)])\s+/;
 export function claimName(text) {
   const s = String(text || '').trim();
   const i = s.indexOf(': ');
-  const name = i > 0 && i <= 120 ? s.slice(0, i) : s.split(/\s+/).slice(0, 7).join(' ');
+  const name = i > 0 && i <= 250 ? s.slice(0, i) : s.split(/\s+/).slice(0, 7).join(' ');
   return name.length > 52 ? `${name.slice(0, 50)}…` : name;
 }
 
