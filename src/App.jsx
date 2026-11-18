@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import mammoth from "mammoth";
 import { tokenizeQuery } from "../server/ask/text.js"; // the Ask the Brain pipeline lives in server/ask/ and is shared with the server
 import { isSmallTalk } from "../server/ask/router.js";
@@ -532,10 +532,12 @@ const TYPE_COLORS = {
 };
 
 // Personal, per-browser values only (UI hints). The library itself is read and written through window.db (src/db.js).
+// eslint-disable-next-line no-unused-vars -- kept for the language switch that is turned off for now
 async function sget(key, shared = true) {
   try { const r = await window.storage.get(key, shared); return r ? JSON.parse(r.value) : null; }
   catch { return null; }
 }
+// eslint-disable-next-line no-unused-vars -- kept for the language switch that is turned off for now
 async function sset(key, val, shared = true) {
   const r = await window.storage.set(key, JSON.stringify(val), shared);
   if (!r) throw new Error("storage write failed");
@@ -544,7 +546,6 @@ async function sset(key, val, shared = true) {
 /* Nothing is hard-deleted. Every stored item (document, index entry, lever record, chat message, gap-log entry) has a status:
    "active" (missing = active, for older data) or "deleted" (kept in storage with deleted_at, hidden everywhere in the app). */
 const isLive = (x) => !x || x.status !== "deleted";
-const live = (arr) => (Array.isArray(arr) ? arr.filter(isLive) : []);
 const me = () => (window.storage?.user && window.storage.user.email) || undefined; // signed-in user (shared database), for the audit trail
 const softDelete = (x) => ({ ...x, status: "deleted", deleted_at: Date.now(), deleted_by: me() });
 
@@ -562,13 +563,6 @@ function claimSimilarity(a, b) {
   let inter = 0;
   A.forEach((w) => { if (B.has(w)) inter++; });
   return inter / (A.size + B.size - inter);
-}
-function assertUnderLimit(messages, maxTokens) {
-  const inputTokens = messages.reduce((s, m) => s + estimateTokens(m.content), 0);
-  const total = inputTokens + (maxTokens || 0);
-  const LIMIT = 7500;
-  if (total > LIMIT) throw new Error(`Payload ${total} tokens exceeds safe limit ${LIMIT}. Reduce context.`);
-  return total;
 }
 /* ---- client-side TPM budget: Groq admits a request as (input tokens + max_tokens),
    so every call reserves its estimated footprint in a rolling 60s window and waits
@@ -989,7 +983,7 @@ export default function App() {
                     />
                   )}
                   {tab === "explorer" && (
-                    <ExplorerPanel t={t} lang={lang} levers={levers} index={index} openPreview={openPreview} isAdmin={isAdmin} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} />
+                    <ExplorerPanel t={t} levers={levers} index={index} openPreview={openPreview} isAdmin={isAdmin} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} />
                   )}
                   {tab === "gap" && isAdmin && <GapPanel t={t} flash={flash} setConfirm={setConfirm} />}
                   </div>
@@ -1319,7 +1313,8 @@ function CommandPalette({ t, index, isAdmin, isGuest, onClose, onTab, onDoc, onL
       .slice(0, 9);
   }, [q, items]);
 
-  useEffect(() => { setActive(0); }, [q]);
+  const [activeFor, setActiveFor] = useState(q);
+  if (activeFor !== q) { setActiveFor(q); setActive(0); }
 
   const run = (it) => {
     if (!it) return;
@@ -1401,12 +1396,50 @@ function ConfirmModal({ message, title, details, confirmLabel = "Confirm", cance
   );
 }
 
+// Asked when the person's M&A tick and the document's section headings disagree: proceed either way, or skip the file
+function MnaChoiceModal({ ask, onPick }) {
+  const markedNormal = ask.chosen === false;
+  const lead = markedNormal ? "Proceed as M&A" : "Proceed as normal";
+  const other = markedNormal ? "Proceed as normal" : "Proceed as M&A anyway";
+  const leadPick = markedNormal ? "mna" : "normal";
+  const otherPick = markedNormal ? "normal" : "mna";
+  return (
+    <div className="yyc-modal-backdrop">
+      <div className="yyc-modal" role="dialog" aria-modal="true" aria-label="M&A or normal case study?" style={{ width: 470, maxWidth: "94vw", padding: 24 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 18 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: P.goldSoft, color: P.goldDark, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Icon name="alert" size={18} />
+          </div>
+          <div>
+            <div style={{ fontSize: 15.5, fontWeight: 750, marginBottom: 4 }}>{markedNormal ? "This file looks like an M&A document" : "No M&A headings found"}</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }}>
+              {markedNormal
+                ? `"${ask.name}" has M&A section headings, but it is set to be read as a normal case study.`
+                : `"${ask.name}" is ticked as an M&A document, but none of the M&A section headings (such as Acquisition Criteria or Post-Acquisition Strategy) were found.`}
+            </div>
+            {ask.headings.length > 0 && (
+              <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: P.sub }}>
+                {ask.headings.map((h, i) => <li key={i}>{h}</li>)}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button className="yyc-btn-secondary" onClick={() => onPick("skip")}>Skip this file</button>
+          <button className="yyc-btn-secondary" onClick={() => onPick(otherPick)}>{other}</button>
+          <button className="yyc-btn-primary" onClick={() => onPick(leadPick)} autoFocus>{lead}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminGate({ t, config, onOk, onClose }) {
   const [pass, setPass] = useState("");
   const [err, setErr] = useState(false);
   const tryUnlock = async () => {
     if (window.storage?.remote) { // shared database: the server checks the password and returns an admin session
-      let ok = false;
+      let ok;
       try { ok = await window.storage.login(pass); } catch { ok = false; }
       if (ok) onOk(); else setErr(true);
     } else if (pass === (config?.adminPass || "12345")) onOk();
@@ -1577,7 +1610,7 @@ function leverHeadingRaw(p) {
   const hit = words <= 5 ? [...EXTRA_HEADING_LEVER, ...HEADING_LEVER].find(([re]) => re.test(x)) : null;
   if (hit) {
     const rest = x.slice(x.match(hit[0])[0].length);
-    if (/^[\s/&,-]*(and\s+)?(days?|strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x; // "Receivable Days", "Payable Days", "Talent Strategy"
+    if (/^(\s*\([^)]{1,30}\))?[\s/&,-]*(and\s+)?(days?|strateg(y|ies)|position(ing)?|growth|levers?)?[\s:]*$/i.test(rest)) return x; // "Receivable Days", "Payable Days", "Talent Strategy", "AP (Payables)"
   }
   if (words <= 8 && /^(other\b[^.]*strateg|strategies\s+(used\s+)?(to|for)\b|key strategies\b|shareholders?\b[^.]*strateg|ownership\b[^.]*strateg|(additional|further|supporting|more)\b[^.]*(strateg|growth))/i.test(x)) return x;
   // a short line that ends with a colon and names strategies/growth is a group heading ("Additional Cash & Growth Strategies:")
@@ -1984,7 +2017,7 @@ function normalizeParas(body) {
       continue;
     }
     // numbered GROUP heading ("1.Understand the Business Well") directly above "Title: description" paragraphs: not a strategy
-    if (out.length && /^\d+\s*[.)]\s*\S/.test(p) && next && TITLE_COLON.test(next) && !/^problem\b/i.test(next)) continue;
+    if (out.length && /^\d+\s*[.)]\s*\S/.test(p) && !TITLE_COLON.test(p) && next && TITLE_COLON.test(next) && !/^problem\b/i.test(next)) continue;
     // a description may itself contain a colon ("…three needs at once: parents wanted…"), so a colon in `next` does not disqualify it
     // (a description may lack a final full stop; a paragraph ending in ":" is the intro of a list, not a description)
     const nextIsProse = next && wordCount(next) >= 12 && !/:$/.test(next) && !LABEL_PARA.test(next);
@@ -1992,7 +2025,7 @@ function normalizeParas(body) {
     // a real title line has no colon of its own and is at least 2 words ("No discounts", "Timeless designs"); the other guards
     // (heading, label, bullet-run) keep headings and outline bullets out
     const nW = wordCount(p);
-    const enoughWords = nW >= 2;
+    const enoughWords = nW >= 2 || (curLever === "product_differentiation" && nW === 1);
     const titleLine = p.length <= 140 && !/\n/.test(p) && !/[.!?:]$/.test(p) && !TITLE_COLON.test(p) && !LABEL_PARA.test(p) && enoughWords;
     // two short lines in a row are outline bullets (e.g. YETI "Roy 50.5% / Ryan 49.5%" then "Equity was not given for free…"), not title + description
     const prev = out[out.length - 1];
@@ -2005,22 +2038,6 @@ function normalizeParas(body) {
     out.push(p);
   }
   return out;
-}
-
-/* Section + lever come from WHERE the strategy sits in the document (the nearest lever heading above it),
-   not from the model's guess. */
-function lever_headings_with_pos(paras, normBody) {
-  const heads = [];
-  let cur = 0;
-  for (const p of paras) {
-    const h = leverHeadingOf(p);
-    if (!h) continue;
-    const i = normBody.indexOf(normWs(p), cur);
-    if (i < 0) continue;
-    heads.push({ pos: i, text: h });
-    cur = i + 1;
-  }
-  return heads;
 }
 
 /* Where does this record's strategy sit in the document? Matches on the strategy TITLE (robust even if the model
@@ -2173,14 +2190,16 @@ function withBullets(desc, items) {
   return rest ? `${res}\n${rest}` : res;
 }
 
-export async function extractDocument(text, title, customLevers = [], html = "") {
+// eslint-disable-next-line react-refresh/only-export-components -- the extraction pipeline is exported for the tests
+export async function extractDocument(text, title, customLevers = [], html = "", opts = {}) {
   const listItems = listItemsOf(html);
-  const isMnaDocument = detectMnaDocument(text, title); // by section headings, never by the word "acquisition" appearing somewhere in the text
+  const isMnaDocument = typeof opts.mna === "boolean" ? opts.mna : detectMnaDocument(text, title); // the person's M&A tick wins; otherwise by section headings, never by the word "acquisition" appearing somewhere in the text
   // a collection / receivables playbook written as a numbered outline is read by code (no AI): by its Word headings, or its numbering
   const isCollectionFramework = !isMnaDocument && (detectOutlineDocument(text, title) || detectCollectionFramework(text, title));
   if (isCollectionFramework) return withNotices(extractCollectionFrameworkRecords(text, title, html), saveLimitNotice(text));
   const isSummaryCardDocument = !isMnaDocument && !isCollectionFramework && (String(text || "").match(/^\s*Key Strategy\s*[:：]/gim) || []).length >= 2;
-  const scoped = isMnaDocument ? scopeMnaSections(text) : isCollectionFramework ? scopeCollectionFramework(text) : scopeMaterial(text);
+  const mnaScoped = isMnaDocument ? scopeMnaSections(text) : null;
+  const scoped = mnaScoped ? (mnaScoped.body.trim() ? mnaScoped : { context: "", body: text }) : isCollectionFramework ? scopeCollectionFramework(text) : scopeMaterial(text); // ticked as M&A by hand but no M&A headings: read the whole text
   const { context, body: rawBody } = scoped;
   const mnaTitledSupport = isMnaDocument && mnaNumberedKinds(rawBody).has("company_support"); // "6.1 …", "6.2 …": one record each, not one for the whole section
     const bodyParas = isMnaDocument ? structureMnaParas(rawBody) : normalizeParas(rawBody);
@@ -2254,7 +2273,7 @@ ${context}
     } catch (error) {
       if (!(error instanceof AIError) || error.kind !== "json_output") throw error;
       const halves = depth < 7 ? splitMaterialForRetry(material) : null;
-      if (!halves) throw new Error("AI could not return valid JSON for this source text. No text was shortened or discarded; split this material into smaller complete paragraphs and try again.");
+      if (!halves) throw new Error("AI could not return valid JSON for this source text. No text was shortened or discarded; split this material into smaller complete paragraphs and try again.", { cause: error });
       return [...(await extractResults(halves[0], part, totalParts, depth + 1)), ...(await extractResults(halves[1], part, totalParts, depth + 1))];
     }
   };
@@ -2289,12 +2308,7 @@ ${context}
     missing.forEach((p) => { const h = p.heading || ""; byHeading.set(h, [...(byHeading.get(h) || []), p.text]); });
     const recText = [...byHeading].map(([h, ps]) => `${h ? h + "\n\n" : ""}${ps.join("\n\n")}`).join("\n\n");
     const recoveryPart = chunks.length + 1;
-    try {
-      await extractAndIngest(recText, recoveryPart, recoveryPart);
-    } catch (error) {
-      // Preserve the existing single recovery call's failure behavior.
-      throw error;
-    }
+    await extractAndIngest(recText, recoveryPart, recoveryPart);
   }
   const src = normWs(text);
   // "Key Strategy" is the field that HOLDS the strategy, so a record filed under it is valid — it just needs a real
@@ -2380,7 +2394,9 @@ ${context}
     // so the generic heading mapper returns "others"; force the domain-specific AR lever and discard Others-only metadata.
     .map((l) => {
       if (isCollectionFramework) {
-        const { other_category, related_to, ...record } = l;
+        const record = { ...l };
+        delete record.other_category;
+        delete record.related_to;
         return { ...record, lever: "ar_days" };
       }
       const fixed = leverFromHeading(l.section);
@@ -2623,7 +2639,7 @@ RULES:
  "language": "en"${/* [ZH disabled for now] was: | "zh" | "mixed" */ ""},
  "problem_signature": "<one line: the business problem pattern this addresses, in English>",
  "sections": [ { "heading": "<section heading>", "summary_en": "<1-2 sentence English summary>" } ],
- "levers": [ { "lever": "price"|"volume"|"cogs"|"overheads"|"ar_days"|"inventory_days"|"ap_days"|"talent_strategy"|"product_differentiation"|"acquisition_expansion_valuation"${customs.map((l) => `|"${l.id}"`).join("")}|"others", "strategy_name": "<the strategy's title EXACTLY as written in the document; for an untitled but explicit strategy, use a short contiguous phrase copied from its evidence>", "description": "<what the business did or the explicit acquisition criterion, copied EXACTLY from the document — see WORDING RULE>", "impact": "<the actual impact of this strategy, copied EXACTLY from the document — see WORDING RULE; the string \"N/A\" if the document states no actual impact>", "section": "<EXACT heading from the sections array above that this lever came from>", "other_category": "<ONLY when lever is others: legal_regulatory_ip|business_model_execution|financing_capital|operations_process|partnerships_alliances|shareholder_governance|uncategorized>", "related_to": "<ONLY when lever is others: 3-8 English words naming what it specifically relates to>" } ]
+ "levers": [ { "lever": "price"|"volume"|"cogs"|"overheads"|"ar_days"|"inventory_days"|"ap_days"|"talent_strategy"|"product_differentiation"|"acquisition_expansion_valuation"${customs.map((l) => `|"${l.id}"`).join("")}|"others", "strategy_name": "<the strategy's title EXACTLY as written in the document; for an untitled but explicit strategy, use a short contiguous phrase copied from its evidence>", "description": "<what the business did or the explicit acquisition criterion, copied EXACTLY from the document — see WORDING RULE>", "impact": "<the actual impact of this strategy, copied EXACTLY from the document — see WORDING RULE; the string "N/A" if the document states no actual impact>", "section": "<EXACT heading from the sections array above that this lever came from>", "other_category": "<ONLY when lever is others: legal_regulatory_ip|business_model_execution|financing_capital|operations_process|partnerships_alliances|shareholder_governance|uncategorized>", "related_to": "<ONLY when lever is others: 3-8 English words naming what it specifically relates to>" } ]
 }
 
 ═══ 2. SCOPE — WHAT TO EXTRACT AND WHAT TO IGNORE ═══
@@ -2701,7 +2717,6 @@ function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
   const [open, setOpen] = useState(() => new Set());
   const toggle = (set, setter, key) => { const n = new Set(set); n.has(key) ? n.delete(key) : n.add(key); setter(n); };
   const newDocs = plan.docs.filter((d) => d.state === "new");
-  const newCfg = plan.cfgItems.filter((c) => !c.exists);
   const nDocs = selDocs.size, nCfg = selCfg.size;
   const nRecs = plan.docs.filter((d) => selDocs.has(d.id)).reduce((n, d) => n + d.records.length, 0);
   const counts = (st) => plan.docs.filter((d) => d.state === st).length;
@@ -2809,6 +2824,10 @@ function KnowledgePanel({
   const [html, setHtml] = useState("");
   const [splitOffer, setSplitOffer] = useState(null);   // a file that looks like several stories: waiting for "split" or "keep as one"
   const [splitBusyId, setSplitBusyId] = useState(null); // the bulk item whose cards are being prepared
+  const [mnaChoice, setMnaChoice] = useState(null); // Add screen: null = follow the detection, true / false = what the person ticked
+  const [mnaAsk, setMnaAsk] = useState(null); // the "M&A or normal?" question being shown
+  const mnaResolveRef = useRef(null);
+  const detectedMna = useMemo(() => detectMnaDocument(text, title), [text, title]);
   const splitDeclinedRef = useRef(false);               // "keep as one document" was chosen: extract without asking again
   const [fastMode, setFastMode] = useState(fastExtraction()); // tick box on the Add material screen
   const [importPlan, setImportPlan] = useState(null); // the Import Backup preview window
@@ -2832,11 +2851,12 @@ function KnowledgePanel({
 
   useEffect(() => {
     if (paletteLever && clearPaletteLever) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot request from the command palette
       setLeverFilter(paletteLever);
       setMode("list");
       clearPaletteLever();
     }
-  }, [paletteLever]);
+  }, [paletteLever, clearPaletteLever]);
   const [mainCat, setMainCat] = useState("all");
   const [subCat, setSubCat] = useState("all");
   const [pickerRecord, setPickerRecord] = useState(null);
@@ -2866,7 +2886,7 @@ function KnowledgePanel({
 
   // tell the app when something is running, and warn before the page is closed/refreshed with work in progress or an unsaved review
   const working = busy || bulkRunning || !!bulkSaving;
-  useEffect(() => { if (onWorking) onWorking(working); }, [working]);
+  useEffect(() => { if (onWorking) onWorking(working); }, [working, onWorking]);
   useEffect(() => {
     const unsaved = working || mode === "review" || (mode === "bulk" && bulkItems.some((x) => x.status === "done"));
     if (!unsaved) return undefined;
@@ -2884,6 +2904,7 @@ function KnowledgePanel({
         const p = await parseDocxFile(files[0]);
         setText(p.text);
         setHtml(p.html);
+        setMnaChoice(null);
         if (!title) setTitle(p.title);
       } catch { setErrMsg(t.apiErr); }
       return;
@@ -2893,12 +2914,38 @@ function KnowledgePanel({
       const items = [];
       for (const f of files) {
         const p = await parseDocxFile(f);
-        items.push({ id: uid(), name: f.name, ...p, status: "pending", extraction: null });
+        const detected = detectMnaDocument(p.text, p.title);
+        const stories = planSplit(p.text, p.html);
+        items.push({ id: uid(), name: f.name, ...p, status: "ready", include: true, mna: detected, detectedMna: detected, storyCount: stories ? stories.cards.length : 0, extraction: null });
       }
       setBulkItems(items);
-      setMode("bulk");
-      runBulk(items);
+      setMode("bulk"); // nothing is sent to the AI until the person presses Start extraction
     } catch { setErrMsg(t.apiErr); }
+  };
+
+  // the M&A question: resolves "mna", "normal" or "skip" when the person answers
+  const askMna = (name, body, chosen) => new Promise((resolve) => {
+    const headings = [...new Set(String(body || "").split(/\n\s*\n/).map((p) => p.trim()).filter((p) => mnaSectionKind(p)))].slice(0, 6);
+    mnaResolveRef.current = resolve;
+    setMnaAsk({ name, chosen, headings });
+  });
+  const answerMna = (pick) => { const r = mnaResolveRef.current; mnaResolveRef.current = null; setMnaAsk(null); if (r) r(pick); };
+  // undefined = follow the detection; true / false = read it in that mode; null = skip the file. Asks only when the person's tick disagrees with the headings.
+  const pickMnaMode = async (name, body, docTitle, chosen) => {
+    if (typeof chosen !== "boolean" || chosen === detectMnaDocument(body, docTitle)) return chosen;
+    const pick = await askMna(name, body, chosen);
+    return pick === "skip" ? null : pick === "mna";
+  };
+  const SKIPPED = "Skipped: you chose not to extract this file. Press Retry to extract it.";
+
+  // the confirmation page: what to extract, and whether each file is an M&A document
+  const setBulkInclude = (id, on) => setBulkItems((arr) => arr.map((x) => (x.id === id ? { ...x, include: on } : x)));
+  const setBulkMna = (id, on) => setBulkItems((arr) => arr.map((x) => (x.id === id ? { ...x, mna: on } : x)));
+  const startBulk = () => {
+    const chosen = bulkItems.filter((x) => x.status !== "ready" || x.include !== false).map((x) => (x.status === "ready" ? { ...x, status: "pending" } : x));
+    if (!chosen.length) return;
+    setBulkItems(chosen);
+    runBulk(chosen);
   };
 
   /* sequential, TPM-paced queue: one extraction ≈ one minute of an 8k-TPM quota,
@@ -2913,10 +2960,13 @@ function KnowledgePanel({
       const it = items[i];
       const offer = planSplit(it.text, it.html); // a file of separate stories waits for the person's choice instead of being extracted whole
       if (offer) { setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "offer", offer } : x))); continue; }
+      const mnaMode = await pickMnaMode(it.title, it.text, it.title, it.mna);
+      if (runId !== bulkRunIdRef.current) break; // the person left while the question was open
+      if (mnaMode === null) { setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "error", error: SKIPPED } : x))); continue; }
       setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "extracting" } : x)));
       const startedAt = Date.now();
       try {
-        const j = await extractDocument(it.text, it.title, config?.customLevers || [], it.html);
+        const j = await extractDocument(it.text, it.title, config?.customLevers || [], it.html, { mna: mnaMode });
         setBulkItems((arr) => arr.map((x) => (x.id === it.id ? { ...x, status: "done", extraction: j, error: "", elapsed: Date.now() - startedAt } : x)));
       } catch (e) {
         const msg = describeAIError(e, t);
@@ -2941,9 +2991,11 @@ function KnowledgePanel({
   const retryBulkItem = async (itemId) => {
     const it = bulkItems.find((x) => x.id === itemId);
     if (!it || bulkRunning) return;
+    const mnaMode = await pickMnaMode(it.title, it.text, it.title, it.mna);
+    if (mnaMode === null) { setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "error", error: SKIPPED } : x))); return; }
     setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "extracting" } : x)));
     try {
-      const j = await extractDocument(it.text, it.title, config?.customLevers || [], it.html);
+      const j = await extractDocument(it.text, it.title, config?.customLevers || [], it.html, { mna: mnaMode });
       setBulkItems((arr) => arr.map((x) => (x.id === itemId ? { ...x, status: "done", extraction: j, error: "" } : x)));
       setErrMsg("");
     } catch (e) {
@@ -2973,13 +3025,15 @@ function KnowledgePanel({
       const offer = planSplit(text, html); // a file of separate stories: ask before spending any AI on it
       if (offer) { setSplitOffer({ ...offer, forText: text, parentTitle: cleanDocTitle(title) || "Uploaded file" }); return; }
     }
+    const mnaMode = await pickMnaMode(cleanDocTitle(title) || "This text", text, title, mnaChoice === null ? undefined : mnaChoice);
+    if (mnaMode === null) return; // the person chose to skip it
     const runId = ++extractRunRef.current;
     setBusy(true); setErrMsg(""); setStage("analyze");
     const stageTimer = setTimeout(() => setStage("levers"), 7000); // presentational: one AI call, staged for confidence
     const startedAt = Date.now();
     let cancelled = false; // the person went back while this was running: its answer is thrown away
     try {
-      const j = await extractDocument(text, title, config?.customLevers || [], html);
+      const j = await extractDocument(text, title, config?.customLevers || [], html, { mna: mnaMode });
       if (runId !== extractRunRef.current) cancelled = true;
       else {
         setExtraction(j);
@@ -3045,7 +3099,8 @@ function KnowledgePanel({
     const records = [];
     (ex.levers || []).forEach((lr) => {
       if (leverKeys.includes(lr.lever) && !lr.skip && hasClaimText(lr)) {
-        const { skip, ...clean } = lr;
+        const clean = { ...lr };
+        delete clean.skip;
         delete clean.added; // only marks a record typed in by hand on the review screen
         records.push(normalizeOther({ id: uid(), status: "active", created_by: me(), doc_id: id, doc_title: doc.title, ...clean }));
       }
@@ -3099,7 +3154,7 @@ function KnowledgePanel({
   const askStopQueue = () => {
     setConfirm({ title: "Stop the queue?", message: "The file being extracted right now will finish. The files still waiting are not started. Everything already extracted stays in the list.", confirmLabel: "Stop queue", onConfirm: () => { bulkCancelRef.current = true; } });
   };
-  const leaveBulk = () => { bulkRunIdRef.current++; bulkCancelRef.current = true; setBulkRunning(false); setBulkWait(0); setBulkItems([]); setBulkTicks({}); setErrMsg(""); setMode("list"); };
+  const leaveBulk = () => { answerMna("skip"); bulkRunIdRef.current++; bulkCancelRef.current = true; setBulkRunning(false); setBulkWait(0); setBulkItems([]); setBulkTicks({}); setErrMsg(""); setMode("list"); };
   const askLeaveBulk = () => {
     if (!bulkItems.length) { leaveBulk(); return; }
     const ready = bulkItems.filter((x) => x.status === "done").length;
@@ -3108,7 +3163,7 @@ function KnowledgePanel({
     if (bulkRunning) details.push("The extraction in progress stops, and the AI calls already started finish in the background with no result used.");
     setConfirm({ title: bulkRunning ? "Extraction is still running" : "Leave without saving?", message: bulkRunning ? "If you go back to the library now, the queue stops and everything in this list is discarded." : "If you go back to the library now, everything in this list is discarded.", details, confirmLabel: "Discard and go back", onConfirm: leaveBulk });
   };
-  const goHomeFromAdd = () => { setSplitOffer(null); setTitle(""); setText(""); setHtml(""); setErrMsg(""); setMode("list"); };
+  const goHomeFromAdd = () => { setMnaChoice(null); setSplitOffer(null); setTitle(""); setText(""); setHtml(""); setErrMsg(""); setMode("list"); };
   const askCancelAdd = () => {
     if (busy) {
       setConfirm({ title: "Extraction is still running", message: "Go back and cancel it? The AI calls already started finish in the background, but their result is thrown away.", confirmLabel: "Cancel extraction and go back", onConfirm: () => { extractRunRef.current++; setBusy(false); setStage(""); goHomeFromAdd(); } });
@@ -3208,14 +3263,12 @@ function KnowledgePanel({
   const saveEdit = async () => {
     setBusy(true); setErrMsg("");
     try {
-      if (!editDoc.industry_main) {
-        editDoc.industry_main = normalizeMainCategory(editDoc.industry || "General");
-      }
+      const docToSave = editDoc.industry_main ? editDoc : { ...editDoc, industry_main: normalizeMainCategory(editDoc.industry || "General") };
       const mine = editLevers
         .filter((l) => leverKeys.includes(l.lever) && ((l.claim_en || "").trim() || (l.claim_zh || "").trim()))
         .map((l) => normalizeOther({ status: "active", ...l, doc_title: editDoc.title }));
       // records of this document that are no longer on the edit screen (removed, or emptied) stay in storage, marked deleted
-      await window.db.updateDocument(editDoc, mine);
+      await window.db.updateDocument(docToSave, mine);
       await refreshKB();
       setMode("list"); setEditDoc(null); setEditLevers([]);
       flash(t.saved);
@@ -3665,9 +3718,11 @@ function KnowledgePanel({
   if (mode === "bulk" && isAdmin) {
     const doneN = bulkItems.filter((x) => x.status === "done").length;
     const pendingN = bulkItems.filter((x) => x.status === "pending" || x.status === "extracting").length;
-    const statusLabel = { pending: t.statusPending, extracting: t.statusExtracting, done: t.statusDone, error: t.statusError, offer: t.statusOffer };
+    const readyN = bulkItems.filter((x) => x.status === "ready").length;
+    const readyOn = bulkItems.filter((x) => x.status === "ready" && x.include !== false).length;
+    const statusLabel = { ready: "Waiting for you to start", pending: t.statusPending, extracting: t.statusExtracting, done: t.statusDone, error: t.statusError, offer: t.statusOffer };
     const fmtDone = (it) => (it.status === "done" && it.elapsed ? `${statusLabel.done} · ${fmtElapsed(it.elapsed)}` : statusLabel[it.status]);
-    const statusColor = { pending: P.faint, extracting: P.maroon, done: P.green, error: P.red, offer: P.goldDark };
+    const statusColor = { ready: P.goldDark, pending: P.faint, extracting: P.maroon, done: P.green, error: P.red, offer: P.goldDark };
     const sum = summarizeTicked(bulkItems, bulkTicks, flagsOf);
     const allTicked = doneN > 0 && sum.docs === doneN;
     const saving = !!bulkSaving;
@@ -3688,7 +3743,18 @@ function KnowledgePanel({
           )}
         </div>
 
+        {mnaAsk && <MnaChoiceModal ask={mnaAsk} onPick={answerMna} />}
         <div style={{ ...S.card, padding: 8 }}>
+          {readyN > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 14px", borderBottom: `1px solid ${P.line}`, background: P.goldSoft, borderRadius: 8, marginBottom: 4 }}>
+              <div style={{ flex: 1, minWidth: 240, fontSize: 13, lineHeight: 1.5 }}>
+                <b>Choose what to extract.</b> Untick any file you do not want, and tick <i>M&amp;A document</i> where it applies. Nothing is sent to the AI until you press Start extraction.
+              </div>
+              <button className="yyc-btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} disabled={!readyOn} onClick={startBulk}>
+                Start extraction ({readyOn})
+              </button>
+            </div>
+          )}
           {doneN > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 14px", borderBottom: `1px solid ${P.line}`, background: P.wash, borderRadius: 8, marginBottom: 4 }}>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 650, cursor: saving ? "default" : "pointer" }}>
@@ -3709,6 +3775,9 @@ function KnowledgePanel({
           )}
           {bulkItems.map((it) => (
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: `1px solid ${P.line}` }}>
+              {it.status === "ready" && (
+                <input type="checkbox" aria-label={`Extract ${it.title}`} checked={it.include !== false} onChange={(e) => setBulkInclude(it.id, e.target.checked)} style={{ flexShrink: 0 }} />
+              )}
               {it.status === "done" && (
                 <input type="checkbox" aria-label={`Select ${it.title}`} checked={isTicked(it, bulkTicks, flagsOf(it))} disabled={saving} onChange={(e) => setTick(it.id, e.target.checked)} style={{ flexShrink: 0 }} />
               )}
@@ -3733,6 +3802,13 @@ function KnowledgePanel({
                     {flagsOf(it).similar > 0 && <span title="These records look like records already in the library (same lever, similar wording). Open Review & save to compare them." style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldDark }}>⚠ {plural(flagsOf(it).similar, "record")} similar to the library</span>}
                   </div>
                 )}
+                {it.status === "ready" && (
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5, fontSize: 12, color: P.sub, cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!it.mna} onChange={(e) => setBulkMna(it.id, e.target.checked)} />
+                    <span><b style={{ color: P.ink }}>M&amp;A document</b> · {it.mna === it.detectedMna ? (it.detectedMna ? "detected from its M&A section headings" : "no M&A headings found, so it is read as a normal case study") : "changed by you (the app checks it against the headings before extracting)"}</span>
+                  </label>
+                )}
+                {it.status === "ready" && it.storyCount > 0 && <div style={{ fontSize: 12, color: P.goldDark, marginTop: 3, fontWeight: 600 }}>Looks like {it.storyCount} separate stories: you will be asked whether to split it into cards.</div>}
                 {it.status === "error" && it.error && <div style={{ fontSize: 11.5, color: P.red, marginTop: 3, lineHeight: 1.4 }}>{it.error}</div>}
                 {it.status === "offer" && it.offer && (
                   <div style={{ fontSize: 12, color: P.ink, marginTop: 4, lineHeight: 1.5 }}>
@@ -3760,7 +3836,7 @@ function KnowledgePanel({
                   {t.bulkRetry}
                 </button>
               )}
-              {(it.status === "done" || it.status === "error" || (it.status === "offer" && splitBusyId !== it.id) || (it.status === "pending" && !bulkRunning)) && (
+              {(it.status === "ready" || it.status === "done" || it.status === "error" || (it.status === "offer" && splitBusyId !== it.id) || (it.status === "pending" && !bulkRunning)) && (
                 <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.red }} disabled={saving} onClick={() => askDiscardItem(it)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
                   <Icon name="trash" size={13} /> {t.bulkDiscard}
                 </button>
@@ -3800,6 +3876,11 @@ function KnowledgePanel({
         <div style={{ ...S.card, padding: 24 }}>
           <label style={S.label}>{t.titlePh}</label>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t.titlePh} className="yyc-input" />
+          {mnaAsk && <MnaChoiceModal ask={mnaAsk} onPick={answerMna} />}
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12, fontSize: 12.5, color: P.sub, lineHeight: 1.5, cursor: busy ? "default" : "pointer" }}>
+            <input type="checkbox" checked={mnaChoice ?? detectedMna} disabled={busy} onChange={(e) => setMnaChoice(e.target.checked)} style={{ marginTop: 3 }} />
+            <span><b style={{ color: P.ink }}>This is an M&amp;A document</b> {!text.trim() ? "Ticked automatically when the text has M&A section headings." : mnaChoice !== null ? "You set this by hand; the app checks it against the headings before extracting." : detectedMna ? "Detected from its M&A section headings; untick to read it as a normal case study." : "No M&A headings found, so it is read as a normal case study; tick it if this is an M&A strategy summary."}</span>
+          </label>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
             <button onClick={() => fileRef.current?.click()} className="yyc-btn-secondary" style={{ background: P.wash, color: P.ink }}>
@@ -4270,29 +4351,18 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
   const inputElRef = useRef(null);
   const [sugg, setSugg] = useState(null);
   const [suggBusy, setSuggBusy] = useState(false);
-  const [showHint, setShowHint] = useState(false);
   const bottomRef = useRef(null);
-
-  useEffect(() => {
-    (async () => {
-      const seen = await sget("ui:hint-seen", false);
-      if (!seen) setShowHint(true);
-    })();
-  }, []);
 
   useEffect(() => {
     if (index.length > 0 && window.innerWidth >= 900) {
       inputElRef.current?.focus();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focus once when the chat opens
   }, []);
 
   // only the in-browser mode reads every document for each question; on the hosted site the server searches, so nothing is downloaded
   useEffect(() => { if (!window.db?.ask) window.db?.warmDocuments(index.map((d) => d.id)); }, [index]);
 
-  const dismissHint = () => {
-    setShowHint(false);
-    sset("ui:hint-seen", true, false).catch(() => { });
-  };
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, busy]);
 
@@ -4321,7 +4391,7 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
           await window.db.suggestionsSet(rec);
           setSugg(rec);
         }
-      } catch { }
+      } catch { /* suggestions are optional */ }
       if (!cancelled) setSuggBusy(false);
     })();
     return () => { cancelled = true; };
@@ -4859,7 +4929,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
   );
 }
 
-function ExplorerPanel({ t, lang, levers, index, openPreview, isAdmin, config, setConfig, setConfirm, setAdminLocked, flash, refreshKB }) {
+function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConfig, setConfirm, setAdminLocked, flash, refreshKB }) {
   const [showMgr, setShowMgr] = useState(false);
   const [sel, setSel] = useState("price");
   const [cat, setCat] = useState("all");

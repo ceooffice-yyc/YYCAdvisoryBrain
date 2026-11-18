@@ -1,4 +1,3 @@
-/* global process */
 // The AI client used by the hosted Ask the Brain pipeline. Server only: the Groq keys never leave the server.
 //
 // What it does for everybody at once (the browser used to guess this for itself, per tab):

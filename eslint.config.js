@@ -18,4 +18,9 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // the server, api, scripts and tests run in Node, so they get Node globals such as process
+    files: ['server/**/*.js', 'api/**/*.js', 'scripts/**/*.{js,mjs}', 'test/**/*.{js,mjs}', 'eval/**/*.{js,mjs}', 'vite.config.js'],
+    languageOptions: { globals: globals.node },
+  },
 ])

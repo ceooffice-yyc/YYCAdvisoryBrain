@@ -1,4 +1,3 @@
-/* global process */
 // POST /api/ask: the hosted Ask the Brain. Shared by the Express server (server/index.js) and the Vercel function (api/ask.js).
 //
 //   request   { question, history: [{ role: "user" | "ai", text }], taggedIds: [documentId] }       Authorization: Bearer <Supabase session>

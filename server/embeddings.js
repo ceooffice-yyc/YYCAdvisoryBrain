@@ -1,4 +1,3 @@
-/* global process */
 // Text -> vector, using Google's gemini-embedding-001 (Gemini API). Server only: the key never reaches the browser.
 //
 //   GEMINI_API_KEY   from https://aistudio.google.com/apikey  (use a key with billing enabled for the company library: see README)
