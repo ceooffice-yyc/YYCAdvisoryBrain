@@ -12,6 +12,7 @@ import { dbConfigured, getClient } from '../db.js';
 import { makeLlm, LlmError } from './llm.js';
 import { runAsk, AskError } from './pipeline.js';
 import { makeServerDeps } from './serverDeps.js';
+import { hit, clientIp } from '../rateLimit.js';
 
 const json = (status, body, headers = {}) => ({ status, body, headers });
 const TIMEOUT_MS = 55_000;
@@ -85,7 +86,10 @@ export async function handleAsk(req, opts = {}) {
   if (!dbConfigured(env)) return json(501, { error: 'Server-side search needs the shared database (Supabase) to be configured.' });
 
   const auth = await (opts.authenticate || authenticate)(req.headers || {}, env, now());
-  if (!auth.ok) return json(auth.status, { error: auth.error });
+  if (!auth.ok) {
+    const wait = hit('auth-fail', req.ip || clientIp(req.headers), 30, 60_000, now()); // a wrong or forged token, over and over
+    return wait ? json(429, { error: 'Too many attempts. Please wait a moment.' }, { 'Retry-After': String(wait) }) : json(auth.status, { error: auth.error, ...(auth.code ? { code: auth.code } : {}) });
+  }
   const user = auth.user;
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};

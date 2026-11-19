@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'e2e/.results', 'playwright-report']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -20,7 +20,7 @@ export default defineConfig([
   },
   {
     // the server, api, scripts and tests run in Node, so they get Node globals such as process
-    files: ['server/**/*.js', 'api/**/*.js', 'scripts/**/*.{js,mjs}', 'test/**/*.{js,mjs}', 'eval/**/*.{js,mjs}', 'vite.config.js'],
+    files: ['server/**/*.js', 'api/**/*.js', 'scripts/**/*.{js,mjs}', 'test/**/*.{js,mjs}', 'eval/**/*.{js,mjs}', 'e2e/**/*.js', 'vite.config.js', 'playwright.config.js'],
     languageOptions: { globals: globals.node },
   },
 ])

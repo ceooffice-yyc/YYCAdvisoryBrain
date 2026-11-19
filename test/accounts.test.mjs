@@ -148,9 +148,9 @@ test('a disabled account is refused at the door, even with a valid session', asy
   const T = 1_700_000_000_000;
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
   authTest.cache.clear();
-  authTest.cache.set('tok-ok', { at: T, user: { id: 'u1', email: 'ok@yycadvisors.com', app_metadata: {} } });
-  authTest.cache.set('tok-banned', { at: T, user: { id: 'u2', email: 'gone@yycadvisors.com', app_metadata: {}, banned_until: new Date(T + 1e6).toISOString() } });
-  authTest.cache.set('tok-past', { at: T, user: { id: 'u3', email: 'back@yycadvisors.com', app_metadata: {}, banned_until: new Date(T - 1e6).toISOString() } });
+  authTest.cache.set('tok-ok', { at: T, user: { id: 'u1', email: 'ok@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {} } });
+  authTest.cache.set('tok-banned', { at: T, user: { id: 'u2', email: 'gone@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {}, banned_until: new Date(T + 1e6).toISOString() } });
+  authTest.cache.set('tok-past', { at: T, user: { id: 'u3', email: 'back@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {}, banned_until: new Date(T - 1e6).toISOString() } });
   assert.equal((await authenticate({ authorization: 'Bearer tok-ok' }, env, T)).ok, true);
   const banned = await authenticate({ authorization: 'Bearer tok-banned' }, env, T);
   assert.deepEqual([banned.ok, banned.status], [false, 403]);
@@ -162,7 +162,7 @@ test('database API: admin-only operations refuse no sign-in (401) and viewers (4
   const T = 1_700_000_000_000;
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com', ALLOW_GUEST: 'false' };
   authTest.cache.clear();
-  authTest.cache.set('viewer', { at: T, user: { id: 'v', email: 'viewer@yycadvisors.com', app_metadata: {} } });
+  authTest.cache.set('viewer', { at: T, user: { id: 'v', email: 'viewer@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {} } });
   const adminOps = ['doc_save', 'doc_update', 'doc_delete', 'record_save', 'record_delete', 'config_save', 'import_docs', 'ask_log_list', 'gap_list', 'gap_clear',
     'users_list', 'user_invite', 'user_create', 'user_temp_password', 'user_set_role', 'user_set_disabled', 'user_send_reset', 'requests_list', 'request_decide', 'account_events'];
   for (const op of adminOps) {
@@ -239,7 +239,7 @@ test('a temporary password only opens the "choose a new password" door', async (
   const T = 1_700_000_000_000;
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
   authTest.cache.clear();
-  authTest.cache.set('temp', { at: T, user: { id: 't', email: 't@yycadvisors.com', app_metadata: { must_change_password: true } } });
+  authTest.cache.set('temp', { at: T, user: { id: 't', email: 't@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: { must_change_password: true } } });
   const strict = await authenticate({ authorization: 'Bearer temp' }, env, T);
   assert.deepEqual([strict.ok, strict.status, strict.code], [false, 403, 'must_change_password'], 'the AI proxy and Ask refuse it');
   const lenient = await authenticate({ authorization: 'Bearer temp' }, env, T, { allowMustChange: true });

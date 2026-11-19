@@ -7,6 +7,7 @@ import { makeLocalRetriever } from "../server/ask/localRetrieval.js";
 import { splitClaim, removeLever, undoRemoveLever, addLever, hasClaimText } from "./claim.js";
 import { planSplit, buildClassifyPrompt, readClassification, buildCardExtraction } from "./compilationSplit.js";
 import { itemFlags, isTicked, summarizeTicked, saveMany } from "./bulkSave.js";
+import { safeDocHtml } from "./safeHtml.js";
 import ClaimFields from "./ClaimFields.jsx";
 import { extractCollectionFrameworkRecords, detectOutlineDocument } from "./collectionExtraction.js";
 import { FULL_TEXT_LIMIT, saveLimitNotice, withNotices } from "./extractionNotices.js";
@@ -575,7 +576,7 @@ const tpmLog = []; // {at, tokens}
 const fastExtraction = () => { try { return localStorage.getItem("yyc:fast") !== "0"; } catch { return true; } };
 let groqKeysPromise = null;
 function groqKeyCount() { // asked once from the server; 1 when unknown
-  if (!groqKeysPromise) groqKeysPromise = fetch(GROQ_URL).then((r) => (r.ok ? r.json() : {})).then((j) => Math.max(1, Math.min(8, Number(j && j.keys) || 1))).catch(() => 1);
+  if (!groqKeysPromise) groqKeysPromise = Promise.resolve(window.storage?.authHeader?.()).then((h) => fetch(GROQ_URL, { headers: h || {} })).then((r) => (r.ok ? r.json() : {})).then((j) => Math.max(1, Math.min(8, Number(j && j.keys) || 1))).catch(() => 1);
   return groqKeysPromise;
 }
 const keysInUse = async () => (fastExtraction() ? groqKeyCount() : 1);
@@ -4485,6 +4486,10 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
         if (!cancelled) setSugg(cached);
         return;
       }
+      if (window.storage?.remote && !window.storage.user?.isAdmin) { // a viewer: show the stored examples, even if the library changed since
+        if (!cancelled) setSugg(cached && Array.isArray(cached.en) ? cached : null);
+        return;
+      }
       setSuggBusy(true);
       try {
         const docs = await window.db.getDocuments(index.slice(0, 12).map((d) => d.id));
@@ -5552,7 +5557,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
                 .yyc-docview strong { font-weight: 700; }
                 .yyc-docview img { max-width: 100%; }
               `}</style>
-              <div className="yyc-docview" dangerouslySetInnerHTML={{ __html: doc.html }} />
+              <div className="yyc-docview" dangerouslySetInnerHTML={{ __html: safeDocHtml(doc.html) }} />
             </div>
           ) : view === "levers" ? (
             docLevers.map((r, i) => (

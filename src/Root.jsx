@@ -13,7 +13,7 @@ const secondary = { width: '100%', marginTop: 10, padding: '11px 14px', border: 
 const linkBtn = { background: 'none', border: 0, padding: 0, color: CRIMSON, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }
 const errStyle = { color: CRIMSON, fontSize: 13, fontWeight: 600, marginTop: 10, lineHeight: 1.5 }
 
-const EXPIRED = 'This link has expired or was already used. Use "Forgot password?" to get a new one, or ask an administrator to send a new invite.'
+const EXPIRED = 'This link has expired or was already used. Ask an administrator for a new invite or a temporary password.'
 
 function Header({ subtitle }) {
   return (
@@ -161,6 +161,26 @@ function SetPassword({ kind, onDone }) {
   )
 }
 
+/* An invite or reset link with a token. The token is only used when the person presses Continue, so software that opens links in emails
+   (mail scanners, link previews) cannot use it up first. */
+function ConfirmLink({ kind, tokenHash, onVerified, onFailed }) {
+  const [busy, setBusy] = useState(false)
+  const go = async () => {
+    setBusy(true)
+    try { await window.storage.verifyEmailLink(tokenHash, kind); onVerified() }
+    catch { onFailed() }
+  }
+  return (
+    <div style={page}>
+      <div style={card}>
+        <Header subtitle={kind === 'invite' ? 'You have been invited' : 'Reset your password'} />
+        <div style={{ fontSize: 14, lineHeight: 1.6 }}>{kind === 'invite' ? 'Press Continue to accept the invitation and choose your password.' : 'Press Continue to choose a new password.'}</div>
+        <button type="button" disabled={busy} style={primary(busy)} onClick={go}>{busy ? 'Checking…' : 'Continue'}</button>
+      </div>
+    </div>
+  )
+}
+
 function Message({ children }) {
   return <div style={page}><div style={{ ...card, fontSize: 14, lineHeight: 1.6 }}>{children}</div></div>
 }
@@ -184,6 +204,7 @@ export default function Root({ boot }) {
     const showLogin = () => toLogin('') // the guest pressed "Log in"
     window.addEventListener('yyc-show-login', showLogin)
     ;(async () => {
+      if (boot.tokenHash) { setPwKind(boot.tokenType); setPhase('confirm'); return } // wait for the person to press Continue
       const has = await W.hasSession()
       if (boot.link && has) { setPhase('setpw'); return } // an invite or reset link: choose a password before anything else
       if (!has) {
@@ -194,7 +215,7 @@ export default function Root({ boot }) {
       try { const me = await W.loadMe(); setUser(me); if (me.mustChangePassword) { setPwKind('temp'); setPhase('setpw') } else setPhase('app') } catch (e) { await W.signOut(); toLogin(String(e.message || '')) }
     })()
     return () => { off(); window.removeEventListener('yyc-auth-expired', expired); window.removeEventListener('yyc-show-login', showLogin) }
-  }, [signedIn, boot.guest, boot.link, boot.linkError, toLogin])
+  }, [signedIn, boot.guest, boot.link, boot.linkError, boot.tokenHash, boot.tokenType, toLogin])
 
   // the password is saved: ask the server who this is (it also applies the allowed-domain and disabled-account rules), then open the library
   const afterPassword = async () => {
@@ -205,6 +226,10 @@ export default function Root({ boot }) {
 
   if (phase === 'error') return <Message><b>The server is not set up correctly.</b><br />{boot.error}</Message>
   if (phase === 'checking') return <Message>Loading…</Message>
+  if (phase === 'confirm') {
+    const clearUrl = () => { try { window.history.replaceState(null, '', window.location.pathname) } catch { /* ignore */ } }
+    return <ConfirmLink kind={boot.tokenType} tokenHash={boot.tokenHash} onVerified={() => { clearUrl(); setPhase('setpw') }} onFailed={() => { clearUrl(); toLogin(EXPIRED) }} />
+  }
   if (phase === 'setpw') return <SetPassword kind={pwKind} onDone={afterPassword} />
   if (phase === 'login') {
     return <Login notice={notice} emailInvites={!!boot.emailInvites} onDone={(u) => { setUser(u); setGuestState(false); setNotice(''); if (u.mustChangePassword) { setPwKind('temp'); setPhase('setpw') } else setPhase('app') }}

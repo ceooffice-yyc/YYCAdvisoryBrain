@@ -10,8 +10,8 @@
 //
 // Who can do what (401 = not signed in / session ended, 403 = signed in but not allowed):
 //   anyone (no sign-in)                                      access_request: ask for an account (rate limited; answers the same for every address)
-//   guest (nobody signed in, if ALLOW_GUEST is not false)   library, kb, document, documents  (read-only)
-//   any signed-in user                                       + gap_add, chat_get / chat_save (their own), suggestions_get / suggestions_set
+//   guest (nobody signed in, only if ALLOW_GUEST=true)      library, kb, document, documents  (read-only, rate limited per address)
+//   any signed-in user                                       + gap_add, chat_get / chat_save (their own), suggestions_get
 //   admin (ADMIN_EMAILS or app_metadata.role = "admin")      + everything that changes the library, and reading any chat
 //
 // Nothing is ever hard-deleted: every row has status ('active' | 'deleted'), deleted_at, and who created / changed / deleted it.
@@ -20,10 +20,12 @@
 import { createClient } from '@supabase/supabase-js';
 import { authConfigured, authenticate, clearAuthCache } from './auth.js';
 import * as acct from './accounts.js';
+import { cleanDocHtml } from './sanitize.js';
+import { hit, clientIp as ipOf, limitFrom } from './rateLimit.js';
 import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
 export const dbConfigured = (env = process.env) => !!(String(env.SUPABASE_URL || '').trim() && String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
-export const guestAllowed = (env = process.env) => String(env.ALLOW_GUEST || '').trim().toLowerCase() !== 'false';
+export const guestAllowed = (env = process.env) => String(env.ALLOW_GUEST || '').trim().toLowerCase() === 'true'; // off unless switched on: a missing setting must never open the library
 
 const PAGE = 1000; // Supabase returns at most 1000 rows per request: bigger reads are fetched page by page
 const MAX_BODY_CHARS = 3_500_000;
@@ -66,7 +68,7 @@ function docToRow(d, by) {
   return {
     id: d.id, title: str(d.title, 500) || '', doc_type: str(d.doc_type, 60), industry: str(d.industry, 300), industry_main: str(d.industry_main, 300),
     industry_sub: str(d.industry_sub, 300), language: str(d.language, 20), problem_signature: str(d.problem_signature, 3000),
-    sections: Array.isArray(d.sections) ? d.sections : [], full_text: str(d.full_text, 400000) || '', html: str(d.html, 400000) || '',
+    sections: Array.isArray(d.sections) ? d.sections : [], full_text: str(d.full_text, 400000) || '', html: str(cleanDocHtml(str(d.html, 400000) || ''), 400000) || '', // scripts and anything else unsafe are removed before it is stored
     created: Number.isFinite(Number(d.created)) ? Number(d.created) : Date.now(),
     status: 'active', deleted_at: null, deleted_by: null, updated_by: by, updated_at: nowIso(),
   };
@@ -177,6 +179,7 @@ const OPS = {
     level: 'user',
     run: async ({ sb, user, now }, a) => {
       const q = trim(a.question, 2000); if (!q) throw bad('Empty question');
+      if (hit('gap-add', user.id || user.email, 30, 3_600_000, now())) throw new HttpError(429, 'Too many entries. Please try again later.');
       must(await sb.from('gap_log').insert({ id: trim(a.id, 60) || `g${now()}`, question: q, at: now(), status: 'active', created_by: user.email }), 'write gap log');
       return {};
     },
@@ -199,7 +202,7 @@ const OPS = {
     },
   },
   suggestions_get: { level: 'user', run: async ({ sb }) => { const row = must(await sb.from('suggestions').select('value').eq('id', 'current').maybeSingle(), 'read suggestions'); return { value: row ? row.value : null }; } },
-  suggestions_set: { level: 'user', run: async ({ sb, user }, a) => { if (!a.value || typeof a.value !== 'object') throw bad('Bad value'); must(await sb.from('suggestions').upsert({ id: 'current', value: a.value, updated_by: user.email, updated_at: nowIso() }), 'write suggestions'); return {}; } },
+  suggestions_set: { level: 'admin', run: async ({ sb, user }, a) => { if (!a.value || typeof a.value !== 'object') throw bad('Bad value'); must(await sb.from('suggestions').upsert({ id: 'current', value: a.value, updated_by: user.email, updated_at: nowIso() }), 'write suggestions'); return {}; } },
 
   // ── admin ──
   doc_save: {
@@ -357,7 +360,8 @@ const OPS = {
 };
 
 const json = (status, body) => ({ status, body });
-const clientIp = (headers = {}) => { const h = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])); return String(h['x-forwarded-for'] || h['x-real-ip'] || 'unknown').split(',')[0].trim() || 'unknown'; };
+const clientIp = (req) => req.ip || ipOf(req.headers);
+const tooMany = (wait) => ({ status: 429, body: { error: `Too many requests. Please wait ${wait}s.` } });
 
 /* req: { method, query, body, headers }  ->  { status, body } */
 export async function handleDb(req, { env = process.env, now = Date.now } = {}) {
@@ -380,10 +384,19 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
     user = { id: null, email: null, isAdmin: false, guest: true };
   } else {
     const a = await authenticate(req.headers, env, now(), { allowMustChange: true });
-    if (!a.ok) return json(a.status, { error: a.error });
+    if (!a.ok) {
+      const wait = signedOut ? 0 : hit('auth-fail', clientIp(req), 30, 60_000, now()); // a wrong or forged token, over and over
+      return wait ? tooMany(wait) : json(a.status, { error: a.error });
+    }
     user = a.user;
     // signed in with a temporary password: nothing but "who am I" and "choose a new password" until they have
     if (user.mustChangePassword && !(method === 'GET' && q.action === 'me') && !(op && req.body.op === 'set_password')) return json(403, { error: 'Please choose a new password first.', code: 'must_change_password' });
+  }
+  {
+    const wait = user.guest || !user.id
+      ? hit('db-guest', clientIp(req), limitFrom(env, 'GUEST_RATE_PER_MIN', 60), 60_000, now())
+      : hit('db-user', user.id, limitFrom(env, 'DB_RATE_PER_MIN', 300), 60_000, now());
+    if (wait) return tooMany(wait);
   }
   if (method === 'GET' && q.action === 'me') return json(200, user);
   if (method !== 'POST') return json(405, { error: 'Method not allowed' });
@@ -391,7 +404,7 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   if (op.level === 'admin' && !user.isAdmin) return json(403, { error: 'You need an admin account to do that.' });
 
   try {
-    const out = await op.run({ sb: getClient(env), user, now, env, headers: req.headers || {}, ip: clientIp(req.headers) }, req.body || {});
+    const out = await op.run({ sb: getClient(env), user, now, env, headers: req.headers || {}, ip: clientIp(req) }, req.body || {});
     return json(200, out || {});
   } catch (err) {
     if (err instanceof acct.AccountError && err.status >= 500) { console.error('accounts error:', err.message); return json(err.status, { error: op.level === 'public' ? 'The request could not be saved. Please try again later.' : err.message }); }

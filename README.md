@@ -127,7 +127,7 @@ By default each browser keeps its own copy of the library and anyone can open it
 
 **3. Keep sign-up closed.** *Authentication → Sign In / Providers → Email*: turn **off** "Allow new users to sign up" and leave **Confirm email** on. Nobody can register on their own: people ask for access on the sign-in screen and an admin approves them in the app (see *How people get an account* below). For the very first admin only, create the account by hand: *Authentication → Users → Add user → Create new user*, enter the email and a password, tick **Auto Confirm User**, and put that email in `ADMIN_EMAILS`.
 
-**Email is optional.** By default (`EMAIL_INVITES` not set) the app sends **no** emails: an admin creates the account and is shown a one-time temporary password to hand over, and the person must choose their own at first sign-in. This is the right setting while you use Supabase's built-in email, which only delivers a few messages an hour and only to members of your Supabase organisation, so invites to ordinary staff would fail. To switch to emailed links later: *Authentication → Emails → SMTP Settings* → turn on **custom SMTP** with your company mail service, check the **Invite user** and **Reset password** templates (keep the `{{ .ConfirmationURL }}` link), set **Site URL** and **Redirect URLs** under *Authentication → URL Configuration* to your site (and `http://localhost:5173` for local work), then set `EMAIL_INVITES=on` and `SITE_URL` and redeploy.
+**Email is optional.** By default (`EMAIL_INVITES` not set) the app sends **no** emails: an admin creates the account and is shown a one-time temporary password to hand over, and the person must choose their own at first sign-in. This is the right setting while you use Supabase's built-in email, which only delivers a few messages an hour and only to members of your Supabase organisation, so invites to ordinary staff would fail. To switch to emailed links later: *Authentication → Emails → SMTP Settings* → turn on **custom SMTP** with your company mail service, in the **Invite user** and **Reset password** templates replace the link address `{{ .ConfirmationURL }}` with `{{ .SiteURL }}/?token_hash={{ .TokenHash }}&type=invite` (and `&type=recovery` in the reset template). With that form the link is only used up when the person presses Continue in the app, so company mail scanners that open every link (a common cause of "This link has expired or was already used") cannot spend it, set **Site URL** and **Redirect URLs** under *Authentication → URL Configuration* to your site (and `http://localhost:5173` for local work), then set `EMAIL_INVITES=on` and `SITE_URL` and redeploy.
 
 **4. Copy the keys.** *Project Settings → API*: the **Project URL**, the **anon public** key and the **service_role** secret.
 
@@ -141,7 +141,7 @@ ADMIN_EMAILS=you@yourcompany.com,boss@yourcompany.com   # who are admins; everyo
 ALLOWED_EMAIL_DOMAINS=yourcompany.com    # who may ask for access or be invited (use your own company domain, never a public one like gmail.com)
 #EMAIL_INVITES=on                       # only after custom SMTP is set up in Supabase: use invite / reset emails instead of temporary passwords
 SITE_URL=https://your-site.vercel.app   # only with EMAIL_INVITES=on: where invite and reset links lead (also add it to Supabase → Redirect URLs)
-ALLOW_GUEST=false                        # optional: remove the Continue-as-guest button and block guest reads
+ALLOW_GUEST=true                         # optional: show "Continue as guest" (read-only). Guests are OFF unless this is exactly true
 ```
 
 The server prints `Shared database + sign-in: Supabase` at start-up. (An admin can also be made with `app_metadata.role = "admin"`; see the bottom of `supabase/schema.sql`.)
@@ -402,5 +402,15 @@ vite.config.js       Dev proxy: /api → http://127.0.0.1:8787
 ## Security notes
 
 - The Groq key stays on the server (`.env` locally, Vercel env vars when hosted); `.env` is git-ignored.
+- **Guests are off unless `ALLOW_GUEST=true`.** A guest can only read (the library, lever records and documents), is limited per address (`GUEST_RATE_PER_MIN`, default 60), and no copy of the library is left in a guest's browser. A guest can read **every** document in full, so only switch guests on if everything in the library may be seen by anyone with the link.
+- **The AI proxy (`/api/groq/chat`) is for admins only** and only passes the app's own kind of request: its one model, text messages, capped sizes (`server/groqHandler.js`). On a hosted site with no Supabase sign-in it refuses to run. Everyone else asks questions through `/api/ask`, where the server writes the prompts.
+- **Document HTML is cleaned twice:** when it is saved (`server/sanitize.js`) and again when it is shown (`src/safeHtml.js`). Scripts, event handlers, frames, forms, styles and pictures or links to other sites are removed.
+- **Security headers** go out with every response (`server/securityHeaders.js` for the Node server, `vercel.json` for Vercel; keep the two the same): a Content-Security-Policy that only allows scripts from this site, no framing, no MIME sniffing, no referrer.
+- **Rate limits** (`server/rateLimit.js`): per person on the database API (`DB_RATE_PER_MIN`, default 300), the AI proxy (`GROQ_RATE_PER_MIN`, default 300) and Ask the Brain (`ASK_RATE_PER_MIN`, default 20); per address for guests and for repeated wrong tokens. They are kept in each server instance's memory, so on Vercel they slow abuse down rather than enforce an exact quota.
+- **Only confirmed accounts** can use the app, and only admins can change the shared example questions.
+- An unknown page address answers a real 404 (`public/404.html`); an unknown `/api` address answers a JSON 404.
+- Behind a reverse proxy set `TRUST_PROXY=1` so the limits see the visitor's address instead of the proxy's.
+- Tests: `npm test` (unit, including `test/security.test.mjs`) and `npm run e2e` (a real browser against the built app on a test port, with no database and no AI calls).
 - **With Supabase** everyone signs in with their own account; admins are decided on the server (`ADMIN_EMAILS`), there is no shared passcode, and only admins can change or delete. Keep sign-up switched off in Supabase: people get in only by an admin approving a request or sending an invite (Users tab).
 - **Without Supabase** the admin passcode is a convenience lock stored with the data, **not** real authentication. Anyone with browser access to the data can read it. Do not treat the library as confidential on a public deployment without adding proper access control.
+

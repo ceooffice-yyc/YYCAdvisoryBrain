@@ -71,6 +71,11 @@ async function makeRemote(local, cfg, sdk) {
       const { error } = await auth.auth.updateUser({ password });
       if (error) throw new Error(/same|different/i.test(error.message) ? "Choose a password you have not used before." : error.message);
     },
+    // an invite / reset link with a token: exchange it for a session (this is the step that uses the link up)
+    async verifyEmailLink(tokenHash, type) {
+      const { error } = await auth.auth.verifyOtp({ token_hash: tokenHash, type });
+      if (error) throw new Error(error.message || "The link could not be used.");
+    },
     // the first sign-in with a temporary password: the server applies the new password and lifts the restriction
     async changePassword(password) {
       const { res, data } = await storage.api("POST", { body: { op: "set_password", password }, quiet: true });
@@ -102,12 +107,16 @@ function readEmailLink() {
   try {
     const h = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
     const type = h.get("type");
-    return { link: type === "invite" || type === "recovery" ? type : null, linkError: h.get("error_description") || h.get("error") || "" };
-  } catch { return { link: null, linkError: "" }; }
+    // the newer, safer link: ?token_hash=…&type=invite|recovery. Nothing is used up until the person presses Continue, so a mail scanner that opens the link first cannot spend it.
+    const q = new URLSearchParams(window.location.search);
+    const qType = q.get("type");
+    const tokenHash = (qType === "invite" || qType === "recovery") && /^[A-Za-z0-9_-]{16,200}$/.test(q.get("token_hash") || "") ? q.get("token_hash") : null;
+    return { link: type === "invite" || type === "recovery" ? type : null, linkError: h.get("error_description") || h.get("error") || "", tokenHash, tokenType: tokenHash ? qType : null };
+  } catch { return { link: null, linkError: "", tokenHash: null, tokenType: null }; }
 }
 
 export async function initStorage() {
-  const { link, linkError } = readEmailLink();
+  const { link, linkError, tokenHash, tokenType } = readEmailLink();
   if (window.storage) { installDb(); return { mode: window.storage.remote ? "supabase" : "local" }; }
   const local = makeLocal();
   // a returning visitor (a saved sign-in exists): start loading the sign-in library code at the same time as the status check
@@ -128,7 +137,7 @@ export async function initStorage() {
     installDb();
     // start loading the library NOW, while the sign-in screen is showing: a returning user has a session; a guest needs none
     remote.hasSession().then((has) => { if (has || status.guest) window.db.prefetch(); });
-    return { mode: "supabase", guest: !!status.guest, emailInvites: !!status.emailInvites, link, linkError };
+    return { mode: "supabase", guest: !!status.guest, emailInvites: !!status.emailInvites, link, linkError, tokenHash, tokenType };
   }
   window.storage = local;
   installDb();

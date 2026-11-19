@@ -38,3 +38,7 @@ backup*.json
 
 # editor/tool backup copies
 *.bak
+
+# browser test output
+e2e/.results/
+playwright-report/

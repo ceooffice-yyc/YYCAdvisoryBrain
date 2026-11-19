@@ -151,7 +151,7 @@ export function makeRemoteDb(storage) {
     if (!res.ok) throw new Error((data && data.error) || `Shared database error (${res.status})`);
     return data || {};
   };
-  const keepCopy = (lib) => { try { const s = JSON.stringify(lib); if (s.length < PEEK_MAX_CHARS) localStorage.setItem(PEEK_KEY, s); else localStorage.removeItem(PEEK_KEY); } catch { /* storage full or blocked: just no local copy */ } };
+  const keepCopy = (lib) => { if (!storage.user) return; try { const s = JSON.stringify(lib); if (s.length < PEEK_MAX_CHARS) localStorage.setItem(PEEK_KEY, s); else localStorage.removeItem(PEEK_KEY); } catch { /* storage full or blocked: just no local copy */ } };
   const dropCaches = () => { pre = null; docs.clear(); inflight.clear(); try { localStorage.removeItem(PEEK_KEY); } catch { /* ignore */ } };
   const forgetDoc = (id) => { docs.delete(id); pre = null; };
   const fillDocs = (list) => list.forEach((d) => { if (docs.size >= DOC_MAX) docs.delete(docs.keys().next().value); docs.set(d.id, { at: Date.now(), doc: d }); });
