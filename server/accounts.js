@@ -248,6 +248,10 @@ export async function createRequest(sb, env, { name, email, note, password }, ip
   const ownPassword = !emailOn(env); // without email there is no link to set a password later, so the person chooses it now
   if (ownPassword) { const problem = passwordProblem(password, to); if (problem) throw fail(400, problem); }
 
+  if (!domainAllowed(to, env)) { // said plainly: a request that vanished silently looked like a bug. Which addresses HAVE an account is still never revealed.
+    const domains = list(env.ALLOWED_EMAIL_DOMAINS);
+    throw fail(400, `Please use your work email address${domains.length ? ` (${domains.join(', ')})` : ''}.`);
+  }
   const hits = (recentRequests.get(ip) || []).filter((t) => now - t < 3_600_000);
   if (hits.length >= HOURLY_PER_IP) throw fail(429, 'Too many requests. Please try again later.');
   hits.push(now);
@@ -255,11 +259,10 @@ export async function createRequest(sb, env, { name, email, note, password }, ip
   if (recentRequests.size > 2000) for (const [k, v] of recentRequests) if (!v.some((t) => now - t < 3_600_000)) recentRequests.delete(k);
 
   // The hash is worked out for every request, kept or not, so the time taken says nothing about the address.
-  const passwordHash = ownPassword ? await bcrypt.hash(password, 10) : null;
+  // An address that is an owner in the server settings is still shown to the admins (flagged), but WITHOUT the stranger's password: an owner can only
+  // approve it by creating the account with a temporary password that they hand to the real person. A public form never sets an owner's password.
+  const passwordHash = ownPassword && !isOwner(to, env) ? await bcrypt.hash(password, 10) : null;
   const done = { ok: true };
-  // Quietly ignored (the page shows the same message): an address outside the allowed domains, and an address that is an admin in the
-  // server settings. Such an owner account is never created from a public form: another owner creates it in the Users tab.
-  if (!domainAllowed(to, env) || isOwner(to, env)) return done;
 
   // only requests that could be kept count against the shared hourly budget, so strangers cannot use it up for everyone
   totalHits = totalHits.filter((t) => now - t < 3_600_000);
@@ -272,17 +275,29 @@ export async function createRequest(sb, env, { name, email, note, password }, ip
   if (pending.length > MAX_PENDING) throw fail(429, 'Too many pending requests. Please contact your administrator.');
   const dup = must(await sb.from('access_requests').select('id').eq('status', 'pending').eq('email', to).limit(1), 'Reading requests');
   if (dup.length) return done; // the first request stands: a second one cannot replace its password
-  must(await sb.from('access_requests').insert({ email: to, name: who, note: String(note || '').trim().slice(0, 500) || null, password_hash: passwordHash }), 'Saving the request');
+  const saved = await sb.from('access_requests').insert({ email: to, name: who, note: String(note || '').trim().slice(0, 500) || null, password_hash: passwordHash });
+  if (saved.error) {
+    if (/password_hash|schema cache|column/i.test(saved.error.message || '')) console.error('access_requests has no password_hash column: run the latest supabase/schema.sql in the Supabase SQL Editor.');
+    throw fail(502, `Saving the request failed: ${saved.error.message}`);
+  }
   await logEvent(sb, to, 'request', to, { name: who });
   return done;
 }
 
 /* The password hash never leaves the server: the list only says whether a request carries one. */
 export async function listRequests(sb, env = process.env) {
-  const rows = must(await sb.from('access_requests').select('id,email,name,note,status,requested_at,decided_by,decided_at,password_hash').order('requested_at', { ascending: false }).limit(200), 'Reading requests');
-  return rows
+  const cols = 'id,email,name,note,status,requested_at,decided_by,decided_at';
+  let schemaMissing = false;
+  let res = await sb.from('access_requests').select(`${cols},password_hash`).order('requested_at', { ascending: false }).limit(200);
+  if (res.error && /password_hash|schema cache|column/i.test(res.error.message || '')) { // the latest schema.sql has not been run: list what exists and tell the admin
+    schemaMissing = true;
+    res = await sb.from('access_requests').select(cols).order('requested_at', { ascending: false }).limit(200);
+  }
+  const rows = must(res, 'Reading requests');
+  const requests = rows
     .map(({ password_hash: hash, ...r }) => ({ ...r, hasPassword: r.status === 'pending' && !!hash, isOwner: isOwner(r.email, env) }))
     .sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+  return { requests, schemaMissing };
 }
 
 export async function decideRequest(sb, env, actor, { id, decision, role = 'viewer', mode }, headers = {}) {

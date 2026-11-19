@@ -282,7 +282,7 @@ export function makeRemoteDb(storage) {
     async userSetRole(id, role) { return call("user_set_role", { id, role }); },
     async userSetDisabled(id, disabled) { return call("user_set_disabled", { id, disabled }); },
     async userSendReset(id) { return call("user_send_reset", { id }); },
-    async requestsList() { return (await call("requests_list")).requests || []; },
+    async requestsList() { const out = await call("requests_list"); return { requests: out.requests || [], schemaMissing: !!out.schemaMissing }; },
     async requestDecide(id, decision, role, mode) { return call("request_decide", { id, decision, role, mode }); },
     async accountEvents() { return (await call("account_events")).events || []; },
   };

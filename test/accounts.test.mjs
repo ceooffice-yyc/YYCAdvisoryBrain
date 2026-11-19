@@ -6,14 +6,14 @@ import { authenticate, _test as authTest } from '../server/auth.js';
 import { _test as rateLimits } from '../server/rateLimit.js';
 
 // A small in-memory stand-in for the Supabase client: just enough of the table queries and the auth admin calls the account code uses.
-function fakeSb({ users = [], requests = [] } = {}) {
+function fakeSb({ users = [], requests = [], noHashColumn = false } = {}) {
   const tables = { access_requests: requests, account_events: [] };
   const sent = { invites: [], resets: [] };
   let seq = 1;
   const table = (name) => {
-    const filters = []; let lim = Infinity; let mode = 'select'; let patch;
+    const filters = []; let lim = Infinity; let mode = 'select'; let patch; let selected = '';
     const api = {
-      select() { return api; }, order() { return api; },
+      select(cols) { selected = String(cols || ''); return api; }, order() { return api; },
       eq(k, v) { filters.push((r) => r[k] === v); return api; },
       lt(k, v) { filters.push((r) => r[k] < v); return api; },
       limit(n) { lim = n; return api; },
@@ -21,6 +21,7 @@ function fakeSb({ users = [], requests = [] } = {}) {
       update(p) { mode = 'update'; patch = p; return api; },
       then(resolve) {
         const rows = tables[name] || (tables[name] = []);
+        if (noHashColumn && name === 'access_requests' && (selected.includes('password_hash') || (patch && 'password_hash' in patch))) return resolve({ data: null, error: { message: 'column access_requests.password_hash does not exist' } });
         if (mode === 'insert') { rows.push({ id: `r${seq++}`, status: 'pending', requested_at: new Date().toISOString(), ...patch }); return resolve({ data: null, error: null }); }
         const hit = rows.filter((r) => filters.every((f) => f(r)));
         if (mode === 'update') { hit.forEach((r) => Object.assign(r, patch)); return resolve({ data: hit.map((r) => ({ id: r.id })), error: null }); }
@@ -64,9 +65,10 @@ test('request access: stored once, answers the same for every address, and never
   const sb = fakeSb();
   const a = await acct.createRequest(sb, ENV, { name: ' Mei  Ling ', email: 'Mei@YYCAdvisors.com', note: 'Finance team' }, '1.1.1.1');
   const again = await acct.createRequest(sb, ENV, { name: 'Mei Ling', email: 'mei@yycadvisors.com' }, '1.1.1.2');
-  const outsider = await acct.createRequest(sb, ENV, { name: 'Spam', email: 'x@example.org' }, '1.1.1.3');
-  assert.deepEqual([a, again, outsider], [{ ok: true }, { ok: true }, { ok: true }]);
-  assert.equal(sb.tables.access_requests.length, 1, 'one pending request, the outside domain is quietly ignored');
+  assert.deepEqual([a, again], [{ ok: true }, { ok: true }]);
+  const outsider = await acct.createRequest(sb, ENV, { name: 'Spam', email: 'x@example.org' }, '1.1.1.3').catch((e) => e);
+  assert.deepEqual([outsider.status, outsider.message], [400, 'Please use your work email address (yycadvisors.com).'], 'an address outside the allowed domains is told so, not silently dropped');
+  assert.equal(sb.tables.access_requests.length, 1, 'one pending request, and none for the outside domain');
   assert.deepEqual([sb.tables.access_requests[0].email, sb.tables.access_requests[0].name], ['mei@yycadvisors.com', 'Mei Ling']);
   assert.equal(sb.tables.account_events[0].action, 'request');
   assert.equal(await code(acct.createRequest(sb, ENV, { name: '', email: 'a@yycadvisors.com' })), 400);
@@ -277,7 +279,7 @@ test('no email: the person chooses their own password when asking; NO account ex
   const row = sb.tables.access_requests[0];
   assert.match(row.password_hash, /^\$2[aby]\$10\$/, 'only a bcrypt hash is kept');
   assert.ok(!JSON.stringify([sb.tables.access_requests, sb.tables.account_events]).includes('my own long password'), 'the password itself is in neither the request nor the trail');
-  const listed = (await acct.listRequests(sb, ENV_OFF))[0];
+  const listed = (await acct.listRequests(sb, ENV_OFF)).requests[0];
   assert.deepEqual([listed.hasPassword, 'password_hash' in listed], [true, false], 'the admin screen is told a password exists, never the hash');
 
   const storedHash = row.password_hash;
@@ -330,26 +332,33 @@ test('review H1 / M1: an address that is an owner in the server settings cannot 
   acct._test.resetLimits();
   const env = { ...ENV_OFF, ADMIN_EMAILS: 'boss@yycadvisors.com, second.owner@yycadvisors.com' };
   const sb = fakeSb({ users: [boss, second] });
-  // the public form quietly keeps nothing for an owner address
+  // an owner address reaches the admins like any request, but the password typed on the public form is NOT kept
   assert.deepEqual(await acct.createRequest(sb, env, { name: 'Second Owner', email: 'second.owner@yycadvisors.com', password: 'stranger password 1' }, '9.1.1.1'), { ok: true });
-  assert.equal(sb.tables.access_requests.length, 0);
-  // a request row for an owner address that got in some other way: only an owner may approve it
-  sb.tables.access_requests.push({ id: 'own-1', email: 'second.owner@yycadvisors.com', name: 'x', status: 'pending', requested_at: new Date().toISOString(), password_hash: '$2b$10$abcdefghijklmnopqrstuuJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8' });
+  assert.equal(sb.tables.access_requests.length, 1, 'the admins see it');
+  assert.equal(sb.tables.access_requests[0].password_hash, null, 'a stranger cannot choose an owner\'s password');
+  sb.tables.access_requests[0].id = 'own-1';
   assert.equal(await code(acct.decideRequest(sb, env, actor, { id: 'own-1', decision: 'approve' })), 403, 'an ordinary admin cannot');
   assert.equal(sb.tables.access_requests[0].status, 'pending', 'and the request is left as it was');
-  assert.equal((await acct.listRequests(sb, env))[0].isOwner, true, 'the admin screen is told it is an owner address');
+  const listed = (await acct.listRequests(sb, env)).requests[0];
+  assert.deepEqual([listed.isOwner, listed.hasPassword], [true, false], 'the admin screen is told it is an owner address with no password behind it');
+  // an owner approves it: the account is created with a temporary password they hand to the real person, never from the stranger's password
+  const ownerActor = { id: 'u-boss', email: 'boss@yycadvisors.com' };
+  const approved = await acct.decideRequest(sb, env, ownerActor, { id: 'own-1', decision: 'approve' });
+  assert.deepEqual([approved.status, typeof approved.password, approved.activated], ['approved', 'string', undefined]);
+  assert.equal(sb.users.find((u) => u.email === 'second.owner@yycadvisors.com')._pw, approved.password);
+  sb.users.splice(sb.users.findIndex((u) => u.email === 'second.owner@yycadvisors.com'), 1);
   // an ordinary admin cannot create the owner's account and so receive its temporary password
   assert.equal(await code(acct.createUser(sb, env, actor, { email: 'second.owner@yycadvisors.com' })), 403);
   assert.equal(sb.users.some((u) => u.email === 'second.owner@yycadvisors.com'), false);
   // an owner can
-  assert.equal(await code(acct.createUser(sb, env, { id: 'u-boss', email: 'boss@yycadvisors.com' }, { email: 'second.owner@yycadvisors.com' })), 200);
+  assert.equal(await code(acct.createUser(sb, env, ownerActor, { email: 'second.owner@yycadvisors.com' })), 200);
 });
 
 test('review M3: outsiders cannot use up the shared hourly budget, and stale requests are closed', async () => {
   acct._test.resetLimits();
   const sb = fakeSb({ users: [boss, second] });
   const T0 = 1_800_000_000_000;
-  for (let i = 0; i < 70; i++) await acct.createRequest(sb, ENV_OFF, { name: 'Spam', email: `s${i}@example.org`, password: 'a long enough passphrase' }, `10.0.${i}.1`, T0 + i); // 70 different addresses, wrong domain
+  for (let i = 0; i < 70; i++) assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Spam', email: `s${i}@example.org`, password: 'a long enough passphrase' }, `10.0.${i}.1`, T0 + i)), 400, 'wrong domain: refused before it counts');
   assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Real', email: 'real@yycadvisors.com', password: 'a long enough passphrase' }, '10.9.9.9', T0 + 100)), 200, 'a real person still gets through');
   // an old undecided request is closed the next time somebody asks
   sb.tables.access_requests.push({ id: 'old', email: 'old@yycadvisors.com', name: 'Old', status: 'pending', requested_at: new Date(T0 - 40 * 86_400_000).toISOString(), password_hash: 'h' });
@@ -410,4 +419,31 @@ test('review L5 / L3: made-up operation names are refused cleanly, and malformed
     const out = await handleDb({ method: 'POST', headers: { authorization: 'Bearer adm' }, body: { op } }, { env, now: () => T });
     assert.deepEqual([out.status, out.body.error], [400, 'Unknown operation'], op);
   }
+});
+
+test('a request always reaches the admin list, and the admin is told when the database is missing the latest schema', async () => {
+  acct._test.resetLimits();
+  // 1. normal project: ask, then the admin sees it
+  const ok = fakeSb({ users: [boss, second] });
+  await acct.createRequest(ok, ENV_OFF, { name: 'Zed', email: 'zed@yycadvisors.com', password: 'zed long password' }, '12.1.1.1');
+  const seen = await acct.listRequests(ok, ENV_OFF);
+  assert.deepEqual([seen.requests.length, seen.requests[0].email, seen.requests[0].status, seen.schemaMissing], [1, 'zed@yycadvisors.com', 'pending', false]);
+
+  // 2. a project that has not run the latest schema.sql: the person is NOT told "sent", and the admin screen explains what to do
+  const old = fakeSb({ users: [boss, second], noHashColumn: true });
+  const err = await acct.createRequest(old, ENV_OFF, { name: 'Yan', email: 'yan@yycadvisors.com', password: 'yan long password' }, '12.1.1.2').catch((e) => e);
+  assert.equal(err.status, 502, 'the form reports a failure instead of claiming success');
+  old.tables.access_requests.push({ id: 'x1', email: 'older@yycadvisors.com', name: 'Older', status: 'pending', requested_at: new Date().toISOString() }); // a request made before the change
+  const list = await acct.listRequests(old, ENV_OFF);
+  assert.deepEqual([list.schemaMissing, list.requests.map((r) => r.email)], [true, ['older@yycadvisors.com']], 'the list still loads and says the schema is out of date');
+});
+
+test('the public form names the problem when the address is not allowed, and an owner address still reaches the admins', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  const bad = await acct.createRequest(sb, ENV_OFF, { name: 'Gmail Person', email: 'someone@gmail.com', password: 'a long enough passphrase' }, '13.1.1.1').catch((e) => e);
+  assert.deepEqual([bad.status, bad.message], [400, 'Please use your work email address (yycadvisors.com).']);
+  assert.equal(sb.tables.access_requests.length, 0);
+  assert.deepEqual(await acct.createRequest(sb, ENV_OFF, { name: 'The Owner', email: 'boss@yycadvisors.com', password: 'a long enough passphrase' }, '13.1.1.2'), { ok: true });
+  assert.equal(sb.tables.access_requests.length, 1, 'a request from an owner address is not swallowed');
 });

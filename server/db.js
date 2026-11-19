@@ -367,7 +367,7 @@ const OPS = {
   user_set_role: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setRole(sb, env, user, a); clearAuthCache(); return out; } },
   user_set_disabled: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setDisabled(sb, env, user, a); clearAuthCache(); return out; } },
   user_send_reset: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.sendReset(sb, env, user, a, headers) },
-  requests_list: { level: 'admin', run: async ({ sb, env }) => ({ requests: await acct.listRequests(sb, env) }) },
+  requests_list: { level: 'admin', run: async ({ sb, env }) => acct.listRequests(sb, env) },
   request_decide: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.decideRequest(sb, env, user, a, headers) },
   account_events: { level: 'admin', run: async ({ sb }, a) => ({ events: await acct.listEvents(sb, a.limit) }) },
 };

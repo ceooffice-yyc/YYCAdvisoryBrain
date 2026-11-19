@@ -849,12 +849,22 @@ export default function App() {
     setLevers(kb.records);
   };
 
+  const [waitingRequests, setWaitingRequests] = useState(0); // access requests waiting for an admin, shown as a badge on the Users tab
+  useEffect(() => {
+    if (!(isAdmin && window.storage?.remote)) return undefined;
+    let on = true;
+    const refresh = async () => { try { const r = await window.db.requestsList(); if (on) setWaitingRequests(r.requests.filter((x) => x.status === "pending").length); } catch { /* the badge is a convenience */ } };
+    refresh();
+    const timer = setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 90_000);
+    window.addEventListener("yyc-requests-changed", refresh);
+    return () => { on = false; clearInterval(timer); window.removeEventListener("yyc-requests-changed", refresh); };
+  }, [isAdmin]);
   const navItems = [
     { key: "kb", icon: "book", label: t.tabs.kb },
     ...(isGuest ? [] : [{ key: "chat", icon: "chat", label: t.tabs.chat }]), // guests cannot use Ask the Brain
     { key: "explorer", icon: "scale", label: t.tabs.explorer },
     ...(isAdmin ? [{ key: "gap", icon: "alert", label: t.tabs.gap }] : []),
-    ...(isAdmin && window.storage?.remote ? [{ key: "users", icon: "user", label: t.tabs.users }] : []), // accounts need the shared database
+    ...(isAdmin && window.storage?.remote ? [{ key: "users", icon: "user", label: t.tabs.users, badge: waitingRequests }] : []), // accounts need the shared database
   ];
 
   if (loadErr) {
@@ -892,7 +902,7 @@ export default function App() {
               const active = tab === item.key;
               return (
                 <button key={item.key} className={`yyc-nav-item ${active ? "is-active" : ""}`} onClick={() => setTab(item.key)}>
-                  <Icon name={item.icon} size={16} /><span>{item.label}</span>{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: "auto", width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
+                  <Icon name={item.icon} size={16} /><span>{item.label}</span>{item.badge > 0 && <span className="yyc-nav-badge" aria-label={`${item.badge} waiting`}>{item.badge}</span>}{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: "auto", width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
                 </button>
               );
             })}
@@ -1032,7 +1042,7 @@ export default function App() {
               const active = tab === item.key;
               return (
                 <button key={item.key} className={`yyc-botnav-item ${active ? "is-active" : ""}`} onClick={() => setTab(item.key)}>
-                  <Icon name={item.icon} size={18} /><span>{item.label}</span>{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: 4, width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
+                  <Icon name={item.icon} size={18} /><span>{item.label}</span>{item.badge > 0 && <span className="yyc-nav-badge" aria-label={`${item.badge} waiting`}>{item.badge}</span>}{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: 4, width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
                 </button>
               );
             })}
@@ -1116,6 +1126,9 @@ function GlobalStyles() {
       .yyc-botnav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; background: var(--glass); backdrop-filter: blur(12px); border-top: 1px solid ${P.line}; padding: 6px 4px calc(8px + env(safe-area-inset-bottom)); z-index: 40; }
       @media (min-width: 900px) { .yyc-botnav { display: none; } }
       .yyc-botnav-item { flex: 1; min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 6px 2px; background: transparent; border: none; border-radius: 10px; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 650; line-height: 1.15; text-align: center; color: ${P.sub}; }
+      .yyc-nav-badge { margin-left: auto; min-width: 22px; padding: 2px 7px; border-radius: 999px; background: ${P.crimson}; color: var(--on-fill); font-size: 12px; font-weight: 800; line-height: 1.3; text-align: center; }
+      .yyc-botnav-item { position: relative; }
+      .yyc-botnav-item .yyc-nav-badge { position: absolute; top: 2px; right: 18%; margin: 0; min-width: 20px; padding: 1px 6px; }
       .yyc-botnav-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .yyc-botnav-item.is-active { color: ${P.crimsonText}; background: ${P.crimsonSoft}; }
       .yyc-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px 20px; flex-wrap: wrap; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid ${P.line}; }
@@ -5334,6 +5347,7 @@ function UsersPanel({ flash, setConfirm }) {
   const [users, setUsers] = useState(null);
   const [emailInvites, setEmailInvites] = useState(false); // true when the server sends invite / reset emails
   const [reqs, setReqs] = useState([]);
+  const [schemaMissing, setSchemaMissing] = useState(false); // the database is missing the latest schema.sql
   const [events, setEvents] = useState([]);
   const [err, setErr] = useState("");
   const [email, setEmail] = useState("");
@@ -5346,7 +5360,8 @@ function UsersPanel({ flash, setConfirm }) {
   const load = useCallback(async () => {
     try {
       const [u, r, ev] = await Promise.all([window.db.usersList(), window.db.requestsList(), window.db.accountEvents()]);
-      setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r); setEvents(ev); setErr("");
+      setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r.requests); setSchemaMissing(r.schemaMissing); setEvents(ev); setErr("");
+      window.dispatchEvent(new Event("yyc-requests-changed")); // the badge on the Users tab follows
     } catch (e) { setErr(String((e && e.message) || "Could not load the users.")); setUsers((x) => x || []); }
   }, []);
   useEffect(() => { // first load; the answer is dropped if the tab was closed meanwhile
@@ -5354,7 +5369,7 @@ function UsersPanel({ flash, setConfirm }) {
     (async () => {
       try {
         const [u, r, ev] = await Promise.all([window.db.usersList(), window.db.requestsList(), window.db.accountEvents()]);
-        if (on) { setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r); setEvents(ev); }
+        if (on) { setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r.requests); setSchemaMissing(r.schemaMissing); setEvents(ev); }
       } catch (e) { if (on) { setErr(String((e && e.message) || "Could not load the users.")); setUsers([]); } }
     })();
     return () => { on = false; };
@@ -5416,6 +5431,7 @@ function UsersPanel({ flash, setConfirm }) {
           <div className="yyc-section-sub">Nobody can register on their own. People ask for access on the sign-in screen and you approve them here, or create an account directly. {emailInvites ? "They get an email with a link to set their own password." : "People who ask for access choose their own password, and can sign in once you approve. For an account you create yourself, you are shown a one-time temporary password to give them."}</div>
         </div>
       </div>
+      {schemaMissing && <div role="alert" style={{ ...S.card, padding: "12px 16px", marginBottom: 12, borderColor: P.gold, background: P.goldSoft, fontSize: 13.5, lineHeight: 1.55 }}><b>The database needs one update.</b> People cannot send access requests until you paste the latest <code>supabase/schema.sql</code> into Supabase → SQL Editor and run it (it is safe to run again).</div>}
       {err && <div role="alert" style={{ color: P.redText, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
 
       <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>

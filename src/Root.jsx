@@ -102,7 +102,7 @@ function Login({ onDone, onGuest, notice, emailInvites }) {
     return (
       <Shell as="form" onSubmit={request} title="Request access" sub={emailInvites ? 'An administrator reviews every request. You get an email only if it is approved.' : 'An administrator reviews every request. You can sign in as soon as it is approved.'}>
         <Field label="Full name" autoComplete="name" autoFocus maxLength={120} value={name} onChange={(e) => { setName(e.target.value); setErr('') }} />
-        <Field label="Work email" type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
+        <Field label="Work email" hint="Use your company email address. Other addresses are not accepted." type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
         {!emailInvites && (<>
           <Field label="Choose a password" type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setErr('') }} />
           <Field label="Type the password again" type="password" autoComplete="new-password" value={password2} onChange={(e) => { setPassword2(e.target.value); setErr('') }}
