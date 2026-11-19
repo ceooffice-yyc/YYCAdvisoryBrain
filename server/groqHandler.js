@@ -8,7 +8,7 @@
 import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
 import { authenticate } from './auth.js';
 import { dbConfigured } from './db.js';
-import { hit, waitFor, clientIp, limitFrom } from './rateLimit.js';
+import { hit, waitFor, limitKey, clientIp, limitFrom } from './rateLimit.js';
 
 export const ALLOWED_MODEL = 'openai/gpt-oss-120b';
 const MAX_MESSAGES = 4;
@@ -61,13 +61,17 @@ export async function handleGroq(req, opts = {}) {
   if (method === 'GET') { // how many keys there are: the app sizes its parallel work from it. Told to admins only; everyone else is told 1.
     let n = 1;
     if (!withDb) n = hosted(env) ? 1 : keys.length;
-    else { const a = await auth(req.headers || {}, env, now()); if (a.ok && a.user.isAdmin) n = keys.length; }
+    else if (!waitFor('auth-fail', req.ip ? limitKey(req.ip) : clientIp(req.headers), 30, 60_000, now())) { // an address already over the wrong-token limit is not sent on to Supabase
+      const a = await auth(req.headers || {}, env, now());
+      if (a.ok && a.user.isAdmin) n = keys.length;
+      else if (!a.ok && /^Bearer\s+\S/i.test(String((req.headers || {}).authorization || ''))) hit('auth-fail', req.ip ? limitKey(req.ip) : clientIp(req.headers), 30, 60_000, now());
+    }
     return json(200, { keys: n }, { 'Cache-Control': 'no-store' });
   }
   if (method !== 'POST') return json(405, { error: 'Method not allowed' }, { Allow: 'GET, POST' });
 
   let who;
-  const ip = req.ip || clientIp(req.headers);
+  const ip = req.ip ? limitKey(req.ip) : clientIp(req.headers);
   if (withDb) {
     const blocked = waitFor('auth-fail', ip, 30, 60_000, now()); // already over the wrong-token limit: refused before Supabase is asked again
     if (blocked) return json(429, { error: 'Too many attempts. Please wait a moment.' }, { 'Retry-After': String(blocked) });

@@ -45,9 +45,17 @@ export async function authenticate(headers = {}, env = process.env, now = Date.n
   const domains = list(env.ALLOWED_EMAIL_DOMAINS);
   if (domains.length && !domains.includes(email.split('@')[1] || '')) return { ok: false, status: 403, error: 'This account is not allowed to use the library.' };
   const isAdmin = list(env.ADMIN_EMAILS).includes(email) || (user.app_metadata && user.app_metadata.role === 'admin');
-  const mustChange = !!(user.app_metadata && user.app_metadata.must_change_password); // signed in with a temporary password: only "choose a new password" is allowed until then
+  const mustChange = !!(user.app_metadata && user.app_metadata.must_change_password);
+  // A temporary password ends every session that existed before it was set: those tokens cannot be used to choose a new password for the person.
+  const since = Number(user.app_metadata && user.app_metadata.must_change_since) || 0;
+  if (mustChange && since && tokenIssuedAt(token) < since) return { ok: false, status: 401, error: 'Your session has ended. Please sign in again.' }; // signed in with a temporary password: only "choose a new password" is allowed until then
   if (mustChange && !opts.allowMustChange) return { ok: false, status: 403, error: 'Please choose a new password first.', code: 'must_change_password' };
   return { ok: true, user: { id: user.id, email, isAdmin: !!isAdmin, mustChangePassword: mustChange } };
+}
+
+/* When the session token was issued, in ms (the token was already verified by Supabase; an unreadable one counts as very old). */
+function tokenIssuedAt(token) {
+  try { const payload = JSON.parse(Buffer.from(String(token).split('.')[1] || '', 'base64url').toString('utf8')); return Number(payload.iat) * 1000 || 0; } catch { return 0; }
 }
 
 export const clearAuthCache = () => cache.clear(); // after an admin disables someone, so the next request sees it at once

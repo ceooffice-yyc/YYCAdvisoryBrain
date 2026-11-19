@@ -13,7 +13,7 @@
 //   SITE_URL                the public address of the site (e.g. https://yyc-advisory-brain.vercel.app): where invite and reset links lead.
 //                           It must also be listed in Supabase → Authentication → URL Configuration → Redirect URLs.
 
-import { randomInt } from 'node:crypto';
+import { randomInt, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { createClient } from '@supabase/supabase-js';
 import { hit } from './rateLimit.js';
@@ -128,7 +128,7 @@ export async function createUser(sb, env, actor, { email, role = 'viewer' }) {
   guardEnvAdmin(env, actor, to); // an owner's account (and its temporary password) is only ever handed to another owner
   if ((await listUsers(sb, env)).some((u) => u.email === to)) throw fail(409, 'That person already has an account.');
   const password = makeTempPassword();
-  const { error } = await sb.auth.admin.createUser({ email: to, password, email_confirm: true, app_metadata: { ...(role === 'admin' ? { role: 'admin' } : {}), must_change_password: true } });
+  const { error } = await sb.auth.admin.createUser({ email: to, password, email_confirm: true, app_metadata: { ...(role === 'admin' ? { role: 'admin' } : {}), must_change_password: true, must_change_since: Date.now() } });
   if (error) {
     if (/already|registered|exists/i.test(error.message)) throw fail(409, 'That person already has an account.');
     throw fail(502, `The account could not be created: ${error.message}`);
@@ -144,7 +144,7 @@ export async function tempPassword(sb, env, actor, { id }) {
   if (target.id === actor.id) throw fail(400, 'You cannot reset your own password here. Use Forgot password, or ask another admin.');
   guardEnvAdmin(env, actor, email);
   const password = makeTempPassword();
-  must(await sb.auth.admin.updateUserById(target.id, { password, app_metadata: { ...(target.app_metadata || {}), must_change_password: true } }), 'Setting the password');
+  must(await sb.auth.admin.updateUserById(target.id, { password, app_metadata: { ...(target.app_metadata || {}), must_change_password: true, must_change_since: Date.now() } }), 'Setting the password');
   await logEvent(sb, actor.email, 'temp_password', email);
   return { email, password };
 }
@@ -169,8 +169,12 @@ export async function setOwnPassword(sb, user, { password, current }, env = proc
   const pw = typeof password === 'string' ? password : '';
   const problem = passwordProblem(pw, user.email || '');
   if (problem) throw fail(400, problem);
+  if (user.mustChangePassword) { // "choosing" the temporary password again would change nothing
+    if (hit('pw-check', user.id, 8, 900_000)) throw fail(429, 'Too many attempts. Please wait a few minutes.');
+    if (await (opts.checkPassword || checkCurrentPassword)(env, user.email, pw)) throw fail(400, 'Choose a password different from the temporary one.');
+  }
   const target = await findUser(sb, user.id);
-  must(await sb.auth.admin.updateUserById(target.id, { password: pw, app_metadata: { ...(target.app_metadata || {}), must_change_password: false } }), 'Saving the password');
+  must(await sb.auth.admin.updateUserById(target.id, { password: pw, app_metadata: { ...(target.app_metadata || {}), must_change_password: false, must_change_since: null } }), 'Saving the password');
   await logEvent(sb, normEmail(target.email), 'password_changed', normEmail(target.email));
   return {};
 }
@@ -201,6 +205,7 @@ export async function setRole(sb, env, actor, { id, role }) {
 }
 
 export async function setDisabled(sb, env, actor, { id, disabled }) {
+  if (typeof disabled !== 'boolean') throw fail(400, 'Choose disable or enable.');
   const target = await findUser(sb, id);
   const email = normEmail(target.email);
   if (target.id === actor.id) throw fail(400, 'You cannot disable your own account.');
@@ -234,13 +239,22 @@ const recentRequests = new Map(); // ip -> timestamps (per server instance)
 const HOURLY_PER_IP = 5;
 const HOURLY_TOTAL = 60;
 const MAX_PENDING = 300;
+const HISTORY_ROWS = 50;
 const STALE_DAYS = 30; // a request nobody decided in this time is closed, so old ones cannot fill the list for ever
+const NO_COLUMN = /password_hash|schema cache|column/i;
 let totalHits = [];
 const isOwner = (email, env) => list(env.ADMIN_EMAILS).includes(normEmail(email));
 
-/* A public operation: no sign-in. It answers the same whether or not the address could ever be approved, and it creates NO account:
-   with emails off the person's chosen password is kept only as a bcrypt hash on the request (a server-only table) until an admin approves.
-   So the form cannot be used to find out who has an account, to take an address, or to fill the sign-in system with junk accounts. */
+/* Closes requests nobody decided within STALE_DAYS and erases any password hash that is still lying on a decided request. Best effort. */
+async function tidyRequests(sb, now = Date.now()) {
+  const cutoff = new Date(now - STALE_DAYS * 86_400_000).toISOString();
+  try { await sb.from('access_requests').update({ status: 'rejected', decided_by: 'expired', decided_at: new Date(now).toISOString(), password_hash: null }).eq('status', 'pending').lt('requested_at', cutoff); } catch { /* tidying up is best effort */ }
+  try { await sb.from('access_requests').update({ password_hash: null }).in('status', ['approved', 'rejected']).not('password_hash', 'is', null); } catch { /* the hash is not shown to anyone either way */ }
+}
+
+/* A public operation: no sign-in. It creates NO account: with emails off the person's chosen password is kept only as a bcrypt hash on the request
+   (a server-only table) until an admin approves. So the form cannot be used to find out who has an account, to take an address, or to fill the
+   sign-in system with junk accounts. */
 export async function createRequest(sb, env, { name, email, note, password }, ip = 'unknown', now = Date.now()) {
   const to = normEmail(email);
   const who = String(name || '').trim().replace(/\s+/g, ' ').slice(0, 120);
@@ -257,47 +271,60 @@ export async function createRequest(sb, env, { name, email, note, password }, ip
   hits.push(now);
   recentRequests.set(ip, hits);
   if (recentRequests.size > 2000) for (const [k, v] of recentRequests) if (!v.some((t) => now - t < 3_600_000)) recentRequests.delete(k);
-
-  // The hash is worked out for every request, kept or not, so the time taken says nothing about the address.
-  // An address that is an owner in the server settings is still shown to the admins (flagged), but WITHOUT the stranger's password: an owner can only
-  // approve it by creating the account with a temporary password that they hand to the real person. A public form never sets an owner's password.
-  const passwordHash = ownPassword && !isOwner(to, env) ? await bcrypt.hash(password, 10) : null;
-  const done = { ok: true };
-
-  // only requests that could be kept count against the shared hourly budget, so strangers cannot use it up for everyone
+  // the shared hourly budget is checked BEFORE the slow hashing, so once it is spent a flood costs almost nothing
   totalHits = totalHits.filter((t) => now - t < 3_600_000);
   if (totalHits.length >= HOURLY_TOTAL) throw fail(429, 'Too many requests. Please try again later.');
   totalHits.push(now);
 
-  const cutoff = new Date(now - STALE_DAYS * 86_400_000).toISOString();
-  try { await sb.from('access_requests').update({ status: 'rejected', decided_by: 'expired', decided_at: new Date(now).toISOString(), password_hash: null }).eq('status', 'pending').lt('requested_at', cutoff); } catch { /* tidying up is best effort */ }
+  // A hash is worked out for EVERY request (a throw-away one when there is nothing to keep), so the time taken says nothing about the address.
+  // An owner address (ADMIN_EMAILS) still reaches the admins, flagged, but WITHOUT the stranger's password: an owner can only approve it by
+  // creating the account with a temporary password they hand to the real person. A public form never sets an owner's password.
+  const keep = ownPassword && !isOwner(to, env);
+  const hash = await bcrypt.hash(keep ? password : randomBytes(18).toString('hex'), 10);
+  const passwordHash = keep ? hash : null;
+  const done = { ok: true };
+
+  await tidyRequests(sb, now);
   const pending = must(await sb.from('access_requests').select('id').eq('status', 'pending').limit(MAX_PENDING + 1), 'Reading requests');
   if (pending.length > MAX_PENDING) throw fail(429, 'Too many pending requests. Please contact your administrator.');
   const dup = must(await sb.from('access_requests').select('id').eq('status', 'pending').eq('email', to).limit(1), 'Reading requests');
   if (dup.length) return done; // the first request stands: a second one cannot replace its password
   const saved = await sb.from('access_requests').insert({ email: to, name: who, note: String(note || '').trim().slice(0, 500) || null, password_hash: passwordHash });
   if (saved.error) {
-    if (/password_hash|schema cache|column/i.test(saved.error.message || '')) console.error('access_requests has no password_hash column: run the latest supabase/schema.sql in the Supabase SQL Editor.');
+    if (saved.error.code === '23505' || /duplicate key/i.test(saved.error.message || '')) return done; // two requests for one address at the same moment: the first stands
+    if (NO_COLUMN.test(saved.error.message || '')) console.error('access_requests has no password_hash column: run the latest supabase/schema.sql in the Supabase SQL Editor.');
     throw fail(502, `Saving the request failed: ${saved.error.message}`);
   }
   await logEvent(sb, to, 'request', to, { name: who });
   return done;
 }
 
-/* The password hash never leaves the server: the list only says whether a request carries one. */
+/* The password hash never leaves the server: the list only says whether a request carries one. Waiting requests come first and are never crowded
+   out by old decided ones. */
 export async function listRequests(sb, env = process.env) {
+  await tidyRequests(sb);
   const cols = 'id,email,name,note,status,requested_at,decided_by,decided_at';
   let schemaMissing = false;
-  let res = await sb.from('access_requests').select(`${cols},password_hash`).order('requested_at', { ascending: false }).limit(200);
-  if (res.error && /password_hash|schema cache|column/i.test(res.error.message || '')) { // the latest schema.sql has not been run: list what exists and tell the admin
-    schemaMissing = true;
-    res = await sb.from('access_requests').select(cols).order('requested_at', { ascending: false }).limit(200);
-  }
-  const rows = must(res, 'Reading requests');
-  const requests = rows
-    .map(({ password_hash: hash, ...r }) => ({ ...r, hasPassword: r.status === 'pending' && !!hash, isOwner: isOwner(r.email, env) }))
-    .sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+  const read = async (shape, limit, filter) => {
+    let res = await filter(sb.from('access_requests').select(`${cols},password_hash`)).order('requested_at', { ascending: false }).limit(limit);
+    if (res.error && NO_COLUMN.test(res.error.message || '')) { // the latest schema.sql has not been run: list what exists and tell the admin
+      schemaMissing = true;
+      res = await filter(sb.from('access_requests').select(cols)).order('requested_at', { ascending: false }).limit(limit);
+    }
+    return must(res, shape);
+  };
+  const waiting = await read('Reading requests', MAX_PENDING + 1, (q) => q.eq('status', 'pending'));
+  const decided = await read('Reading requests', HISTORY_ROWS, (q) => q.in('status', ['approved', 'rejected']));
+  const requests = [...waiting, ...decided].map(({ password_hash: hash, ...r }) => ({ ...r, hasPassword: r.status === 'pending' && !!hash, isOwner: isOwner(r.email, env) }));
   return { requests, schemaMissing };
+}
+
+/* Puts a request back to waiting after a failed approval. A failure of this step is reported in the server log, never swallowed. */
+async function reopen(sb, id) {
+  try {
+    const res = await sb.from('access_requests').update({ status: 'pending', decided_by: null, decided_at: null }).eq('id', id);
+    if (res && res.error) console.error(`could not put request ${id} back to waiting: ${res.error.message}`);
+  } catch (e) { console.error(`could not put request ${id} back to waiting: ${e.message}`); }
 }
 
 export async function decideRequest(sb, env, actor, { id, decision, role = 'viewer', mode }, headers = {}) {
@@ -309,6 +336,7 @@ export async function decideRequest(sb, env, actor, { id, decision, role = 'view
   const to = normEmail(req.email);
   let password;
   let activated = false;
+  let existing = false;
   if (decision === 'approve') {
     if (!ROLES.includes(role)) throw fail(400, 'Choose viewer or admin.');
     guardEnvAdmin(env, actor, to); // only an owner may approve an address that is an owner in the server settings
@@ -318,27 +346,43 @@ export async function decideRequest(sb, env, actor, { id, decision, role = 'view
     try {
       const how = mode || (emailOn(env) ? 'email' : 'password');
       if (how === 'email') await inviteUser(sb, env, actor, { email: to, role }, headers);
-      else if (req.password_hash) {
+      else if (req.password_hash && !isOwner(to, env)) { // an owner address never takes a password that came from a public form, even from an older request
         // the person chose their password when asking: the account is created now, from the stored hash, and they can sign in at once
         if (!domainAllowed(to, env)) throw fail(400, 'That email address is not at a domain allowed to use the library.');
-        if ((await listUsers(sb, env)).some((u) => u.email === to)) throw fail(409, 'That person already has an account.');
-        const { error } = await sb.auth.admin.createUser({ email: to, password_hash: req.password_hash, email_confirm: true, app_metadata: role === 'admin' ? { role: 'admin' } : {} });
-        if (error) { if (/already|registered|exists/i.test(error.message)) throw fail(409, 'That person already has an account.'); throw fail(502, `The account could not be created: ${error.message}`); }
-        activated = true;
+        const known = (await rawUsers(sb)).find((u) => normEmail(u.email) === to);
+        if (known && known.app_metadata && known.app_metadata.pending) { // an account left over from the first design (made when the person asked): switch it on
+          must(await sb.auth.admin.updateUserById(known.id, { ban_duration: 'none', app_metadata: { ...(known.app_metadata || {}), pending: false, ...(role === 'admin' ? { role: 'admin' } : {}) } }), 'Switching the account on');
+          activated = true;
+        } else if (known) throw fail(409, 'That person already has an account.');
+        else {
+          const { error } = await sb.auth.admin.createUser({ email: to, password_hash: req.password_hash, email_confirm: true, app_metadata: role === 'admin' ? { role: 'admin' } : {} });
+          if (error) { if (/already|registered|exists/i.test(error.message)) throw fail(409, 'That person already has an account.'); throw fail(502, `The account could not be created: ${error.message}`); }
+          activated = true;
+        }
       } else password = (await createUser(sb, env, actor, { email: to, role })).password;
     } catch (e) {
-      if (!(e instanceof AccountError && e.status === 409)) { // it did not work: put the request back so it can be tried again
-        try { await sb.from('access_requests').update({ status: 'pending', decided_by: null, decided_at: null }).eq('id', req.id); } catch { /* best effort */ }
-        throw e;
-      } // 409 = already has an account: the request is simply closed
+      if (!(e instanceof AccountError && e.status === 409)) { await reopen(sb, req.id); throw e; } // it did not work: put the request back so it can be tried again
+      existing = true; // 409 = already has an account: the request is simply closed, and the admin is told the chosen password was not applied
     }
-    try { await sb.from('access_requests').update({ password_hash: null }).eq('id', req.id); } catch { /* the hash is no longer needed */ }
+    try {
+      const res = await sb.from('access_requests').update({ password_hash: null }).eq('id', req.id);
+      if (res && res.error) console.error(`could not erase the password hash of request ${req.id}: ${res.error.message}`); // the next list or request clears it
+    } catch { /* the hash is no longer needed */ }
   } else {
     const closed = must(await sb.from('access_requests').update({ status: 'rejected', decided_by: actor.email, decided_at: nowIso(), password_hash: null }).eq('id', req.id).eq('status', 'pending').select('id'), 'Saving the decision');
     if (!closed || !closed.length) throw fail(409, 'That request was already decided.');
+    const left = (await rawUsers(sb)).find((u) => normEmail(u.email) === to && u.app_metadata && u.app_metadata.pending); // an account from the first design that was never approved
+    if (left) { const del = await sb.auth.admin.deleteUser(left.id); if (del && del.error) console.error(`could not remove the waiting account of ${to}: ${del.error.message}`); }
   }
   await logEvent(sb, actor.email, decision, to, decision === 'approve' ? { role } : {});
-  return { email: to, status: decision === 'approve' ? 'approved' : 'rejected', ...(password ? { password } : {}), ...(activated ? { activated: true } : {}) };
+  return { email: to, status: decision === 'approve' ? 'approved' : 'rejected', ...(password ? { password } : {}), ...(activated ? { activated: true } : {}), ...(existing ? { existing: true } : {}) };
+}
+
+/* Rejects every waiting request at once (for example after someone fills the list with junk). */
+export async function rejectAllRequests(sb, actor) {
+  const closed = must(await sb.from('access_requests').update({ status: 'rejected', decided_by: actor.email, decided_at: nowIso(), password_hash: null }).eq('status', 'pending').select('id'), 'Rejecting the requests');
+  await logEvent(sb, actor.email, 'reject_all', null, { count: closed.length });
+  return { rejected: closed.length };
 }
 
 export async function listEvents(sb, limit = 100) {

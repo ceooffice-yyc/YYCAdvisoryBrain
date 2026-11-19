@@ -12,7 +12,7 @@ import { dbConfigured, getClient } from '../db.js';
 import { makeLlm, LlmError } from './llm.js';
 import { runAsk, AskError } from './pipeline.js';
 import { makeServerDeps } from './serverDeps.js';
-import { hit, waitFor, clientIp } from '../rateLimit.js';
+import { hit, waitFor, limitKey, clientIp } from '../rateLimit.js';
 
 const json = (status, body, headers = {}) => ({ status, body, headers });
 const TIMEOUT_MS = 55_000;
@@ -85,7 +85,7 @@ export async function handleAsk(req, opts = {}) {
   if (String(req.method || '').toUpperCase() !== 'POST') return json(405, { error: 'Method not allowed' }, { Allow: 'POST' });
   if (!dbConfigured(env)) return json(501, { error: 'Server-side search needs the shared database (Supabase) to be configured.' });
 
-  const ip = req.ip || clientIp(req.headers);
+  const ip = req.ip ? limitKey(req.ip) : clientIp(req.headers);
   const blocked = waitFor('auth-fail', ip, 30, 60_000, now()); // already over the wrong-token limit: refused before Supabase is asked again
   if (blocked) return json(429, { error: 'Too many attempts. Please wait a moment.' }, { 'Retry-After': String(blocked) });
   const auth = await (opts.authenticate || authenticate)(req.headers || {}, env, now());

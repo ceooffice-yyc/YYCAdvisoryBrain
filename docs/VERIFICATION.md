@@ -114,3 +114,23 @@ A separate reviewer read every server file, the sign-in code and the database sc
 - **The Users tab, profile window, bulk list, review and edit screens in a browser.** The browser tests run without the shared database, so these were restyled through the shared tokens and classes but not looked at or scanned.
 - Screen readers, the 200% text size check, and real phones (the tests use Chrome at phone sizes).
 - Speed: the first-load script is unchanged (about 303 kB gzipped). Splitting it (PERF-01, PERF-02) has not been done.
+
+### Second independent review and the final cross-check (2026-11-19)
+
+A second reviewer, working without my notes, read the code that changed after the first review. It found no Critical or High problems and nine Medium or Low ones; each was fixed and has a test, and the mutation check (break the fix, the tests must fail) caught all 14 changes.
+
+| Finding | Fix |
+|---|---|
+| A password reset did not end a stolen session, which could then choose the new password | A temporary password records when it was set; any session token issued before that is refused (401), and the temporary password cannot be chosen again |
+| A flood of public requests forced slow hashing | The shared hourly budget is checked before hashing; an IPv6 /64 counts as one address |
+| Timing revealed whether an address is an owner | A hash is worked out for every request, kept or not |
+| One person could fill the request list (300 limit); 100 requests could be hidden from admins | Waiting requests are listed first and never crowded out; requests older than 30 days close themselves; **Reject all** button |
+| Approving gave a confirmed account to whoever typed an address | Accepted design risk with a warning in the approval dialog (no email is sent to check); the safer route is Create account with a temporary password |
+| An owner address could take an old stranger's password hash | Never: a temporary password is used instead |
+| A failed put-back or hash erase was silent | Logged; leftover hashes on decided requests are erased on the next list |
+| Accounts left over from the first design could not be approved or removed | Switched on by approval, or removed by rejection |
+| Smaller: disable/enable accepted any value; two requests at once gave an error; the AI-key-count call could hammer the sign-in service | Real true/false only; the second request gets the normal answer; limited like the others |
+
+Live site (read-only, 2026-11-19): security headers on pages and API answers, 401 for every protected route without a token, clean 400/401/405 for malformed or wrong requests, real 404 pages, no source files, no source map and no secret-shaped strings in the public bundle, no cross-site API access.
+
+Not verified: the live Supabase behaviour behind sign-in. In particular that approving a request creates a working account from the stored hash, and whether changing a password ends the open session (the app signs in again either way).

@@ -31,10 +31,23 @@ function sweep(now) {
   if (buckets.size > MAX_KEYS * 2) { let extra = buckets.size - MAX_KEYS; for (const k of buckets.keys()) { if (extra-- <= 0) break; buckets.delete(k); } }
 }
 
+/* One person can own a whole IPv6 /64 (billions of addresses), so for limits an IPv6 address counts as its /64; an IPv4-mapped one as its IPv4. */
+export function limitKey(ip) {
+  const raw = String(ip || '').trim().replace(/%.*$/, '');
+  if (!raw.includes(':')) return raw || 'unknown';
+  const mapped = raw.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return mapped[1];
+  const [head, tail] = raw.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(8 - h.length - t.length, 0)).fill('0'), ...t];
+  return `${groups.slice(0, 4).map((g) => (g.toLowerCase().replace(/^0+(?=.)/, '') || '0')).join(':')}::/64`;
+}
+
 /* The caller's address as the hosting platform reports it (first entry of x-forwarded-for), for limits on requests with no sign-in. */
 export function clientIp(headers = {}) {
   const h = Object.fromEntries(Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
-  return String(h['x-forwarded-for'] || h['x-real-ip'] || 'unknown').split(',')[0].trim() || 'unknown';
+  return limitKey(String(h['x-forwarded-for'] || h['x-real-ip'] || 'unknown').split(',')[0].trim() || 'unknown');
 }
 
 export const limitFrom = (env, name, fallback) => (Number(env[name]) > 0 ? Number(env[name]) : fallback);

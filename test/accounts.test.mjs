@@ -6,7 +6,7 @@ import { authenticate, _test as authTest } from '../server/auth.js';
 import { _test as rateLimits } from '../server/rateLimit.js';
 
 // A small in-memory stand-in for the Supabase client: just enough of the table queries and the auth admin calls the account code uses.
-function fakeSb({ users = [], requests = [], noHashColumn = false } = {}) {
+function fakeSb({ users = [], requests = [], noHashColumn = false, insertError = null } = {}) {
   const tables = { access_requests: requests, account_events: [] };
   const sent = { invites: [], resets: [] };
   let seq = 1;
@@ -16,12 +16,15 @@ function fakeSb({ users = [], requests = [], noHashColumn = false } = {}) {
       select(cols) { selected = String(cols || ''); return api; }, order() { return api; },
       eq(k, v) { filters.push((r) => r[k] === v); return api; },
       lt(k, v) { filters.push((r) => r[k] < v); return api; },
+      in(k, vals) { filters.push((r) => vals.includes(r[k])); return api; },
+      not(k, op, v) { filters.push((r) => (op === 'is' && v === null ? r[k] !== null && r[k] !== undefined : true)); return api; },
       limit(n) { lim = n; return api; },
       insert(row) { mode = 'insert'; patch = row; return api; },
       update(p) { mode = 'update'; patch = p; return api; },
       then(resolve) {
         const rows = tables[name] || (tables[name] = []);
         if (noHashColumn && name === 'access_requests' && (selected.includes('password_hash') || (patch && 'password_hash' in patch))) return resolve({ data: null, error: { message: 'column access_requests.password_hash does not exist' } });
+        if (mode === 'insert' && insertError && name === 'access_requests') return resolve({ data: null, error: insertError });
         if (mode === 'insert') { rows.push({ id: `r${seq++}`, status: 'pending', requested_at: new Date().toISOString(), ...patch }); return resolve({ data: null, error: null }); }
         const hit = rows.filter((r) => filters.every((f) => f(r)));
         if (mode === 'update') { hit.forEach((r) => Object.assign(r, patch)); return resolve({ data: hit.map((r) => ({ id: r.id })), error: null }); }
@@ -225,11 +228,14 @@ test('choosing your own password: length rules, applied by the server, lifts the
   const u = person('u-t', 't@yycadvisors.com', { app_metadata: { must_change_password: true } });
   const sb = fakeSb({ users: [u] });
   const me = { id: 'u-t', email: 't@yycadvisors.com', mustChangePassword: true }; // signed in with the temporary password, so no "current password" is asked
-  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'short' })), 400);
-  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'x'.repeat(73) })), 400);
-  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 't@yycadvisors.com' })), 400);
-  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 12345678901 })), 400);
-  await acct.setOwnPassword(sb, me, { password: 'a long enough passphrase' });
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'short' }, {}, { checkPassword: async () => false })), 400);
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'x'.repeat(73) }, {}, { checkPassword: async () => false })), 400);
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 't@yycadvisors.com' }, {}, { checkPassword: async () => false })), 400);
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 12345678901 }, {}, { checkPassword: async () => false })), 400);
+  const checkPassword = async (env, email, pw) => pw === u._pw;
+  u._pw = 'the temporary one';
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'the temporary one' }, {}, { checkPassword })), 400, 'the temporary password cannot be chosen again');
+  await acct.setOwnPassword(sb, me, { password: 'a long enough passphrase' }, {}, { checkPassword });
   assert.deepEqual([u._pw, u.app_metadata.must_change_password], ['a long enough passphrase', false]);
   assert.equal(sb.tables.account_events.at(-1).action, 'password_changed');
 });
@@ -446,4 +452,131 @@ test('the public form names the problem when the address is not allowed, and an 
   assert.equal(sb.tables.access_requests.length, 0);
   assert.deepEqual(await acct.createRequest(sb, ENV_OFF, { name: 'The Owner', email: 'boss@yycadvisors.com', password: 'a long enough passphrase' }, '13.1.1.2'), { ok: true });
   assert.equal(sb.tables.access_requests.length, 1, 'a request from an owner address is not swallowed');
+});
+
+// ───── fixes from the second independent review ─────
+const jwt = (iatMs) => `x.${Buffer.from(JSON.stringify({ iat: Math.floor(iatMs / 1000) })).toString('base64url')}.y`;
+
+test('review 1: a session older than a temporary password cannot be used to choose a new password for the person', async () => {
+  const T = 1_800_000_000_000;
+  const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y' };
+  const meta = { must_change_password: true, must_change_since: T };
+  authTest.cache.clear();
+  const stale = jwt(T - 60_000), fresh = jwt(T + 5_000);
+  const user = (id) => ({ id, email: 'p@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: meta });
+  authTest.cache.set(stale, { at: T + 10_000, user: user('p') });
+  authTest.cache.set(fresh, { at: T + 10_000, user: user('p') });
+  const old = await authenticate({ authorization: 'Bearer ' + stale }, env, T + 10_000, { allowMustChange: true });
+  assert.deepEqual([old.ok, old.status], [false, 401], 'a token from before the reset is refused, even for "choose a new password"');
+  const now = await authenticate({ authorization: 'Bearer ' + fresh }, env, T + 10_000, { allowMustChange: true });
+  assert.deepEqual([now.ok, now.user.mustChangePassword], [true, true], 'a token from after the temporary sign-in works');
+  authTest.cache.set('garbage', { at: T, user: user('p') });
+  assert.equal((await authenticate({ authorization: 'Bearer garbage' }, env, T, { allowMustChange: true })).ok, false, 'an unreadable token counts as old');
+  // the temporary password records when it was set
+  const sb = fakeSb({ users: [boss, second, person('u-v', 'v@yycadvisors.com')] });
+  await acct.tempPassword(sb, ENV_OFF, actor, { id: 'u-v' });
+  assert.ok(Number(sb.users.find((u) => u.id === 'u-v').app_metadata.must_change_since) > 0);
+});
+
+test('review 3: an owner address takes as long as any other (a hash is worked out either way)', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  const env = { ...ENV_OFF, ADMIN_EMAILS: 'boss@yycadvisors.com' };
+  const time = async (email, ip) => { const t0 = process.hrtime.bigint(); await acct.createRequest(sb, env, { name: 'T', email, password: 'a long enough passphrase' }, ip); return Number(process.hrtime.bigint() - t0) / 1e6; };
+  const normal = await time('timing1@yycadvisors.com', '14.1.1.1');
+  const owner = await time('boss@yycadvisors.com', '14.1.1.2');
+  assert.ok(owner > normal / 4, `owner ${owner.toFixed(1)} ms vs normal ${normal.toFixed(1)} ms: far too different`);
+  assert.ok(owner > 15, 'a real hash was worked out for the owner address too');
+});
+
+test('review 2: the shared budget is checked before any hashing, and an IPv6 /64 counts as one address', async () => {
+  rateLimits.reset();
+  const { limitKey, clientIp } = await import('../server/rateLimit.js');
+  assert.equal(limitKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), limitKey('2001:db8:1:2:1111:2222:3333:4444'), 'same /64');
+  assert.notEqual(limitKey('2001:db8:1:2::1'), limitKey('2001:db8:1:3::1'));
+  assert.equal(limitKey('::ffff:203.0.113.9'), '203.0.113.9');
+  assert.equal(limitKey('203.0.113.9'), '203.0.113.9');
+  assert.equal(limitKey('fe80::1%eth0'), limitKey('fe80::2'));
+  assert.equal(clientIp({ 'x-forwarded-for': '2001:db8:1:2:aaaa:bbbb:cccc:dddd, 10.0.0.1' }), limitKey('2001:db8:1:2::9'));
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  const T0 = 1_800_000_000_000;
+  for (let i = 0; i < 60; i++) await acct.createRequest(sb, ENV_OFF, { name: 'N', email: `b${i}@yycadvisors.com`, password: 'a long enough passphrase' }, `15.0.${i}.1`, T0 + i);
+  const t0 = process.hrtime.bigint();
+  assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'N', email: 'late@yycadvisors.com', password: 'a long enough passphrase' }, '15.9.9.9', T0 + 100)), 429);
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 25, 'refused before the slow hashing');
+});
+
+test('review 4: waiting requests are never crowded out, the list closes old ones, and "reject all" clears a flooded list', async () => {
+  acct._test.resetLimits();
+  const T0 = Date.now();
+  const sb = fakeSb({ users: [boss, second] });
+  for (let i = 0; i < 260; i++) sb.tables.access_requests.push({ id: `h${i}`, email: `old${i}@yycadvisors.com`, name: 'Old', status: i % 2 ? 'approved' : 'rejected', requested_at: new Date(T0 - 100 * 86_400_000 + i).toISOString(), password_hash: 'leftover' });
+  for (let i = 0; i < 8; i++) sb.tables.access_requests.push({ id: `w${i}`, email: `w${i}@yycadvisors.com`, name: 'W', status: 'pending', requested_at: new Date(T0 - i * 1000).toISOString(), password_hash: 'h' });
+  sb.tables.access_requests.push({ id: 'stale', email: 'stale@yycadvisors.com', name: 'S', status: 'pending', requested_at: new Date(T0 - 45 * 86_400_000).toISOString(), password_hash: 'h' });
+  const list = await acct.listRequests(sb, ENV_OFF);
+  assert.equal(list.requests.filter((r) => r.status === 'pending').length, 8, 'all 8 fresh waiting requests are shown');
+  assert.equal(list.requests.length <= 8 + 50, true, 'old decided ones are capped at 50');
+  assert.equal(sb.tables.access_requests.find((r) => r.id === 'stale').status, 'rejected', 'a request nobody decided for 30 days is closed by the list itself');
+  assert.equal(sb.tables.access_requests.filter((r) => r.status !== 'pending' && r.password_hash).length, 0, 'leftover hashes on decided requests are erased');
+  const out = await acct.rejectAllRequests(sb, actor);
+  assert.equal(out.rejected, 8);
+  assert.equal(sb.tables.access_requests.filter((r) => r.status === 'pending').length, 0);
+  assert.equal(sb.tables.account_events.at(-1).action, 'reject_all');
+});
+
+test('review 6: an owner address never takes a password hash that came from a public form', async () => {
+  const env = { ...ENV_OFF, ADMIN_EMAILS: 'boss@yycadvisors.com, newowner@yycadvisors.com' };
+  const sb = fakeSb({ users: [boss, second] });
+  sb.tables.access_requests.push({ id: 'old-own', email: 'newowner@yycadvisors.com', name: 'x', status: 'pending', requested_at: new Date().toISOString(), password_hash: '$2b$10$strangerhashstrangerhashstrangerhashstrangerhashstranger' });
+  const out = await acct.decideRequest(sb, env, { id: 'u-boss', email: 'boss@yycadvisors.com' }, { id: 'old-own', decision: 'approve' });
+  assert.deepEqual([typeof out.password, out.activated], ['string', undefined], 'a temporary password is handed to the owner instead');
+  assert.notEqual(sb.users.find((u) => u.email === 'newowner@yycadvisors.com')._hash, '$2b$10$strangerhashstrangerhashstrangerhashstrangerhashstranger');
+});
+
+test('review 7: a failed put-back or hash erase is not silent, and a request is not left half-done', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  await acct.createRequest(sb, ENV_OFF, { name: 'Gus', email: 'gus@yycadvisors.com', password: 'gus long password' }, '16.1.1.1');
+  const id = sb.tables.access_requests[0].id;
+  const realCreate = sb.auth.admin.createUser;
+  sb.auth.admin.createUser = async () => ({ data: null, error: { message: 'service unavailable' } });
+  const logged = []; const orig = console.error; console.error = (...a) => logged.push(a.join(' '));
+  try {
+    assert.equal(await code(acct.decideRequest(sb, ENV_OFF, actor, { id, decision: 'approve' })), 502);
+  } finally { console.error = orig; }
+  assert.equal(sb.tables.access_requests[0].status, 'pending', 'put back so it can be tried again');
+  assert.ok(sb.tables.access_requests[0].password_hash, 'and the password is still there for the retry');
+  sb.auth.admin.createUser = realCreate;
+  assert.equal(await code(acct.decideRequest(sb, ENV_OFF, actor, { id, decision: 'approve' })), 200, 'the retry works');
+});
+
+test('review 8: an account left over from the first design is switched on, or removed, by the decision', async () => {
+  acct._test.resetLimits();
+  const legacy = person('u-leg', 'legacy@yycadvisors.com', { app_metadata: { pending: true }, banned_until: new Date(Date.now() + 1e12).toISOString() });
+  const gone = person('u-gone', 'gone@yycadvisors.com', { app_metadata: { pending: true }, banned_until: new Date(Date.now() + 1e12).toISOString() });
+  const sb = fakeSb({ users: [boss, second, legacy, gone] });
+  sb.tables.access_requests.push({ id: 'l1', email: 'legacy@yycadvisors.com', name: 'L', status: 'pending', requested_at: new Date().toISOString(), password_hash: '$2b$10$somehashsomehashsomehashsomehashsomehashsomehashsomeha' });
+  sb.tables.access_requests.push({ id: 'l2', email: 'gone@yycadvisors.com', name: 'G', status: 'pending', requested_at: new Date().toISOString(), password_hash: null });
+  const out = await acct.decideRequest(sb, ENV_OFF, actor, { id: 'l1', decision: 'approve', role: 'viewer' });
+  assert.deepEqual([out.activated, legacy.app_metadata.pending, legacy.banned_until], [true, false, null], 'switched on');
+  await acct.decideRequest(sb, ENV_OFF, actor, { id: 'l2', decision: 'reject' });
+  assert.equal(sb.users.some((u) => u.email === 'gone@yycadvisors.com'), false, 'removed');
+});
+
+test('review 8: approving for someone who already has an account says so instead of claiming success', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second, person('u-have', 'have@yycadvisors.com', { _pw: 'theirs' })] });
+  sb.tables.access_requests.push({ id: 'e1', email: 'have@yycadvisors.com', name: 'H', status: 'pending', requested_at: new Date().toISOString(), password_hash: '$2b$10$somehashsomehashsomehashsomehashsomehashsomehashsomeha' });
+  const out = await acct.decideRequest(sb, ENV_OFF, actor, { id: 'e1', decision: 'approve' });
+  assert.deepEqual([out.status, out.existing, out.activated], ['approved', true, undefined]);
+});
+
+test('review 9: disable and enable need a real true or false; two requests at the same moment do not give an error', async () => {
+  const sb = fakeSb({ users: [boss, second, person('u-v', 'v@yycadvisors.com')] });
+  for (const bad of ['false', 'true', 1, 0, null, undefined]) assert.equal(await code(acct.setDisabled(sb, ENV_OFF, actor, { id: 'u-v', disabled: bad })), 400, String(bad));
+  assert.equal((await acct.listUsers(sb, ENV_OFF)).find((u) => u.id === 'u-v').disabled, false);
+  acct._test.resetLimits();
+  const racing = fakeSb({ users: [boss, second], insertError: { code: '23505', message: 'duplicate key value violates unique constraint "access_requests_one_pending"' } });
+  assert.deepEqual(await acct.createRequest(racing, ENV_OFF, { name: 'R', email: 'r@yycadvisors.com', password: 'a long enough passphrase' }, '17.1.1.1'), { ok: true });
 });

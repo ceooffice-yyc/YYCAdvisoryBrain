@@ -21,7 +21,7 @@ import { createClient } from '@supabase/supabase-js';
 import { authConfigured, authenticate, clearAuthCache } from './auth.js';
 import * as acct from './accounts.js';
 import { cleanDocHtml, cleanerReady } from './sanitize.js';
-import { hit, waitFor, clientIp as ipOf, limitFrom } from './rateLimit.js';
+import { hit, waitFor, limitKey, clientIp as ipOf, limitFrom } from './rateLimit.js';
 import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
 export const dbConfigured = (env = process.env) => !!(String(env.SUPABASE_URL || '').trim() && String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
@@ -368,12 +368,13 @@ const OPS = {
   user_set_disabled: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setDisabled(sb, env, user, a); clearAuthCache(); return out; } },
   user_send_reset: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.sendReset(sb, env, user, a, headers) },
   requests_list: { level: 'admin', run: async ({ sb, env }) => acct.listRequests(sb, env) },
+  requests_reject_all: { level: 'admin', run: async ({ sb, user }) => acct.rejectAllRequests(sb, user) },
   request_decide: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.decideRequest(sb, env, user, a, headers) },
   account_events: { level: 'admin', run: async ({ sb }, a) => ({ events: await acct.listEvents(sb, a.limit) }) },
 };
 
 const json = (status, body) => ({ status, body });
-const clientIp = (req) => req.ip || ipOf(req.headers);
+const clientIp = (req) => limitKey(req.ip) !== 'unknown' && req.ip ? limitKey(req.ip) : ipOf(req.headers);
 const tooMany = (wait) => ({ status: 429, body: { error: `Too many requests. Please wait ${wait}s.` } });
 
 /* req: { method, query, body, headers }  ->  { status, body } */

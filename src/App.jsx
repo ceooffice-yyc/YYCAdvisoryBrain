@@ -5320,6 +5320,7 @@ const TRAIL_TEXT = {
   disable: (e) => `${e.actor} disabled ${e.target}`,
   enable: (e) => `${e.actor} enabled ${e.target}`,
   reset: (e) => `${e.actor} sent a password reset email to ${e.target}`,
+  reject_all: (e) => `${e.actor} rejected all ${(e.detail && e.detail.count) || 0} waiting requests`,
   temp_password: (e) => `${e.actor} set a temporary password for ${e.target}`,
   password_changed: (e) => `${e.target} chose a new password`,
 };
@@ -5379,7 +5380,7 @@ function UsersPanel({ flash, setConfirm }) {
   const ask = (title, message, confirmLabel, run, okText, danger = false) => setConfirm({
     title, message, confirmLabel, tone: danger ? "danger" : "primary",
     onConfirm: async () => {
-      try { const out = await run(); if (out && out.password) setShown({ email: out.email, password: out.password }); flash(okText); setErr(""); }
+      try { const out = await run(); if (out && out.password) setShown({ email: out.email, password: out.password }); flash(out && out.existing ? "That person already had an account, so the request is closed. The password they chose was not used." : okText); setErr(""); }
       catch (e) { setErr(String((e && e.message) || "That did not work.")); }
       await load();
     },
@@ -5403,6 +5404,7 @@ function UsersPanel({ flash, setConfirm }) {
     else if (decision === "approve") ask(`Approve ${r.name || r.email}?`, `An account is created for ${r.email} as ${roleWord(rl)}. You are shown a one-time temporary password to give them. They must choose their own at first sign-in.`, "Approve and create account", () => window.db.requestDecide(r.id, "approve", rl, "password"), "Approved: account created");
     else ask(`Reject ${r.name || r.email}?`, `${r.email} is not given access. They are not contacted.`, "Reject", () => window.db.requestDecide(r.id, "reject"), "Request rejected", true);
   };
+  const rejectAll = () => ask(`Reject all ${pending.length} waiting requests?`, "None of them is given access and nobody is contacted. Use this to clear a list filled with requests you do not recognise.", "Reject all", () => window.db.requestsRejectAll(), "All waiting requests rejected", true);
   const changeRole = (u) => {
     const next = u.role === "admin" ? "viewer" : "admin";
     ask(next === "admin" ? `Make ${u.email} an admin?` : `Make ${u.email} a viewer?`, next === "admin" ? "Admins can add, edit and delete library content, import backups, and manage people here." : "They keep reading the library and asking questions, but can no longer change it.", next === "admin" ? "Make admin" : "Make viewer", () => window.db.userSetRole(u.id, next), "Role changed", next === "viewer");
@@ -5435,7 +5437,7 @@ function UsersPanel({ flash, setConfirm }) {
       {err && <div role="alert" style={{ color: P.redText, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
 
       <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>
-        <div style={{ fontWeight: 750, marginBottom: 10 }}>Access requests {pending.length ? <span style={{ marginLeft: 6 }}>{chip(`${pending.length} waiting`, P.goldSoft, P.goldDark)}</span> : null}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}><div style={{ fontWeight: 750 }}>Access requests {pending.length ? <span style={{ marginLeft: 6 }}>{chip(`${pending.length} waiting`, P.goldSoft, P.goldText)}</span> : null}</div>{pending.length > 1 && <button className="yyc-btn-secondary" style={{ padding: "5px 10px", fontSize: 12, borderColor: P.red, color: P.redText }} onClick={rejectAll}>Reject all</button>}</div>
         {pending.length === 0 && <div style={{ fontSize: 13, color: P.sub }}>No requests are waiting.</div>}
         {pending.map((r) => (
           <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 0", borderTop: `1px solid ${P.line}` }}>
