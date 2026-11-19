@@ -65,3 +65,23 @@ export const SIZES = [
   { name: '1440', width: 1440, height: 900 },
   { name: '1920', width: 1920, height: 1080 },
 ];
+
+/* Pretend to be signed in (as an admin or a viewer) against a made-up server, so the signed-in screens (profile, Users, top bar) can be looked at.
+   No real Supabase project is contacted: the status, library and user calls are answered here with the invented library. */
+export async function signedInAs(page, { admin = true, email = 'a.long.email.address@yyc-example.test' } = {}) {
+  const lib = library();
+  await page.addInitScript(({ email }) => {
+    try { localStorage.setItem('sb-example-auth-token', JSON.stringify({ access_token: 'a.b.c', refresh_token: 'r', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u1', email, aud: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' } })); } catch { /* ignore */ }
+  }, { email });
+  await page.route('**/api/db?action=status', (route) => route.fulfill({ json: { mode: 'supabase', url: 'https://example.supabase.co', anonKey: 'test-anon-key', guest: false } }));
+  await page.route('https://example.supabase.co/**', (route) => route.fulfill({ status: 200, json: {} }));
+  await page.route('**/api/db?action=me', (route) => route.fulfill({ json: { id: 'u1', email, isAdmin: admin, mustChangePassword: false } }));
+  await page.route('**/api/db', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const op = (route.request().postDataJSON() || {}).op;
+    if (op === 'library' || op === 'kb') return route.fulfill({ json: { config: {}, index: lib.index, records: lib.records } });
+    if (op === 'users') return route.fulfill({ json: { users: [{ id: 'u1', email, isAdmin: admin, accepted: true }, { id: 'u2', email: 'second.person.with.a.long.address@yyc-example.test', isAdmin: false, accepted: true, mustChange: true }], emailInvites: false } });
+    if (op === 'access_requests' || op === 'requests') return route.fulfill({ json: { requests: [{ id: 'q1', email: 'new.person@yyc-example.test', name: 'New Person', status: 'pending', created_at: '2026-11-18T00:00:00Z' }], schemaMissing: false } });
+    return route.fulfill({ json: {} });
+  });
+}

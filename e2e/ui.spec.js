@@ -2,7 +2,7 @@
 // the page titles (UI-03) and keyboard use. Requirement ids are in the test names (docs/REQUIREMENTS.md).
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { seed, unlockAdmin, showSignIn, watch, SIZES } from './helpers.js';
+import { seed, unlockAdmin, showSignIn, signedInAs, watch, SIZES } from './helpers.js';
 
 const tabBtn = (page, label) => page.locator('.yyc-nav-item:visible, .yyc-botnav-item:visible').filter({ hasText: label }).first();
 
@@ -133,3 +133,124 @@ test('UI-04 a newly opened tab starts at its top', async ({ browser }) => {
   expect(await page.evaluate(() => window.scrollY)).toBeLessThan(5);
   await ctx.close();
 });
+
+/* iPhone SE (375 x 667) and the narrowest phones: icon-only buttons and bottom bar, a tidy profile pop-up, nothing cut or sideways-scrolling. */
+for (const [w, h] of [[375, 667], [320, 568]]) {
+  test(`UI-04 phone ${w}x${h}: icon-only bottom bar and Knowledge Base buttons, names kept for screen readers`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: true, hasTouch: true });
+    const page = await ctx.newPage();
+    await seed(page); await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor();
+    await unlockAdmin(page);
+    // the bottom bar: every item is at least 44 px, evenly sharing the full width, with no visible words
+    const nav = await page.evaluate(() => { const bar = document.querySelector('.yyc-botnav').getBoundingClientRect(); const items = [...document.querySelectorAll('.yyc-botnav-item')].map((e) => { const r = e.getBoundingClientRect(); const l = e.querySelector('.yyc-botnav-label').getBoundingClientRect(); return { w: r.width, h: r.height, label: l.width }; }); return { barW: bar.width, vw: window.innerWidth, items }; });
+    expect(nav.barW).toBe(nav.vw);
+    for (const i of nav.items) { expect(i.h).toBeGreaterThanOrEqual(44); expect(i.w).toBeGreaterThanOrEqual(44); expect(i.label).toBeLessThanOrEqual(1); }
+    for (const name of ['Knowledge Base', 'Ask the Brain', 'Lever Explorer', 'Gap Log']) await expect(page.locator('.yyc-botnav-item').filter({ hasText: name })).toHaveAccessibleName(name);
+    // the Knowledge Base buttons: icon only, but still named and at least 44 px
+    for (const name of ['Import backup', 'Export backup', 'Add material']) {
+      const b = page.getByRole('button', { name }).first();
+      const box = await b.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44); expect(box.width).toBeLessThan(70);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(w);
+    await ctx.close();
+  });
+
+  test(`UI-04 phone ${w}x${h}: the profile pop-up fits, wraps a long email by word, and its buttons have space between icon and text`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: true, hasTouch: true });
+    const page = await ctx.newPage();
+    await signedInAs(page);
+    await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Your profile' }).first().click();
+    const dlg = page.getByRole('dialog', { name: 'Your profile' });
+    await expect(dlg).toBeVisible();
+    const box = await dlg.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(w + 0.5); expect(box.y + box.height).toBeLessThanOrEqual(h + 0.5);
+    const gap = await dlg.getByRole('button', { name: 'Log out' }).evaluate((b) => parseFloat(getComputedStyle(b).columnGap));
+    expect(gap).toBeGreaterThanOrEqual(6);
+    await ctx.close();
+  });
+}
+
+/* The case study window and the lever rows on an iPhone SE (375 x 667). */
+test('UI-04 phone 375x667: the case study window fills the screen, tabs share the width, and each lever label sits above its text', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await seed(page); await page.goto('/');
+  await page.getByText('Acme Bakery').first().click();
+  const modal = page.locator('.yyc-modal-sheet');
+  await expect(modal).toBeVisible();
+  await page.waitForTimeout(500); // the window scales in when it opens; measure after that
+  const box = await modal.boundingBox();
+  expect(box.x).toBe(0); expect(box.width).toBe(375); expect(box.height).toBe(667);
+  const tabs = await page.locator('.yyc-seg-btn').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), l: Math.round(r.left), r: Math.round(r.right) }; }));
+  expect(tabs).toHaveLength(3);
+  for (const t of tabs) expect(t.h).toBeGreaterThanOrEqual(44);
+  expect(Math.max(...tabs.map((t) => t.w)) - Math.min(...tabs.map((t) => t.w))).toBeLessThanOrEqual(2); // equal thirds
+  expect(tabs[2].r).toBeLessThanOrEqual(375);
+  // the header (title, meta, tabs) leaves most of the screen for the content
+  const headH = await page.locator('.yyc-preview-head').evaluate((e) => e.getBoundingClientRect().height);
+  expect(headH).toBeLessThan(667 * 0.3);
+  await page.locator('.yyc-seg-btn').filter({ hasText: 'Lever records' }).click();
+  const row = page.locator('.yyc-rec-row').first();
+  const geo = await row.evaluate((r) => { const p = r.querySelector('.yyc-rec-pill').getBoundingClientRect(); const m = r.querySelector('.yyc-rec-main').getBoundingClientRect(); return { pillBottom: p.bottom, mainTop: m.top, mainW: m.width, rowW: r.getBoundingClientRect().width }; });
+  expect(geo.mainTop).toBeGreaterThanOrEqual(geo.pillBottom); // the label is on its own line, the text starts below it
+  expect(geo.mainW).toBeGreaterThan(geo.rowW * 0.9); // and uses the full width
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await ctx.close();
+});
+
+test('UI-04 phone 375x667: the Edit page stacks each lever record (lever, section, strategy, actual impact) at full width', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await seed(page); await page.goto('/');
+  await unlockAdmin(page);
+  await page.locator('.yyc-doc').first().getByRole('button', { name: /edit/i }).first().click();
+  const top = page.locator('.yyc-rec-top').first();
+  await top.scrollIntoViewIfNeeded();
+  const g = await top.evaluate((el) => { const kids = [...el.children].map((c) => { const r = c.getBoundingClientRect(); return { top: Math.round(r.top), w: Math.round(r.width) }; }); const card = el.parentElement.getBoundingClientRect(); return { kids, cardW: card.width }; });
+  const [lever, section] = g.kids; // select, section input, trash button (a grid on phones)
+  expect(section.top).toBeGreaterThan(lever.top); // the section field is on its own line, under the lever
+  expect(section.w).toBeGreaterThan(g.cardW * 0.85);
+  const ta = await page.locator('textarea[aria-label="Strategy name and description"]').first().boundingBox();
+  const im = await page.locator('textarea[aria-label="Actual impact"]').first().boundingBox();
+  expect(ta.width).toBeGreaterThan(g.cardW * 0.85); expect(im.y).toBeGreaterThan(ta.y); // impact comes after the strategy
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await ctx.close();
+});
+
+test('UI-04 phone 375x667: the signed-in Users screen has no sideways scroll and big enough controls', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await signedInAs(page); await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await page.locator('.yyc-botnav-item').filter({ hasText: 'Users' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 15_000 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  const small = await page.evaluate(() => [...document.querySelectorAll('button, select, input')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.height < 36); }).map((e) => (e.textContent || e.placeholder || '').trim().slice(0, 20)));
+  expect(small).toEqual([]);
+  await ctx.close();
+});
+
+for (const [w, h] of [[375, 667], [320, 568]]) {
+  test(`UI-04 phone ${w}x${h}: the Ask box takes the width and the Ask button is a round, tappable send arrow beside it`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: true, hasTouch: true });
+    const page = await ctx.newPage();
+    await seed(page); await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor();
+    await page.locator('.yyc-botnav-item').filter({ hasText: 'Ask the Brain' }).click();
+    const box = page.getByPlaceholder(/Ask anything/);
+    await box.waitFor();
+    await box.fill('How did the bakery handle delivery fees?');
+    const btn = page.getByRole('button', { name: 'Ask', exact: true });
+    await expect(btn).toBeEnabled();
+    const g = await page.evaluate(() => { const i = document.querySelector('.yyc-chat-input').getBoundingClientRect(); const b = document.querySelector('.yyc-send').getBoundingClientRect(); const wrap = document.querySelector('.yyc-chat-input-wrap').getBoundingClientRect(); return { iw: i.width, bw: b.width, bh: b.height, sameRow: Math.abs((i.top + i.height / 2) - (b.top + b.height / 2)) < 4, inside: b.right <= wrap.right && i.left >= wrap.left, label: document.querySelector('.yyc-send .yyc-btn-label').getBoundingClientRect().width }; });
+    expect(g.bw).toBeGreaterThanOrEqual(44); expect(g.bh).toBeGreaterThanOrEqual(44); expect(Math.abs(g.bw - g.bh)).toBeLessThanOrEqual(1); // round
+    expect(g.sameRow).toBe(true); expect(g.inside).toBe(true); expect(g.iw).toBeGreaterThan(w * 0.6); expect(g.label).toBeLessThanOrEqual(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(w);
+    await page.screenshot({ path: `e2e/.results/ask-${w}.png` });
+    await ctx.close();
+  });
+}

@@ -134,3 +134,37 @@ A second reviewer, working without my notes, read the code that changed after th
 Live site (read-only, 2026-11-19): security headers on pages and API answers, 401 for every protected route without a token, clean 400/401/405 for malformed or wrong requests, real 404 pages, no source files, no source map and no secret-shaped strings in the public bundle, no cross-site API access.
 
 Not verified: the live Supabase behaviour behind sign-in. In particular that approving a request creates a working account from the stored hash, and whether changing a password ends the open session (the app signs in again either way).
+
+
+## Phase 2: speed and the split of src/App.jsx (2026-11-19)
+
+| Check | Result |
+|---|---|
+| Lint (`npx eslint .`) | 0 problems |
+| Unit tests (`npm test`) | 162 of 162 pass. The two test files that read the parsing rules out of `App.jsx` now import the modules directly (`src/pipeline/`) |
+| Browser tests (`npm run e2e`) | 25 of 25 pass: security (6), screens and accessibility (13), loading (5), speed (1) |
+| Dependency audit | 0 vulnerabilities |
+| Size budget (`npm run budget`) | First page 125.8 kB (limit 150); every on-demand file within its limit |
+
+### Requirement by requirement
+
+| ID | Status | Evidence |
+|---|---|---|
+| PERF-01 | **Verified** | The first page downloads 126 kB compressed (was 296 kB). A browser test loads the page and checks that the Word reader, HTML cleaner, extraction code, Ask the Brain, Lever Explorer, Users and Gap Log files are NOT downloaded, while the Knowledge Base is. Another blocks the Ask the Brain file, shows the "This part could not be loaded" message, restores the connection and presses Try again: the screen opens. |
+| PERF-02 | **Verified** | 26 modules; no import cycles (checked when splitting); every unit and browser test passes unchanged except the two that read the file's text. |
+| PERF-03 | **Verified** | Slowest keystroke while searching 300 documents: 152 ms (was 1,272 ms). |
+| PERF-04 | **Verified** | Four mutations (Word reader, HTML cleaner, Ask the Brain, extraction code each imported at the top again) were each caught by the budget check. |
+| PERF-05 | **Verified** | Browser tests delay the Knowledge Base and document-window downloads and check the placeholder appears, passes the accessibility scan, and is replaced by the content. |
+
+### Found while doing it
+
+- The first placeholders had a moving shimmer; the measurements showed it slowing typing about three times on the slow-phone setup. First a lighter shimmer, then an opacity pulse, were tried; both were as slow, so the placeholders are still. (A change that looks harmless can cost real speed; measuring is what found it.)
+- A first typing measurement of Ask the Brain looked worse than before. It was the start-up downloads still running during the test, not typing; the test now waits for them.
+- Playwright empties its results folder on each run, so the "before" numbers were recorded in `docs/PERFORMANCE.md` by hand and the folder is not a place to keep results.
+
+### Not verified, plainly
+
+- **Real phones and real networks.** The numbers come from Chrome with the network and processor slowed on one computer. They show the size of the change; they are not a promise of seconds on a particular phone.
+- **The signed-in app with the shared database.** The browser tests use browser-only mode (no sign-in), so the Users, profile, bulk list, review and edit screens were not exercised in a browser in this phase (they are unchanged code, moved). The unit tests and the compile cover their logic and imports, not their screens.
+- **Vercel.** The year-long cache header for built files and the compressed responses depend on the host; the Express server's behaviour is tested, Vercel's needs a deployment to confirm.
+- **A document with thousands of cards.** Not measured; see "Not done" in `docs/PERFORMANCE.md`.

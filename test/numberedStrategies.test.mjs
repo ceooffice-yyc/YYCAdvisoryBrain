@@ -1,18 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { splitClaim } from '../src/claim.js';
+import { leverHeadingOf, leverFromHeading } from '../src/pipeline/headings.js';
+import { normalizeParas } from '../src/pipeline/extract.js';
 
-// Loads the pure parsing functions straight from src/App.jsx; all text here is invented.
-const src = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const from = src.indexOf('/* ---------- extraction pipeline');
-const to = src.indexOf('async function extractDocument');
-assert.ok(from >= 0 && to > from, 'could not find the extraction pipeline section in src/App.jsx');
-const f = new Function('splitClaim', [
-  'let EXTRA_HEADING_LEVER = [];',
-  src.slice(from, to).replace(/export\s*$/, ''),
-  'return { leverHeadingOf, leverFromHeading, normalizeParas };',
-].join('\n'))(splitClaim);
+// The parsing rules are ordinary modules (src/pipeline/); all text here is invented.
+const f = { leverHeadingOf, leverFromHeading, normalizeParas };
 
 const P = (...paras) => paras.join('\n\n');
 

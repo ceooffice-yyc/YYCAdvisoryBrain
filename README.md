@@ -3,7 +3,7 @@
 An internal, **closed-book** knowledge base for YYC's advisory work. Upload case studies (`.docx`), and the app uses AI to pull out every **key strategy**, file it under the right **cash lever**, and keep the document's own wording and impact. Staff can then browse strategies by lever or ask questions that are answered **only from the uploaded material**, with sources.
 
 - **Tech Stack:** React 19 + Vite 8, a tiny Express proxy (local) / Vercel function (hosted), [Groq](https://groq.com) (`openai/gpt-oss-120b`) for AI, [mammoth](https://github.com/mwilliamson/mammoth.js) for reading `.docx`.
-- **Supported Language:** English only for now. The Chinese UI and Chinese extraction fields are switched off (commented out in `src/App.jsx` *in order to save tokens usage*, search for `[ZH disabled for now]`).
+- **Supported Language:** English only for now. The Chinese UI and Chinese extraction fields are switched off (commented out in the source, mostly `src/i18n.js` and the screens *in order to save tokens usage*, search for `[ZH disabled for now]`).
 
 ---
 
@@ -24,7 +24,7 @@ Strategies are grouped in this fixed order:
 
 `acquisition_expansion_valuation` ("Acquisition, Expansion & Valuation") is for M&A material: acquisition appetite and criteria, buy-and-build, valuation and ownership policy, post-acquisition operating model.
 
-`others` records also carry ONE category and a short "related to" note. The categories (defined once in `OTHER_CAT_DEFS` in `src/App.jsx`):
+`others` records also carry ONE category and a short "related to" note. The categories (defined once in `OTHER_CAT_DEFAULT_DEFS` in `src/lib/levers.js`):
 
 | Category | What goes in it |
 |---|---|
@@ -310,7 +310,7 @@ Only those sections are read (background and the closing one-line summary are ig
 
 ## How extraction works
 
-The extraction is a code + AI pipeline in `src/App.jsx` (`extractDocument`). The model is **not** trusted to structure the document or copy it faithfully, so the code does that part:
+The extraction is a code + AI pipeline in `src/pipeline/extract.js` (`extractDocument`). The model is **not** trusted to structure the document or copy it faithfully, so the code does that part:
 
 1. **Scope** – keep only the key-strategies part (`scopeMaterial`).
 2. **Tidy** – merge "title line + description line" layouts into `Title: description`, drop table-template leftovers (`normalizeParas`).
@@ -326,7 +326,7 @@ The extraction is a code + AI pipeline in `src/App.jsx` (`extractDocument`). The
 
 **M&A documents** (a document with two or more M&A section headings) are filtered by code to those sections before the model sees them. The headings are matched by pattern (`MNA_SECTION_RE`): "M&A Appetite" may be followed by more words ("M&A Appetite & Capital Allocation"), and "What X Brings / Provides / Offers to Acquired Companies" all count. A heading that does not match is silently dropped together with its section, so when a new M&A document loses a section, check its heading against that pattern first. A "What X Brings…" section of titled items (6.1, 6.2 …) gives one record per item; an untitled list there is still folded into one record. `npm test` covers this (`test/mnaExtraction.test.mjs`).
 
-**Two layouts of ordinary case studies that used to be split wrongly** (`normalizeParas` in `src/App.jsx`):
+**Two layouts of ordinary case studies that used to be split wrongly** (`normalizeParas` in `src/pipeline/extract.js`):
 - *A numbered strategy with supporting points*: `1. Lean into Strengths (…)`, then an intro sentence ending in a colon, then `Label: point` lines. That is ONE strategy (the numbered title); the labelled lines are its description. If the model still returns the points as separate records, `foldSupportGroups` merges them back. A numbered group heading with titled strategies right under it (no intro sentence) is unchanged.
 - *Product Differentiation lists*: plain lines with no action verb. A label of 3 words or fewer (`Packaging`) keeps its own lines until the document's empty paragraph that separates groups; every other line is its own strategy, and a bracket becomes the description (`Fast delivery (within 1-2 days)` → `Fast delivery: within 1-2 days`). A line with no bracket and no further text is stored as its own one-line record.
 
@@ -378,8 +378,16 @@ If you see `429` in the browser console, this is the cause.
 api/groq/chat.js     Vercel serverless proxy to Groq (production)
 api/ask.js           Vercel twin of POST /api/ask (Ask the Brain)
 server/index.js      Express proxy + static server (local / npm start)
-src/App.jsx          The whole app: UI, extraction pipeline, chat, storage helpers
-src/main.jsx         Entry point (starts the storage layer, then the app)
+src/main.jsx         Entry point: draws a loading page at once, starts the storage layer, then the app (src/Boot.jsx)
+src/App.jsx          The app shell: navigation, the top bar, pop-ups, and the on-demand loading of every screen (src/lazyScreen.js)
+src/screens/         One file per screen, each downloaded when first used: KnowledgePanel (browse + admin add/extract/review/edit),
+                     ChatPanel (Ask the Brain), ExplorerPanel, LeverManagerModal, GapPanel, UsersPanel, PreviewModal
+src/ui/              Shared pieces: Icon, Skeleton (loading placeholders), GlobalStyles, ConfirmModal, ProfileModal, AdminGate, CommandPalette, ScreenBoundary
+src/pipeline/        The extraction rules: headings.js (small: which lever / M&A section a heading is), extract.js (the pipeline; downloaded when an admin extracts),
+                     text.js (shared text helpers), docx.js (reads a Word file; the Word reader is downloaded then)
+src/lib/             levers.js (levers, categories, definitions), ai.js (calls to the AI proxy, budget, retries), util.js (small helpers)
+src/theme.js         Colours (CSS variables from src/index.css, light and dark) and shared styles
+src/i18n.js          All screen text
 src/storage.js       window.storage: this browser's storage + Supabase sign-in (guest mode, session token)
 src/db.js            window.db: every read/write of the library; Supabase through /api/db, or localStorage
 src/Root.jsx         Sign-in screen + error screen shown before the app
@@ -394,7 +402,10 @@ server/db.js           /api/db: documents, records, levers, gap log, chats; role
 api/db.js              Vercel twin of the /api/db route
 supabase/schema.sql  The tables to create in Supabase (documents, records, levers, gap_log, chats, suggestions, doc_chunks, ask_log)
 public/logo.png      YYC logo (served at /logo.png)
-index.html           HTML shell
+index.html           HTML shell, with a static loading page
+scripts/check-budget.mjs   Size budget (npm run budget)
+e2e/                 Browser tests (npm run e2e) and the speed measurement (npm run perf)
+docs/                Requirements, design, fallbacks, verification, performance
 vite.config.js       Dev proxy: /api → http://127.0.0.1:8787
 .env.example         Required environment variables
 ```

@@ -19,14 +19,15 @@ This file is also the traceability table: each requirement names the code that o
 | ACC-07 | Invite and reset links survive mail scanners | Must | A link of the form `/?token_hash=…&type=invite` shows a Continue button; the link is only used up when Continue is pressed. A used or expired link gives a clear message. The older link form keeps working. | `src/storage.js` (`readEmailLink`, `verifyEmailLink`), `src/Root.jsx` (`ConfirmLink`) | none yet (needs a real Supabase email) | Built, **not verified** |
 | ERR-01 | Real "not found" answers | Must | An unknown page address answers 404 with a not-found page; an unknown `/api` address answers 404 as JSON; a malformed request body answers 400 as JSON. | `server/index.js`, `public/404.html`, `api/notfound.js`, `vercel.json` | `e2e/security.spec.js` ERR-01, SEC-02 | Verified on the Express server. **Not verified on Vercel** |
 
-## Phase 2: speed (planned, not started)
+## Phase 2: speed (done 2026-11-19; numbers in `docs/PERFORMANCE.md`, evidence in `docs/VERIFICATION.md`)
 
-| ID | Requirement | Priority | Acceptance criteria |
-|---|---|---|---|
-| PERF-01 | Load only what the screen needs | Must | The first screen's script is under 250 kB gzipped (today about 303 kB in one file plus 57 kB). The Word reader, the extraction pipeline, Users, Lever Explorer and the Gap Log load on demand. |
-| PERF-02 | Split `src/App.jsx` | Must | One file per screen and one for the extraction pipeline; no file over about 800 lines; all existing tests still pass. |
-| PERF-03 | Less lag while typing and scrolling | Should | Typing in a search or text box does not re-render unrelated panels; long lists render in pages. Measured before and after. |
-| PERF-04 | A stated budget, checked | Should | Build fails or warns when the first-load script grows past the budget. |
+| ID | Requirement | Priority | Acceptance criteria | Status |
+|---|---|---|---|---|
+| PERF-01 | Load only what the screen needs | Must | The first page needs under 150 kB (compressed) of script (was 296 kB). The Word reader, HTML cleaner, extraction code, Ask the Brain, Lever Explorer, Users, Gap Log and document window are downloaded when used. A failed download shows a message and a Try again button. | **Verified** (126 kB) |
+| PERF-02 | Split `src/App.jsx` | Must | One file per screen or concern; no file other than the Knowledge Base screen over about 1,000 lines; every existing test passes. | **Verified** (26 modules; the Knowledge Base screen is still 1,647 lines: see "Not done" in `docs/PERFORMANCE.md`) |
+| PERF-03 | Less lag while typing | Should | Typing in the Knowledge Base search with 300 documents: slowest keystroke under 400 ms on the slow-phone setup (was 1,272 ms). | **Verified** (152 ms) |
+| PERF-04 | A budget, checked | Should | `npm run budget` and a test fail when the first page or a screen grows past its limit, or when an on-demand file is folded back in. | **Verified** (4 of 4 mutations caught) |
+| PERF-05 | Loading placeholders | Should | While a screen, a document or the example questions load, grey placeholder shapes are shown (accessible, no animation). | **Verified** for the Knowledge Base, the document window, the Gap Log, Users and Ask the Brain suggestions. The Lever Explorer shows the generic page placeholder only while its code downloads |
 
 ## Phase 3: visuals (done 2026-11-19; evidence in `docs/VERIFICATION.md`)
 

@@ -124,3 +124,7 @@ textarea.auth-field { min-height: 76px; line-height: 1.5; }
 .auth-error { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--red-soft); color: var(--red-text); font-size: 14px; font-weight: 600; line-height: 1.5; margin: 4px 0 10px; }
 .auth-note { font-size: 13px; color: var(--sub); margin-top: 16px; line-height: 1.55; }
 .auth-message { font-size: 15px; line-height: 1.6; color: var(--ink); }
+
+/* The first screen, before the app has loaded (index.html) and while it checks who is signed in (src/main.jsx) */
+.boot { min-height: 100vh; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; color: var(--sub); font-weight: 600; text-align: center; }
+.boot img { width: 56px; height: 56px; object-fit: contain; }

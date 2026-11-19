@@ -6,10 +6,22 @@
   <link rel="icon" type="image/png" href="/logo.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>YYC Advisory Brain</title>
+  <!-- Critical styles, inline: the first screen is styled even before the main stylesheet arrives (the dev server adds it with JavaScript, a slow
+       network can delay it). Same colours as the tokens in src/index.css; the full stylesheet takes over. -->
+  <style>
+    :root { color-scheme: light dark; --b-paper: #FAF7F2; --b-sub: #645D55; }
+    @media (prefers-color-scheme: dark) { :root { --b-paper: #151111; --b-sub: #C2B5AF; } }
+    html, body { margin: 0; background: var(--b-paper); }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .boot { min-height: 100vh; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; color: var(--b-sub); font-weight: 600; text-align: center; }
+    .boot img { width: 56px; height: 56px; object-fit: contain; }
+    .boot p { margin: 0; }
+  </style>
 </head>
 
 <body>
-  <div id="root"></div>
+  <!-- Shown by the browser at once, before any script has arrived; the app replaces it (PERF-01). -->
+  <div id="root"><div class="boot" role="status"><img src="/logo.png" alt="" width="56" height="56" /><p>Loading YYC Advisory Brain…</p></div></div>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

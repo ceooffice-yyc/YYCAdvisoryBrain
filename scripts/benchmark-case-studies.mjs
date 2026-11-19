@@ -36,7 +36,7 @@ globalThis.fetch = async (input, init = {}) => {
 
 const vite = await createServer({ configFile: path.resolve('vite.config.js'), server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' });
 try {
-  const { extractDocument } = await vite.ssrLoadModule('/src/App.jsx');
+  const { extractDocument } = await vite.ssrLoadModule('/src/pipeline/extract.js');
   const results = [];
   for (let index = 0; index < files.length; index++) {
     const file = files[index];

@@ -7,6 +7,7 @@ import { handleGroq } from './groqHandler.js';
 import { handleDb, dbConfigured } from './db.js';
 import { handleAsk } from './ask/handler.js';
 import { withSecurityHeaders } from './securityHeaders.js';
+import compression from 'compression';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,6 +25,7 @@ app.disable('x-powered-by');
   if (tp) { try { app.set('trust proxy', /^\d+$/.test(tp) ? Number(tp) : tp === 'true' ? true : tp === 'false' ? false : tp); } catch (e) { console.error(`TRUST_PROXY="${tp}" is not valid and was ignored: ${e.message}`); } }
 }
 app.use(withSecurityHeaders());
+app.use(compression()); // pages and scripts go out compressed (Vercel does this by itself)
 app.use(express.json({ limit: '4mb' }));
 
 const send = (res, out) => {

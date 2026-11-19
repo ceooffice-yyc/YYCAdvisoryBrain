@@ -1,18 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { splitClaim } from '../src/claim.js';
+import { leverHeadingOf, leverFromHeading, mnaSectionKind, detectMnaDocument, mnaNumberedKinds } from '../src/pipeline/headings.js';
+import { scopeMnaSections, structureMnaParas, normalizeParas, findStrategyParas, findSupportGroups, foldSupportGroups } from '../src/pipeline/extract.js';
 
-// The pipeline lives inside src/App.jsx (a React file), so these tests load its pure functions straight from that file; all text here is invented, no company document is stored in the repo.
-const src = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const from = src.indexOf('/* ---------- extraction pipeline');
-const to = src.indexOf('async function extractDocument');
-assert.ok(from >= 0 && to > from, 'could not find the extraction pipeline section in src/App.jsx');
-const f = new Function('splitClaim', [
-  'let EXTRA_HEADING_LEVER = [];',
-  src.slice(from, to).replace(/export\s*$/, ''),
-  'return { leverHeadingOf, leverFromHeading, mnaSectionKind, detectMnaDocument, scopeMnaSections, structureMnaParas, mnaNumberedKinds, normalizeParas, findStrategyParas, findSupportGroups, foldSupportGroups };',
-].join('\n'))(splitClaim);
+// The extraction rules are ordinary modules (src/pipeline/), so the tests import them directly; all text here is invented, no company document is stored in the repo.
+const f = { leverHeadingOf, leverFromHeading, mnaSectionKind, detectMnaDocument, scopeMnaSections, structureMnaParas, mnaNumberedKinds, normalizeParas, findStrategyParas, findSupportGroups, foldSupportGroups };
 
 const P = (...paras) => paras.join('\n\n');
 const GAP = '\n\n\n\n\t\n\n'; // what a Word file leaves between two groups: an empty paragraph
