@@ -125,7 +125,9 @@ By default each browser keeps its own copy of the library and anyone can open it
 
 **2. Create the tables.** *SQL Editor → New query*, paste [`supabase/schema.sql`](supabase/schema.sql) and run it (safe to run again). It creates real tables: **`documents`**, **`records`** (one row per extracted strategy), **`levers`** (the lever definitions the extraction prompt is built from), **`gap_log`**, **`chats`** and **`suggestions`**. Row Level Security is on with **no public policy**, so the public key cannot read or write anything. Earlier versions kept everything in one `kv` table; it is no longer used and is left untouched.
 
-**3. Switch sign-up off and create your people.** *Authentication → Sign In / Providers → Email*: turn **off** "Allow new users to sign up" (and "Confirm email" can stay on or off). Then *Authentication → Users → Add user → Create new user*: enter their company email and a password, and tick **Auto Confirm User**. Do this for every person. Send them the password; no emails are needed. To reset a forgotten password, edit the user in the same screen.
+**3. Keep sign-up closed.** *Authentication → Sign In / Providers → Email*: turn **off** "Allow new users to sign up" and leave **Confirm email** on. Nobody can register on their own: people ask for access on the sign-in screen and an admin approves them in the app (see *How people get an account* below). For the very first admin only, create the account by hand: *Authentication → Users → Add user → Create new user*, enter the email and a password, tick **Auto Confirm User**, and put that email in `ADMIN_EMAILS`.
+
+**Email is optional.** By default (`EMAIL_INVITES` not set) the app sends **no** emails: an admin creates the account and is shown a one-time temporary password to hand over, and the person must choose their own at first sign-in. This is the right setting while you use Supabase's built-in email, which only delivers a few messages an hour and only to members of your Supabase organisation, so invites to ordinary staff would fail. To switch to emailed links later: *Authentication → Emails → SMTP Settings* → turn on **custom SMTP** with your company mail service, check the **Invite user** and **Reset password** templates (keep the `{{ .ConfirmationURL }}` link), set **Site URL** and **Redirect URLs** under *Authentication → URL Configuration* to your site (and `http://localhost:5173` for local work), then set `EMAIL_INVITES=on` and `SITE_URL` and redeploy.
 
 **4. Copy the keys.** *Project Settings → API*: the **Project URL**, the **anon public** key and the **service_role** secret.
 
@@ -136,13 +138,25 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_ANON_KEY=eyJ...                 # public key: sent to the page so it can sign people in
 SUPABASE_SERVICE_ROLE_KEY=eyJ...         # SECRET: server only, never prefix with VITE_, never commit it
 ADMIN_EMAILS=you@yourcompany.com,boss@yourcompany.com   # who are admins; everyone else who can sign in is a viewer
-ALLOWED_EMAIL_DOMAINS=yourcompany.com    # optional extra guard
+ALLOWED_EMAIL_DOMAINS=yourcompany.com    # who may ask for access or be invited (use your own company domain, never a public one like gmail.com)
+#EMAIL_INVITES=on                       # only after custom SMTP is set up in Supabase: use invite / reset emails instead of temporary passwords
+SITE_URL=https://your-site.vercel.app   # only with EMAIL_INVITES=on: where invite and reset links lead (also add it to Supabase → Redirect URLs)
 ALLOW_GUEST=false                        # optional: remove the Continue-as-guest button and block guest reads
 ```
 
 The server prints `Shared database + sign-in: Supabase` at start-up. (An admin can also be made with `app_metadata.role = "admin"`; see the bottom of `supabase/schema.sql`.)
 
 **6. Move your existing library.** In the *old* setup (the browser or the earlier deployment that has the data) use **Export backup**; after the switch, sign in as an admin and use **Import backup**. Documents, strategies, custom levers, edited built-in levers and Others sub-categories all come with it; anything already in the new database is kept and duplicates are skipped.
+
+**How people get an account** (`server/accounts.js`, the **Users** tab, `src/Root.jsx`). Run the latest `supabase/schema.sql` once: it adds `access_requests` and `account_events`.
+
+1. A new person presses **Request access** on the sign-in screen and enters their name and work email (and, optionally, why). The page always gives the same answer, so it cannot be used to find out who has an account. Only addresses at `ALLOWED_EMAIL_DOMAINS` are kept; there are limits per address and per hour.
+2. An admin opens **Users**, sees the request, picks *Viewer* or *Admin* and presses **Approve** (or **Reject**; nobody is contacted on a rejection). An admin can also **create an account** directly. Every action asks for confirmation first.
+3. **Without email (the default):** approving creates the account and shows the admin a **one-time temporary password** (copy it, pass it on privately; it is shown once and never stored). On first sign-in the person is taken to a **Choose your own password** screen (at least 10 characters) and can use nothing else until they have. **With `EMAIL_INVITES=on`:** approving sends an invite email with a one-time link to the same screen, and **Forgot password?** appears on the sign-in screen.
+4. In the same tab an admin can **make someone an admin or viewer**, **disable / enable** an account (a disabled person is refused immediately; nothing they wrote is deleted), and set a **temporary password** for someone who forgot theirs (or send a reset email when emails are on).
+5. **Activity** lists who asked, created, approved, changed a role, disabled, enabled or reset whom, and when (`account_events`). A password is never written to it.
+
+Safeguards: you cannot change, disable or reset your own account, there is always at least one active admin, and admins listed in `ADMIN_EMAILS` are managed in the server settings: another admin cannot disable them or set their password.
 
 How it works (`server/auth.js`, `server/db.js`, `api/db.js`, `src/db.js`, `src/storage.js`, `src/Root.jsx`):
 
@@ -388,5 +402,5 @@ vite.config.js       Dev proxy: /api → http://127.0.0.1:8787
 ## Security notes
 
 - The Groq key stays on the server (`.env` locally, Vercel env vars when hosted); `.env` is git-ignored.
-- **With Supabase** everyone signs in with their own account; admins are decided on the server (`ADMIN_EMAILS`), there is no shared passcode, and only admins can change or delete. Keep sign-up switched off in Supabase so only people you create can get in.
+- **With Supabase** everyone signs in with their own account; admins are decided on the server (`ADMIN_EMAILS`), there is no shared passcode, and only admins can change or delete. Keep sign-up switched off in Supabase: people get in only by an admin approving a request or sending an invite (Users tab).
 - **Without Supabase** the admin passcode is a convenience lock stored with the data, **not** real authentication. Anyone with browser access to the data can read it. Do not treat the library as confidential on a public deployment without adding proper access control.

@@ -20,7 +20,7 @@ export const authConfigured = (env = process.env) =>
 const getClient = (env) => (client ||= createClient(String(env.SUPABASE_URL).trim(), String(env.SUPABASE_SERVICE_ROLE_KEY).trim(), { auth: { persistSession: false, autoRefreshToken: false } }));
 
 /* -> { ok: true, user: { id, email, isAdmin } } | { ok: false, status: 401 | 403, error } */
-export async function authenticate(headers = {}, env = process.env, now = Date.now()) {
+export async function authenticate(headers = {}, env = process.env, now = Date.now(), opts = {}) {
   const h = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
   const m = /^Bearer\s+(.+)$/i.exec(String(h.authorization || ''));
   if (!m) return { ok: false, status: 401, error: 'Sign in required' };
@@ -34,15 +34,20 @@ export async function authenticate(headers = {}, env = process.env, now = Date.n
     try { res = await getClient(env).auth.getUser(token); } catch { return { ok: false, status: 401, error: 'Sign in required' }; }
     if (res.error || !res.data || !res.data.user) return { ok: false, status: 401, error: 'Your session has expired. Please sign in again.' };
     user = res.data.user;
-    cache.set(token, { at: now, user });
+    if (!(user.app_metadata && user.app_metadata.must_change_password)) cache.set(token, { at: now, user }); // a temporary password is checked afresh every time, so choosing a new one takes effect at once
     if (cache.size > 500) for (const [k, v] of cache) if (now - v.at >= CACHE_MS) cache.delete(k);
   }
 
+  if (user.banned_until && new Date(user.banned_until).getTime() > now) return { ok: false, status: 403, error: 'This account has been disabled. Please contact your administrator.' }; // an admin disabled it in the Users tab
   const email = String(user.email || '').toLowerCase();
   const domains = list(env.ALLOWED_EMAIL_DOMAINS);
   if (domains.length && !domains.includes(email.split('@')[1] || '')) return { ok: false, status: 403, error: 'This account is not allowed to use the library.' };
   const isAdmin = list(env.ADMIN_EMAILS).includes(email) || (user.app_metadata && user.app_metadata.role === 'admin');
-  return { ok: true, user: { id: user.id, email, isAdmin: !!isAdmin } };
+  const mustChange = !!(user.app_metadata && user.app_metadata.must_change_password); // signed in with a temporary password: only "choose a new password" is allowed until then
+  if (mustChange && !opts.allowMustChange) return { ok: false, status: 403, error: 'Please choose a new password first.', code: 'must_change_password' };
+  return { ok: true, user: { id: user.id, email, isAdmin: !!isAdmin, mustChangePassword: mustChange } };
 }
+
+export const clearAuthCache = () => cache.clear(); // after an admin disables someone, so the next request sees it at once
 
 export const _test = { cache };

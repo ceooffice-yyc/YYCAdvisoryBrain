@@ -272,6 +272,19 @@ export function makeRemoteDb(storage) {
 
     async suggestionsGet() { return (await call("suggestions_get")).value || null; },
     async suggestionsSet(value) { await call("suggestions_set", { value }); },
+
+    // accounts (admin): who may sign in, access requests, and the trail of changes. Not in the browser-only version.
+    accounts: true,
+    async usersList() { const out = await call("users_list"); return { users: out.users || [], emailInvites: !!out.emailInvites }; },
+    async userCreate(email, role) { return call("user_create", { email, role }); },
+    async userTempPassword(id) { return call("user_temp_password", { id }); },
+    async userInvite(email, role) { return call("user_invite", { email, role }); },
+    async userSetRole(id, role) { return call("user_set_role", { id, role }); },
+    async userSetDisabled(id, disabled) { return call("user_set_disabled", { id, disabled }); },
+    async userSendReset(id) { return call("user_send_reset", { id }); },
+    async requestsList() { return (await call("requests_list")).requests || []; },
+    async requestDecide(id, decision, role, mode) { return call("request_decide", { id, decision, role, mode }); },
+    async accountEvents() { return (await call("account_events")).events || []; },
   };
 
   storage.hooks.signedIn = () => db.prefetch();

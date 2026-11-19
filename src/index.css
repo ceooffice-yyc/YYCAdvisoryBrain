@@ -93,3 +93,6 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Text areas have a fixed size everywhere: they cannot be dragged larger or smaller. */
+textarea { resize: none !important; }

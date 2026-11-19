@@ -61,6 +61,34 @@ async function makeRemote(local, cfg, sdk) {
       storage.hooks.signedIn(); // start loading the library while the server confirms who this is
       try { const me = await storage.loadMe(); setGuest(false); return me; } catch (e) { storage.hooks.signedOut(); await auth.auth.signOut(); throw e; }
     },
+    // "Forgot password?": always the same answer, so it cannot be used to find out who has an account
+    async sendReset(email) {
+      const { error } = await auth.auth.resetPasswordForEmail(String(email).trim(), { redirectTo: window.location.origin + "/" });
+      if (error && /rate limit|too many/i.test(error.message)) throw new Error("Too many emails were sent just now. Please try again in a few minutes.");
+    },
+    // the invite / reset link signs the person in for a moment; this sets the password they will use from now on
+    async setPassword(password) {
+      const { error } = await auth.auth.updateUser({ password });
+      if (error) throw new Error(/same|different/i.test(error.message) ? "Choose a password you have not used before." : error.message);
+    },
+    // the first sign-in with a temporary password: the server applies the new password and lifts the restriction
+    async changePassword(password) {
+      const { res, data } = await storage.api("POST", { body: { op: "set_password", password }, quiet: true });
+      if (!res.ok) throw new Error((data && data.error) || "Could not save the password.");
+    },
+    // Profile → Change password: the current password is checked first, so a borrowed open session cannot change it
+    async changeOwnPassword(current, next) {
+      const email = storage.user && storage.user.email;
+      if (!email) throw new Error("You are not signed in.");
+      const { error } = await auth.auth.signInWithPassword({ email, password: current });
+      if (error) throw new Error(/invalid login/i.test(error.message) ? "Your current password is wrong." : error.message);
+      await storage.changePassword(next);
+    },
+    // "Request access": a public call, no sign-in
+    async requestAccess(fields) {
+      const { res, data } = await storage.api("POST", { body: { op: "access_request", ...fields }, quiet: true });
+      if (!res.ok) throw new Error((data && data.error) || "The request could not be sent. Please try again.");
+    },
     async signOut() { storage.user = null; storage.hooks.signedOut(); try { await auth.auth.signOut(); } catch { /* already signed out */ } },
     onSignedOut(cb) { const { data } = auth.auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") { storage.hooks.signedOut(); cb(); } }); return () => data.subscription.unsubscribe(); },
   };
@@ -68,7 +96,18 @@ async function makeRemote(local, cfg, sdk) {
 }
 
 /* -> { mode: "local" | "supabase" | "error", guest?, error? }. Sets window.storage and window.db. */
+/* The invite and password-reset emails lead back here with #access_token=…&type=invite|recovery. Read what kind of link it was before the
+   sign-in library removes it from the address, so the app can ask for a new password instead of opening the library. */
+function readEmailLink() {
+  try {
+    const h = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+    const type = h.get("type");
+    return { link: type === "invite" || type === "recovery" ? type : null, linkError: h.get("error_description") || h.get("error") || "" };
+  } catch { return { link: null, linkError: "" }; }
+}
+
 export async function initStorage() {
+  const { link, linkError } = readEmailLink();
   if (window.storage) { installDb(); return { mode: window.storage.remote ? "supabase" : "local" }; }
   const local = makeLocal();
   // a returning visitor (a saved sign-in exists): start loading the sign-in library code at the same time as the status check
@@ -89,7 +128,7 @@ export async function initStorage() {
     installDb();
     // start loading the library NOW, while the sign-in screen is showing: a returning user has a session; a guest needs none
     remote.hasSession().then((has) => { if (has || status.guest) window.db.prefetch(); });
-    return { mode: "supabase", guest: !!status.guest };
+    return { mode: "supabase", guest: !!status.guest, emailInvites: !!status.emailInvites, link, linkError };
   }
   window.storage = local;
   installDb();

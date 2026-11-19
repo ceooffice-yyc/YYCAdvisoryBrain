@@ -229,3 +229,48 @@ alter table public.ask_log enable row level security;   -- no policies: only the
 --   select created_at, question, feedback_note from public.ask_log where feedback = -1 order by created_at desc limit 50;       -- thumbs down
 --   select created_at, question, unsupported from public.ask_log where unsupported <> '[]'::jsonb order by created_at desc;    -- unmatched figures
 --   select percentile_cont(0.5) within group (order by ms) as p50, percentile_cont(0.95) within group (order by ms) as p95 from public.ask_log;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- Accounts: how new people get in. Nobody can self-register into the library: a person asks for access (access_requests), an admin
+-- approves it in the app (Users tab), and that sends a Supabase invite email with a one-time link to set a password.
+-- account_events is the trail of who asked, invited, approved, changed a role, disabled or enabled whom, and when. Safe to run again.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+create table if not exists public.access_requests (
+  id           uuid primary key default gen_random_uuid(),
+  email        text not null,
+  name         text not null default '',
+  note         text,
+  status       text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  requested_at timestamptz not null default now(),
+  decided_by   text,
+  decided_at   timestamptz
+);
+create unique index if not exists access_requests_one_pending on public.access_requests (lower(email)) where status = 'pending';
+create index if not exists access_requests_status_idx on public.access_requests (status, requested_at desc);
+alter table public.access_requests enable row level security;   -- no policies: only the server (service-role key) can read or write
+
+create table if not exists public.account_events (
+  id      uuid primary key default gen_random_uuid(),
+  at      timestamptz not null default now(),
+  actor   text,                      -- the admin who did it (or the requester's email for a new request)
+  action  text not null,             -- request | invite | approve | reject | role | disable | enable | reset
+  target  text,                      -- the email it was about
+  detail  jsonb not null default '{}'::jsonb
+);
+create index if not exists account_events_at_idx on public.account_events (at desc);
+alter table public.account_events enable row level security;    -- no policies: only the server (service-role key) can read or write
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- Defence in depth. The browser never reads or writes these tables (it only signs in, and everything else goes through the server with the
+-- service-role key), so the two public database roles get no rights at all. Today Row Level Security already makes them see nothing; this
+-- also removes the permission itself, so a table added later cannot be exposed by mistake. The server (service_role) is not affected.
+-- Safe to run again.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+revoke all on all tables    in schema public from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+revoke execute on all functions in schema public from anon, authenticated;
+alter default privileges in schema public revoke all on tables    from anon, authenticated;
+alter default privileges in schema public revoke all on sequences from anon, authenticated;
+alter default privileges in schema public revoke execute on functions from anon, authenticated;

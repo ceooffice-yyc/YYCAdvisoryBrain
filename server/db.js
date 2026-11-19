@@ -9,6 +9,7 @@
 //   POST /api/db  { op, ...args } -> { ... }       op names are listed in OPS below
 //
 // Who can do what (401 = not signed in / session ended, 403 = signed in but not allowed):
+//   anyone (no sign-in)                                      access_request: ask for an account (rate limited; answers the same for every address)
 //   guest (nobody signed in, if ALLOW_GUEST is not false)   library, kb, document, documents  (read-only)
 //   any signed-in user                                       + gap_add, chat_get / chat_save (their own), suggestions_get / suggestions_set
 //   admin (ADMIN_EMAILS or app_metadata.role = "admin")      + everything that changes the library, and reading any chat
@@ -17,7 +18,8 @@
 // "Delete" only marks the row deleted; it then disappears from every read, and the data stays in the table.
 
 import { createClient } from '@supabase/supabase-js';
-import { authConfigured, authenticate } from './auth.js';
+import { authConfigured, authenticate, clearAuthCache } from './auth.js';
+import * as acct from './accounts.js';
 import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
 export const dbConfigured = (env = process.env) => !!(String(env.SUPABASE_URL || '').trim() && String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
@@ -338,9 +340,24 @@ const OPS = {
     level: 'admin',
     run: async ({ sb, user }) => { must(await sb.from('gap_log').update({ status: 'deleted', deleted_at: nowIso(), deleted_by: user.email }).eq('status', 'active'), 'clear gap log'); return {}; },
   },
+
+  // ── accounts (see server/accounts.js) ──
+  access_request: { level: 'public', run: async ({ sb, env, ip, now }, a) => acct.createRequest(sb, env, a, ip, now()) },
+  users_list: { level: 'admin', run: async ({ sb, env, now }) => ({ users: await acct.listUsers(sb, env, now()), emailInvites: acct.emailOn(env) }) },
+  user_create: { level: 'admin', run: async ({ sb, env, user }, a) => acct.createUser(sb, env, user, a) },
+  user_temp_password: { level: 'admin', run: async ({ sb, env, user }, a) => acct.tempPassword(sb, env, user, a) },
+  set_password: { level: 'user', run: async ({ sb, user }, a) => { await acct.setOwnPassword(sb, user, a); clearAuthCache(); return {}; } },
+  user_invite: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.inviteUser(sb, env, user, a, headers) },
+  user_set_role: { level: 'admin', run: async ({ sb, env, user }, a) => acct.setRole(sb, env, user, a) },
+  user_set_disabled: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setDisabled(sb, env, user, a); clearAuthCache(); return out; } },
+  user_send_reset: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.sendReset(sb, env, user, a, headers) },
+  requests_list: { level: 'admin', run: async ({ sb }) => ({ requests: await acct.listRequests(sb) }) },
+  request_decide: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.decideRequest(sb, env, user, a, headers) },
+  account_events: { level: 'admin', run: async ({ sb }, a) => ({ events: await acct.listEvents(sb, a.limit) }) },
 };
 
 const json = (status, body) => ({ status, body });
+const clientIp = (headers = {}) => { const h = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])); return String(h['x-forwarded-for'] || h['x-real-ip'] || 'unknown').split(',')[0].trim() || 'unknown'; };
 
 /* req: { method, query, body, headers }  ->  { status, body } */
 export async function handleDb(req, { env = process.env, now = Date.now } = {}) {
@@ -350,7 +367,7 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   if (method === 'GET' && q.action === 'status') {
     if (!dbConfigured(env)) return json(200, { mode: 'local' });
     if (!authConfigured(env)) return json(200, { mode: 'error', error: 'SUPABASE_ANON_KEY is not set on the server (Supabase → Project Settings → API → anon public key).' });
-    return json(200, { mode: 'supabase', url: String(env.SUPABASE_URL).trim(), anonKey: String(env.SUPABASE_ANON_KEY).trim(), guest: guestAllowed(env) });
+    return json(200, { mode: 'supabase', url: String(env.SUPABASE_URL).trim(), anonKey: String(env.SUPABASE_ANON_KEY).trim(), guest: guestAllowed(env), emailInvites: acct.emailOn(env) });
   }
   if (!dbConfigured(env)) return json(503, { error: 'The shared database is not configured. Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_ANON_KEY on the server.' });
   if (!authConfigured(env)) return json(503, { error: 'SUPABASE_ANON_KEY is not set on the server.' });
@@ -359,12 +376,14 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   const op = method === 'POST' && req.body && typeof req.body.op === 'string' ? OPS[req.body.op] : null;
 
   let user;
-  if (signedOut && op && op.level === 'guest' && guestAllowed(env)) {
+  if (signedOut && op && (op.level === 'public' || (op.level === 'guest' && guestAllowed(env)))) {
     user = { id: null, email: null, isAdmin: false, guest: true };
   } else {
-    const a = await authenticate(req.headers, env, now());
+    const a = await authenticate(req.headers, env, now(), { allowMustChange: true });
     if (!a.ok) return json(a.status, { error: a.error });
     user = a.user;
+    // signed in with a temporary password: nothing but "who am I" and "choose a new password" until they have
+    if (user.mustChangePassword && !(method === 'GET' && q.action === 'me') && !(op && req.body.op === 'set_password')) return json(403, { error: 'Please choose a new password first.', code: 'must_change_password' });
   }
   if (method === 'GET' && q.action === 'me') return json(200, user);
   if (method !== 'POST') return json(405, { error: 'Method not allowed' });
@@ -372,10 +391,11 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   if (op.level === 'admin' && !user.isAdmin) return json(403, { error: 'You need an admin account to do that.' });
 
   try {
-    const out = await op.run({ sb: getClient(env), user, now, env }, req.body || {});
+    const out = await op.run({ sb: getClient(env), user, now, env, headers: req.headers || {}, ip: clientIp(req.headers) }, req.body || {});
     return json(200, out || {});
   } catch (err) {
-    if (err instanceof HttpError) return json(err.status, { error: err.message });
+    if (err instanceof acct.AccountError && err.status >= 500) { console.error('accounts error:', err.message); return json(err.status, { error: op.level === 'public' ? 'The request could not be saved. Please try again later.' : err.message }); }
+    if (err instanceof HttpError || err instanceof acct.AccountError) return json(err.status, { error: err.message });
     console.error('db error:', err.message);
     return json(502, { error: 'The shared database request failed' });
   }

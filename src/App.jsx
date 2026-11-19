@@ -237,7 +237,7 @@ const T = {
   en: {
     appTitle: "Advisory Brain", appSub: "Internal knowledge · Closed-book",
     workspace: "Workspace",
-    tabs: { kb: "Knowledge Base", chat: "Ask the Brain", explorer: "Lever Explorer", gap: "Gap Log" },
+    tabs: { kb: "Knowledge Base", chat: "Ask the Brain", explorer: "Lever Explorer", gap: "Gap Log", users: "Users" },
     kbUser: "Browse the materials uploaded by the YYC team. Click any card to read the summary or full document.",
     kbAdmin: "Upload case studies, playbooks and frameworks. The AI extracts the 10 levers automatically.",
     admin: "Admin", unlockAdmin: "Unlock admin", lockAdmin: "Exit admin",
@@ -384,7 +384,7 @@ const T = {
   zh: {
     appTitle: "顾问知识大脑", appSub: "内部知识库",
     workspace: "工作台",
-    tabs: { kb: "知识库", chat: "智能问答", explorer: "杠杆总览", gap: "缺口日志" },
+    tabs: { kb: "知识库", chat: "智能问答", explorer: "杠杆总览", gap: "缺口日志", users: "用户" },
     admin: "管理员", unlockAdmin: "解锁管理员", lockAdmin: "退出管理员",
     kbUser: "浏览并阅读YYC团队上传的资料。点击任何一张卡片来阅读总结或是原文。",
     kbAdmin: "上传案例研究，指南，等等。AI会自动生成10个杠杆",
@@ -736,6 +736,7 @@ export default function App() {
   const isGuest = !!(window.storage?.remote && !window.storage.user); // "continue as guest": may only browse the knowledge base and lever records
   const [toast, setToast] = useState("");
   const [confirm, setConfirm] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false); // the signed-in person's profile window
   const [chatAll, setChatAll] = useState([]); // every message, deleted ones included
   const chatOkRef = useRef(false);
   const chatMsgs = useMemo(() => chatAll.filter(isLive), [chatAll]);
@@ -791,6 +792,8 @@ export default function App() {
     if (isAdmin) setIsAdmin(false); else setGateOpen(true);
   };
   const exitBlocked = isAdmin && (adminLocked || confirm !== null || previewDoc !== null);
+  const profileBlocked = exitBlocked || kbWorking || confirm !== null; // nothing in progress may be disturbed by opening the profile, changing the password or logging out
+  const profileInitial = ((signedUser && signedUser.email) || "?").charAt(0).toUpperCase();
 
   useEffect(() => {
     (async () => {
@@ -850,6 +853,7 @@ export default function App() {
     ...(isGuest ? [] : [{ key: "chat", icon: "chat", label: t.tabs.chat }]), // guests cannot use Ask the Brain
     { key: "explorer", icon: "scale", label: t.tabs.explorer },
     ...(isAdmin ? [{ key: "gap", icon: "alert", label: t.tabs.gap }] : []),
+    ...(isAdmin && window.storage?.remote ? [{ key: "users", icon: "user", label: t.tabs.users }] : []), // accounts need the shared database
   ];
 
   if (loadErr) {
@@ -902,6 +906,22 @@ export default function App() {
               ))}
             </div>
             */}
+            {signedUser ? (
+              <button
+                className="yyc-profile-btn"
+                disabled={profileBlocked}
+                title={profileBlocked ? "Finish the current action first." : "Your profile"}
+                aria-haspopup="dialog"
+                aria-label="Your profile"
+                onClick={() => setProfileOpen(true)}
+              >
+                <span className="yyc-avatar">{profileInitial}</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{signedUser.email}</span>
+                  <span style={{ display: "block", fontSize: 11, color: P.sub, marginTop: 1 }}>{signedUser.isAdmin ? "Admin" : "Viewer"} · Profile</span>
+                </span>
+              </button>
+            ) : (<>
             <button
               className={`yyc-admin-btn ${isAdmin ? "is-on" : ""}`}
               disabled={exitBlocked}
@@ -913,10 +933,9 @@ export default function App() {
               {authLabel}
             </button>
             {window.storage?.remote && (
-              <div style={{ fontSize: 12, color: P.sub, margin: "8px 2px 0", lineHeight: 1.5, wordBreak: "break-all" }}>
-                {signedUser ? <>{signedUser.email}{signedUser.isAdmin ? " · admin" : ""}</> : "Guest · browse only"}
-              </div>
+              <div style={{ fontSize: 12, color: P.sub, margin: "8px 2px 0", lineHeight: 1.5, wordBreak: "break-all" }}>Guest · browse only</div>
             )}
+            </>)}
             <div className="yyc-foot-note">{t.sharedNote}</div>
           </div>
         </aside>
@@ -940,6 +959,18 @@ export default function App() {
                 ))}
               </div>
               */}
+              {signedUser ? (
+                <button
+                className="yyc-profile-btn yyc-profile-compact"
+                disabled={profileBlocked}
+                title={profileBlocked ? "Finish the current action first." : "Your profile"}
+                aria-haspopup="dialog"
+                aria-label="Your profile"
+                onClick={() => setProfileOpen(true)}
+              >
+                <span className="yyc-avatar">{profileInitial}</span>
+              </button>
+              ) : (
               <button
                 className={`yyc-admin-btn ${isAdmin ? "is-on" : ""}`}
                 disabled={exitBlocked}
@@ -950,6 +981,7 @@ export default function App() {
                 <Icon name={window.storage?.remote ? (isGuest ? "lock" : "unlock") : (isAdmin ? "unlock" : "lock")} size={13} />
                 {window.storage?.remote ? <span style={{ marginLeft: 6 }}>{authLabel}</span> : null}
               </button>
+              )}
             </div>
           </header>
 
@@ -986,6 +1018,7 @@ export default function App() {
                     <ExplorerPanel t={t} levers={levers} index={index} openPreview={openPreview} isAdmin={isAdmin} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} />
                   )}
                   {tab === "gap" && isAdmin && <GapPanel t={t} flash={flash} setConfirm={setConfirm} />}
+                  {tab === "users" && isAdmin && window.storage?.remote && <UsersPanel flash={flash} setConfirm={setConfirm} />}
                   </div>
                 )}
               </>
@@ -1016,6 +1049,7 @@ export default function App() {
           onLever={(id) => { setTab("kb"); setPaletteLever(id); }}
         />
       )}
+      {profileOpen && signedUser && <ProfileModal user={signedUser} onClose={() => setProfileOpen(false)} />}
       {confirm && <ConfirmModal {...confirm} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
       {toast && (<div className="yyc-toast"><div className="yyc-toast-dot" />{toast}</div>)}
     </div>
@@ -1053,6 +1087,11 @@ function GlobalStyles() {
       .yyc-lang-btn:hover { background: ${P.wash}; }
       .yyc-lang-btn.is-active { background: ${P.ink}; color: #fff; }
       .yyc-admin-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; font-size: 12.5px; font-weight: 650; cursor: pointer; font-family: inherit; }
+      .yyc-profile-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.ink}; cursor: pointer; font-family: inherit; text-align: left; }
+      .yyc-profile-btn:hover:not(:disabled) { background: ${P.wash}; border-color: ${P.ink}; }
+      .yyc-profile-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .yyc-profile-compact { width: auto; padding: 3px; border-radius: 999px; }
+      .yyc-avatar { width: 30px; height: 30px; border-radius: 50%; background: ${P.maroon}; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; flex-shrink: 0; }
       .yyc-admin-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
       .yyc-admin-btn.is-on { background: ${P.maroon}; border-color: ${P.maroon}; color: #fff; }
       .yyc-foot-note { font-size: 10.5px; color: ${P.faint}; line-height: 1.5; padding: 0 4px; }
@@ -1287,7 +1326,7 @@ function CommandPalette({ t, index, isAdmin, isGuest, onClose, onTab, onDoc, onL
 
   const items = useMemo(() => [
     ...Object.entries(t.tabs)
-      .filter(([k]) => (k !== "gap" || isAdmin) && !(k === "chat" && isGuest))
+      .filter(([k]) => (k !== "gap" || isAdmin) && (k !== "users" || (isAdmin && window.storage?.remote)) && !(k === "chat" && isGuest))
       .map(([k, label]) => ({ type: "tab", id: k, label, sub: "", badge: t.kbarPage })),
     ...Object.keys(t.levers).map((l) => ({ type: "lever", id: l, label: t.levers[l], sub: "", badge: t.kbarLever })),
     ...index.map((d) => ({
@@ -1429,6 +1468,76 @@ function MnaChoiceModal({ ask, onPick }) {
           <button className="yyc-btn-secondary" onClick={() => onPick(otherPick)}>{other}</button>
           <button className="yyc-btn-primary" onClick={() => onPick(leadPick)} autoFocus>{lead}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* The signed-in person's profile: who they are, change password, log out. While a password is being saved nothing else can be pressed or closed. */
+function ProfileModal({ user, onClose }) {
+  const [view, setView] = useState("main"); // "main" | "password"
+  const [cur, setCur] = useState("");
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  const save = async (e) => {
+    e.preventDefault();
+    if (!cur) { setErr("Enter your current password."); return; }
+    if (pw.length < 10) { setErr("The new password needs at least 10 characters."); return; }
+    if (pw !== pw2) { setErr("The two new passwords do not match."); return; }
+    if (pw === cur) { setErr("Choose a password different from the current one."); return; }
+    setBusy(true); setErr("");
+    try { await window.storage.changeOwnPassword(cur, pw); setCur(""); setPw(""); setPw2(""); setDone(true); setView("main"); }
+    catch (ex) { setErr(String((ex && ex.message) || "The password could not be changed.")); }
+    setBusy(false);
+  };
+  const logout = async () => { setBusy(true); try { await window.storage.signOut(); } catch { setBusy(false); } };
+  const lock = { opacity: busy ? 0.55 : 1, cursor: busy ? "not-allowed" : "pointer" };
+  return (
+    <div className="yyc-modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
+      <div className="yyc-modal" role="dialog" aria-modal="true" aria-label="Your profile" style={{ width: 400, maxWidth: "94vw", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+          <span className="yyc-avatar" style={{ width: 44, height: 44, fontSize: 18 }}>{(user.email || "?").charAt(0).toUpperCase()}</span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 750, wordBreak: "break-all", lineHeight: 1.3 }}>{user.email}</div>
+            <div style={{ fontSize: 12.5, color: P.sub, marginTop: 2 }}>{user.isAdmin ? "Admin" : "Viewer"}</div>
+          </div>
+          <button className="yyc-btn-secondary" style={{ padding: "5px 9px", ...lock }} onClick={onClose} disabled={busy} aria-label="Close"><Icon name="close" size={13} /></button>
+        </div>
+
+        {view === "main" ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            {done && <div role="status" style={{ fontSize: 13, color: P.green, fontWeight: 650 }}>Your password was changed.</div>}
+            <button className="yyc-btn-secondary" style={{ justifyContent: "center", ...lock }} disabled={busy} onClick={() => { setDone(false); setErr(""); setView("password"); }}>
+              <Icon name="lock" size={14} /> Change password
+            </button>
+            <button className="yyc-btn-primary" style={{ justifyContent: "center", ...lock }} disabled={busy} onClick={logout}>
+              <Icon name="arrowRight" size={14} /> {busy ? "Logging out…" : "Log out"}
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={save}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: P.sub }}>Current password</label>
+            <input className="yyc-input" type="password" autoComplete="current-password" autoFocus disabled={busy} value={cur} onChange={(e) => { setCur(e.target.value); setErr(""); }} style={{ margin: "5px 0 12px" }} />
+            <label style={{ fontSize: 12, fontWeight: 700, color: P.sub }}>New password</label>
+            <input className="yyc-input" type="password" autoComplete="new-password" disabled={busy} value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }} style={{ margin: "5px 0 12px" }} />
+            <label style={{ fontSize: 12, fontWeight: 700, color: P.sub }}>Type the new password again</label>
+            <input className="yyc-input" type="password" autoComplete="new-password" disabled={busy} value={pw2} onChange={(e) => { setPw2(e.target.value); setErr(""); }} style={{ margin: "5px 0 6px" }} />
+            <div style={{ fontSize: 12, color: P.faint, lineHeight: 1.5 }}>At least 10 characters.</div>
+            {err && <div role="alert" style={{ color: P.red, fontSize: 13, fontWeight: 600, marginTop: 10, lineHeight: 1.5 }}>{err}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button type="button" className="yyc-btn-secondary" style={lock} disabled={busy} onClick={() => { setErr(""); setView("main"); }}>Cancel</button>
+              <button type="submit" className="yyc-btn-primary" style={lock} disabled={busy}>{busy ? "Saving…" : "Save new password"}</button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -2866,7 +2975,7 @@ function KnowledgePanel({
   useEffect(() => {
     if (!setAdminLocked) return;
     const locked =
-      mode === "edit" || mode === "review" || mode === "add" ||
+      mode === "edit" || mode === "review" || mode === "add" || mode === "bulk" ||
       busy ||
       editLeverRecord !== null ||
       pickerRecord !== null ||
@@ -3895,7 +4004,7 @@ function KnowledgePanel({
             )}
           </div>
 
-          <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={t.textPh} rows={12} className="yyc-input" style={{ marginTop: 14, resize: "vertical", fontSize: 13, lineHeight: 1.6 }} />
+          <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={t.textPh} rows={12} className="yyc-input" style={{ marginTop: 14, resize: "none", fontSize: 13, lineHeight: 1.6 }} />
 
           {aiBanner}
           {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 10, fontWeight: 600 }}>{errMsg}</div>}
@@ -5128,6 +5237,204 @@ function AskLogPanel({ t }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* Admin: who can use the library. Nobody registers on their own: people ask for access, an admin approves, and the account is created either
+   with an emailed link (EMAIL_INVITES=on) or with a one-time temporary password that the admin hands over (the default, no email needed). */
+const TRAIL_TEXT = {
+  request: (e) => `${e.target} asked for access`,
+  invite: (e) => `${e.actor} invited ${e.target} as ${(e.detail && e.detail.role) || "viewer"}`,
+  create: (e) => `${e.actor} created an account for ${e.target} as ${(e.detail && e.detail.role) || "viewer"}`,
+  approve: (e) => `${e.actor} approved ${e.target}${e.detail && e.detail.role ? ` as ${e.detail.role}` : ""}`,
+  reject: (e) => `${e.actor} rejected the request of ${e.target}`,
+  role: (e) => `${e.actor} made ${e.target} ${(e.detail && e.detail.role) || "viewer"}`,
+  disable: (e) => `${e.actor} disabled ${e.target}`,
+  enable: (e) => `${e.actor} enabled ${e.target}`,
+  reset: (e) => `${e.actor} sent a password reset email to ${e.target}`,
+  temp_password: (e) => `${e.actor} set a temporary password for ${e.target}`,
+  password_changed: (e) => `${e.target} chose a new password`,
+};
+
+/* The temporary password is shown ONCE, here. It is not stored anywhere the admin can look it up again. */
+function TempPasswordModal({ info, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => { try { await navigator.clipboard.writeText(info.password); setCopied(true); } catch { setCopied(false); } };
+  return (
+    <div className="yyc-modal-backdrop">
+      <div className="yyc-modal" role="dialog" aria-modal="true" aria-label="Temporary password" style={{ width: 470, maxWidth: "94vw", padding: 24 }}>
+        <div style={{ fontSize: 15.5, fontWeight: 750, marginBottom: 6 }}>Give this to {info.email}</div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, marginBottom: 12 }}>This temporary password is shown only once. Pass it on privately (not in a group chat). They must choose their own password the first time they sign in.</div>
+        <div style={{ fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 18, fontWeight: 700, letterSpacing: "0.04em", padding: "12px 14px", background: P.wash, border: `1px solid ${P.line}`, borderRadius: 10, wordBreak: "break-all", userSelect: "all" }}>{info.password}</div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button className="yyc-btn-secondary" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          <button className="yyc-btn-primary" onClick={onClose} autoFocus>I have passed it on</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsersPanel({ flash, setConfirm }) {
+  const [users, setUsers] = useState(null);
+  const [emailInvites, setEmailInvites] = useState(false); // true when the server sends invite / reset emails
+  const [reqs, setReqs] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [err, setErr] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("viewer");
+  const [reqRole, setReqRole] = useState({}); // request id -> the role chosen when approving
+  const [showTrail, setShowTrail] = useState(false);
+  const [shown, setShown] = useState(null); // { email, password }: a temporary password to hand over
+  const meId = window.storage?.user?.id;
+
+  const load = useCallback(async () => {
+    try {
+      const [u, r, ev] = await Promise.all([window.db.usersList(), window.db.requestsList(), window.db.accountEvents()]);
+      setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r); setEvents(ev); setErr("");
+    } catch (e) { setErr(String((e && e.message) || "Could not load the users.")); setUsers((x) => x || []); }
+  }, []);
+  useEffect(() => { // first load; the answer is dropped if the tab was closed meanwhile
+    let on = true;
+    (async () => {
+      try {
+        const [u, r, ev] = await Promise.all([window.db.usersList(), window.db.requestsList(), window.db.accountEvents()]);
+        if (on) { setUsers(u.users); setEmailInvites(u.emailInvites); setReqs(r); setEvents(ev); }
+      } catch (e) { if (on) { setErr(String((e && e.message) || "Could not load the users.")); setUsers([]); } }
+    })();
+    return () => { on = false; };
+  }, []);
+
+  // every action asks first, then reports what happened; a failure shows its reason on the page; a temporary password is shown once
+  const ask = (title, message, confirmLabel, run, okText, danger = false) => setConfirm({
+    title, message, confirmLabel, tone: danger ? "danger" : "primary",
+    onConfirm: async () => {
+      try { const out = await run(); if (out && out.password) setShown({ email: out.email, password: out.password }); flash(okText); setErr(""); }
+      catch (e) { setErr(String((e && e.message) || "That did not work.")); }
+      await load();
+    },
+  });
+  const roleWord = (r) => (r === "admin" ? "an admin" : "a viewer");
+  const inviteByEmail = () => {
+    const to = email.trim();
+    if (!to) { setErr("Enter an email address."); return; }
+    ask("Send an invite?", `An email with a link to set a password is sent to ${to}. They join as ${roleWord(role)}.`, "Send invite", async () => { const out = await window.db.userInvite(to, role); setEmail(""); return out; }, "Invite sent");
+  };
+  const createAccount = () => {
+    const to = email.trim();
+    if (!to) { setErr("Enter an email address."); return; }
+    ask("Create this account?", `${to} gets an account as ${roleWord(role)}. You are shown a one-time temporary password to give them. They must choose their own at first sign-in.`, "Create account", async () => { const out = await window.db.userCreate(to, role); setEmail(""); return out; }, "Account created");
+  };
+  const decide = (r, decision, mode) => {
+    const rl = reqRole[r.id] || "viewer";
+    if (decision === "approve" && mode === "email") ask(`Approve ${r.name || r.email}?`, `An invite email is sent to ${r.email}. They join as ${roleWord(rl)}.`, "Approve and invite", () => window.db.requestDecide(r.id, "approve", rl, "email"), "Approved: invite sent");
+    else if (decision === "approve") ask(`Approve ${r.name || r.email}?`, `An account is created for ${r.email} as ${roleWord(rl)}. You are shown a one-time temporary password to give them. They must choose their own at first sign-in.`, "Approve and create account", () => window.db.requestDecide(r.id, "approve", rl, "password"), "Approved: account created");
+    else ask(`Reject ${r.name || r.email}?`, `${r.email} is not given access. They are not contacted.`, "Reject", () => window.db.requestDecide(r.id, "reject"), "Request rejected", true);
+  };
+  const changeRole = (u) => {
+    const next = u.role === "admin" ? "viewer" : "admin";
+    ask(next === "admin" ? `Make ${u.email} an admin?` : `Make ${u.email} a viewer?`, next === "admin" ? "Admins can add, edit and delete library content, import backups, and manage people here." : "They keep reading the library and asking questions, but can no longer change it.", next === "admin" ? "Make admin" : "Make viewer", () => window.db.userSetRole(u.id, next), "Role changed", next === "viewer");
+  };
+  const toggleDisabled = (u) => {
+    if (u.disabled) ask(`Enable ${u.email}?`, "They can sign in again.", "Enable", () => window.db.userSetDisabled(u.id, false), "Account enabled");
+    else ask(`Disable ${u.email}?`, "They can no longer use the library, starting now. Nothing they wrote is deleted, and you can enable the account again at any time.", "Disable", () => window.db.userSetDisabled(u.id, true), "Account disabled", true);
+  };
+  const resetByEmail = (u) => ask(`Send a password reset to ${u.email}?`, "They get an email with a one-time link to choose a new password.", "Send reset email", () => window.db.userSendReset(u.id), "Reset email sent");
+  const tempPassword = (u) => ask(`Set a temporary password for ${u.email}?`, "Their current password stops working. You are shown a one-time temporary password to give them, and they must choose their own at next sign-in.", "Set temporary password", () => window.db.userTempPassword(u.id), "Temporary password set", true);
+
+  if (users === null) return <div style={{ color: P.sub }}>…</div>;
+  const pending = reqs.filter((r) => r.status === "pending");
+  const chip = (text, bg, fg) => <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" }}>{text}</span>;
+  const when = (x) => (x ? new Date(x).toLocaleString("en-MY") : "never");
+  const small = { padding: "5px 10px", fontSize: 12 };
+  const statusChip = (u) => (u.disabled ? chip("Disabled", P.redSoft, P.red) : u.mustChange ? chip("Temporary password, not changed yet", P.goldSoft, P.goldDark) : !u.accepted ? chip("Invited, not opened yet", P.goldSoft, P.goldDark) : chip("Active", P.greenSoft, P.green));
+
+  return (
+    <div>
+      {shown && <TempPasswordModal info={shown} onClose={() => setShown(null)} />}
+      <div className="yyc-section-head">
+        <div>
+          <h1 className="yyc-section-title">Users</h1>
+          <div className="yyc-section-sub">Nobody can register on their own. People ask for access on the sign-in screen and you approve them here, or create an account directly. {emailInvites ? "They get an email with a link to set their own password." : "You are shown a one-time temporary password to give them, and they choose their own at first sign-in."}</div>
+        </div>
+      </div>
+      {err && <div role="alert" style={{ color: P.red, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
+
+      <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>
+        <div style={{ fontWeight: 750, marginBottom: 10 }}>Access requests {pending.length ? <span style={{ marginLeft: 6 }}>{chip(`${pending.length} waiting`, P.goldSoft, P.goldDark)}</span> : null}</div>
+        {pending.length === 0 && <div style={{ fontSize: 13, color: P.sub }}>No requests are waiting.</div>}
+        {pending.map((r) => (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 0", borderTop: `1px solid ${P.line}` }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 14, fontWeight: 650 }}>{r.name} <span style={{ fontWeight: 500, color: P.sub }}>· {r.email}</span></div>
+              {r.note && <div style={{ fontSize: 12.5, color: P.sub, marginTop: 2, lineHeight: 1.45 }}>{r.note}</div>}
+              <div style={{ fontSize: 11.5, color: P.faint, marginTop: 2 }}>asked {when(r.requested_at)}</div>
+            </div>
+            <select className="yyc-input" aria-label={`Role for ${r.email}`} value={reqRole[r.id] || "viewer"} onChange={(e) => setReqRole({ ...reqRole, [r.id]: e.target.value })} style={{ width: 110, padding: "6px 8px", fontSize: 13 }}>
+              <option value="viewer">Viewer</option>
+              <option value="admin">Admin</option>
+            </select>
+            {emailInvites && <button className="yyc-btn-primary" style={small} onClick={() => decide(r, "approve", "email")}>Approve (email invite)</button>}
+            <button className={emailInvites ? "yyc-btn-secondary" : "yyc-btn-primary"} style={small} onClick={() => decide(r, "approve", "password")}>{emailInvites ? "Approve (temporary password)" : "Approve"}</button>
+            <button className="yyc-btn-secondary" style={{ ...small, borderColor: P.red, color: P.red }} onClick={() => decide(r, "reject")}>Reject</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>
+        <div style={{ fontWeight: 750, marginBottom: 10 }}>{emailInvites ? "Invite someone" : "Create an account"}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input className="yyc-input" type="email" placeholder="name@company.com" aria-label="Email for the new account" value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }} style={{ flex: 1, minWidth: 220 }} />
+          <select className="yyc-input" aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)} style={{ width: 120 }}>
+            <option value="viewer">Viewer</option>
+            <option value="admin">Admin</option>
+          </select>
+          {emailInvites && <button className="yyc-btn-primary" onClick={inviteByEmail} disabled={!email.trim()}>Send invite email</button>}
+          <button className={emailInvites ? "yyc-btn-secondary" : "yyc-btn-primary"} onClick={createAccount} disabled={!email.trim()}>{emailInvites ? "Create with temporary password" : "Create account"}</button>
+        </div>
+        <div style={{ fontSize: 12, color: P.faint, marginTop: 8 }}>Viewers read the library and ask questions. Admins can also change the library and manage people.</div>
+      </div>
+
+      <div style={{ ...S.card, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ padding: "14px 18px", fontWeight: 750 }}>People ({users.length})</div>
+        {users.map((u) => (
+          <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 18px", borderTop: `1px solid ${P.line}` }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 14, fontWeight: 650, wordBreak: "break-all" }}>{u.email}{u.id === meId ? <span style={{ fontWeight: 500, color: P.sub }}> (you)</span> : null}</div>
+              <div style={{ fontSize: 11.5, color: P.faint, marginTop: 2 }}>last signed in {when(u.lastSignInAt)}</div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {u.role === "admin" ? chip("Admin", P.goldSoft, P.goldDark) : chip("Viewer", P.wash, P.sub)}
+              {statusChip(u)}
+            </div>
+            {u.id !== meId && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {u.roleLocked
+                  ? <span title="This admin is set in the server settings (ADMIN_EMAILS)" style={{ fontSize: 11.5, color: P.faint, alignSelf: "center" }}>set in server settings</span>
+                  : <button className="yyc-btn-secondary" style={small} onClick={() => changeRole(u)}>{u.role === "admin" ? "Make viewer" : "Make admin"}</button>}
+                {emailInvites && <button className="yyc-btn-secondary" style={small} onClick={() => resetByEmail(u)}>Send reset email</button>}
+                <button className="yyc-btn-secondary" style={small} onClick={() => tempPassword(u)}>Temporary password</button>
+                <button className="yyc-btn-secondary" style={{ ...small, ...(u.disabled ? {} : { borderColor: P.red, color: P.red }) }} onClick={() => toggleDisabled(u)}>{u.disabled ? "Enable" : "Disable"}</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...S.card, overflow: "hidden" }}>
+        <button className="yyc-btn-secondary" style={{ width: "100%", border: 0, borderRadius: 0, justifyContent: "space-between", padding: "14px 18px", fontWeight: 750 }} onClick={() => setShowTrail(!showTrail)} aria-expanded={showTrail}>
+          <span>Activity ({events.length})</span><span style={{ color: P.faint }}>{showTrail ? "Hide" : "Show"}</span>
+        </button>
+        {showTrail && (events.length === 0
+          ? <div style={{ padding: "0 18px 14px", fontSize: 13, color: P.sub }}>Nothing yet.</div>
+          : events.map((e) => (
+            <div key={e.id} style={{ padding: "9px 18px", borderTop: `1px solid ${P.line}`, fontSize: 13, lineHeight: 1.5 }}>
+              {(TRAIL_TEXT[e.action] || ((x) => `${x.actor} ${x.action} ${x.target}`))(e)}
+              <span style={{ color: P.faint }}> · {when(e.at)}</span>
+            </div>
+          )))}
+      </div>
     </div>
   );
 }
