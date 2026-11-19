@@ -1417,14 +1417,14 @@ export function KnowledgePanel({
         >
           <div className="yyc-stat-inner">
             <div className="yyc-stat-icon is-gold"><Icon name="scale" size={18} /></div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: "1 0 auto" }}>
               <div className="yyc-stat-label">{t.leverRecords}</div>
               <div className="yyc-stat-num">
                 {leverFilter !== "all" ? `${leverCounts[leverFilter] || 0}/${totalRecords}` : totalRecords}
               </div>
             </div>
-            <span style={{ fontSize: 11, color: P.faint, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, maxWidth: "50%", textAlign: "right" }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+            <span className="yyc-stat-hint" style={{ fontSize: 11, color: P.faint, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, maxWidth: "50%", minWidth: 0, textAlign: "right" }}>
+              <span className="yyc-stat-hint-text" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {leverFilter !== "all" ? (t.levers[leverFilter] || leverFilter) : t.pickerHint}
               </span>
               <Icon name="arrowRight" size={10} color={P.faint} stroke={2.5} />

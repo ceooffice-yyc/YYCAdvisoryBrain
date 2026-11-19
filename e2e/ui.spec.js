@@ -254,3 +254,29 @@ for (const [w, h] of [[375, 667], [320, 568]]) {
     await ctx.close();
   });
 }
+
+/* A long figure such as 378/379 must stay on one line in the Lever records card, whatever the screen width. */
+for (const [w, h] of [[320, 568], [375, 667], [768, 900], [1280, 800]]) {
+  test(`UI-04 ${w}px: a long figure like 378/379 stays on one line in the Lever records card`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: w < 900, hasTouch: w < 900 });
+    const page = await ctx.newPage();
+    await page.addInitScript(() => {
+      if (localStorage.getItem('kb:config')) return;
+      const index = [{ id: 'big', status: 'active', title: 'Big library case', doc_type: 'case_study', industry: 'Services (invented)', industry_main: 'Services', industry_sub: 'Test', language: 'en', problem_signature: 'x', created: 1760000000000 }];
+      const records = Array.from({ length: 379 }, (_, i) => ({ id: 'r' + i, status: 'active', doc_id: 'big', doc_title: 'Big library case', lever: i < 378 ? 'price' : 'volume', claim_en: `Strategy ${i}: invented words.`, impact: 'N/A', section: 'Pricing' }));
+      localStorage.setItem('kb:config', JSON.stringify({ adminPass: '12345' })); localStorage.setItem('kb:index', JSON.stringify(index)); localStorage.setItem('kb:levers', JSON.stringify(records));
+    });
+    await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor();
+    // pick the Price lever so the card shows "378/379"
+    await page.locator('.yyc-stat.is-gold').click();
+    await page.locator('.yyc-lever-picker-item').filter({ hasText: 'Price' }).first().click();
+    const num = page.locator('.yyc-stat.is-gold .yyc-stat-num');
+    await expect(num).toHaveText('378/379');
+    const g = await num.evaluate((e) => { const r = e.getBoundingClientRect(); const lh = parseFloat(getComputedStyle(e).lineHeight) || parseFloat(getComputedStyle(e).fontSize); return { h: r.height, fs: parseFloat(getComputedStyle(e).fontSize), right: r.right, cardRight: e.closest('.yyc-stat').getBoundingClientRect().right, lh }; });
+    expect(g.h).toBeLessThanOrEqual(g.fs * 1.4); // one line
+    expect(g.right).toBeLessThanOrEqual(g.cardRight); // and inside the card
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(w);
+    await ctx.close();
+  });
+}
