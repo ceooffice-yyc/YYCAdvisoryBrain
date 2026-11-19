@@ -6,6 +6,7 @@ import { hit, clientIp, _test as limits } from '../server/rateLimit.js';
 import { securityHeaders, contentSecurityPolicy } from '../server/securityHeaders.js';
 import { handleDb, guestAllowed } from '../server/db.js';
 import { authenticate, _test as authTest } from '../server/auth.js';
+import { spawnSync } from 'node:child_process';
 
 // Requirement ids (docs/REQUIREMENTS.md) are in the test names. No network: refusals happen before any outside call, and the AI call is replaced.
 const T = 1_700_000_000_000;
@@ -146,4 +147,16 @@ test('SEC-05 repeated wrong tokens from one address are slowed down', async () =
   for (let i = 0; i < 32; i++) statuses.push((await handleGroq({ method: 'POST', body: good(), headers: { authorization: 'Bearer nope' }, ip: '192.0.2.7' }, { env: DB, keys: ['k'], authenticate: as(null), now: () => T })).status);
   assert.equal(statuses[0], 401);
   assert.equal(statuses[31], 429);
+});
+
+// The live site went down once because a library needed a newer Node than the host ran: every API function failed to start.
+test('OPS-01 every API entry point still starts on a Node that cannot load the HTML cleaner (it degrades, it does not crash)', () => {
+  const flag = '--no-experimental-require-module'; // makes this Node behave like one before 22.12
+  if (!process.allowedNodeEnvironmentFlags.has(flag)) return; // this Node cannot simulate it
+  for (const entry of ['api/db.js', 'api/ask.js', 'api/groq/chat.js', 'api/notfound.js']) {
+    const run = spawnSync(process.execPath, [flag, '-e', `import('./${entry}').then(() => console.log('STARTED')).catch((e) => { console.log('CRASH ' + e.code); process.exit(1); })`], { encoding: 'utf8' });
+    assert.ok(run.stdout.includes('STARTED'), `${entry} did not start: ${run.stdout} ${run.stderr.slice(0, 200)}`);
+  }
+  const clean = spawnSync(process.execPath, [flag, '-e', "import('./server/sanitize.js').then((m) => console.log(JSON.stringify([m.cleanerReady(), m.cleanDocHtml('<p>x</p><script>1</script>')])))"], { encoding: 'utf8' });
+  assert.equal(clean.stdout.trim(), '[false,""]', 'with no cleaner nothing unchecked comes out');
 });

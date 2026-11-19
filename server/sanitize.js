@@ -4,7 +4,11 @@
 // Only what a converted Word file needs is kept: headings, paragraphs, lists, tables, bold / italic, links to http(s) / mailto, and embedded
 // pictures (data: images). Scripts, styles, event handlers, frames, forms and every other attribute are removed.
 
-import sanitizeHtml from 'sanitize-html';
+// Loaded with care: this library needs Node 22.12 or newer (see "engines" in package.json). If it cannot load, the API must still start,
+// so the HTML copy is then dropped instead of stored unchecked (the document's text and records are unaffected).
+let sanitizeHtml = null;
+try { sanitizeHtml = (await import('sanitize-html')).default; } catch (e) { console.error('The HTML cleaner could not be loaded; document HTML copies will not be stored. Use Node 22.12 or newer.', e && e.code); }
+export const cleanerReady = () => !!sanitizeHtml;
 
 const OPTIONS = {
   allowedTags: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr', 'strong', 'b', 'em', 'i', 'u', 's', 'sup', 'sub', 'blockquote', 'pre', 'code',
@@ -26,5 +30,6 @@ OPTIONS.allowedAttributes.a = ['href', 'title', 'target', 'rel'];
 
 export function cleanDocHtml(html) {
   const s = typeof html === 'string' ? html : '';
-  return s ? sanitizeHtml(s, OPTIONS) : '';
+  if (!s || !sanitizeHtml) return ''; // no cleaner: store nothing rather than something unchecked
+  return sanitizeHtml(s, OPTIONS);
 }

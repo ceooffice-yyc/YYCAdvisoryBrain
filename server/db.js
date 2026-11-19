@@ -20,7 +20,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { authConfigured, authenticate, clearAuthCache } from './auth.js';
 import * as acct from './accounts.js';
-import { cleanDocHtml } from './sanitize.js';
+import { cleanDocHtml, cleanerReady } from './sanitize.js';
 import { hit, clientIp as ipOf, limitFrom } from './rateLimit.js';
 import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
@@ -68,7 +68,8 @@ function docToRow(d, by) {
   return {
     id: d.id, title: str(d.title, 500) || '', doc_type: str(d.doc_type, 60), industry: str(d.industry, 300), industry_main: str(d.industry_main, 300),
     industry_sub: str(d.industry_sub, 300), language: str(d.language, 20), problem_signature: str(d.problem_signature, 3000),
-    sections: Array.isArray(d.sections) ? d.sections : [], full_text: str(d.full_text, 400000) || '', html: str(cleanDocHtml(str(d.html, 400000) || ''), 400000) || '', // scripts and anything else unsafe are removed before it is stored
+    sections: Array.isArray(d.sections) ? d.sections : [], full_text: str(d.full_text, 400000) || '', // scripts and anything else unsafe are removed before the HTML copy is stored; if the cleaner is unavailable the column is left alone (an existing copy is kept, nothing unchecked is written)
+    ...(cleanerReady() ? { html: str(cleanDocHtml(str(d.html, 400000) || ''), 400000) || '' } : {}),
     created: Number.isFinite(Number(d.created)) ? Number(d.created) : Date.now(),
     status: 'active', deleted_at: null, deleted_by: null, updated_by: by, updated_at: nowIso(),
   };
