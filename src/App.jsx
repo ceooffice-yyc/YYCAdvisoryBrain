@@ -13,24 +13,23 @@ import { extractCollectionFrameworkRecords, detectOutlineDocument } from "./coll
 import { FULL_TEXT_LIMIT, saveLimitNotice, withNotices } from "./extractionNotices.js";
 import { parseSummaryStrategyCards, restoreSummaryStrategyCards } from "./summaryCardExtraction.js";
 
+/* The palette. Every value is a design token from src/index.css, so the light and dark themes come from one place.
+   A plain colour (crimson, red, green…) is a FILL or a border; its "Text" partner is the same hue tuned to be read on the page background. */
 const P = {
-  paper: "#FAF7F2", paperDeep: "#F3EDE3", card: "#FFFFFF",
-  ink: "#1A1614", sub: "#6E675E", faint: "#766E64",
-  line: "#EDE7DE", lineDark: "#D8CFC2",
-  crimson: "#C00000", crimsonDark: "#9A0000", crimsonSoft: "#FDEDED",
-  maroon: "#7A0A0A", gold: "#B8860B", goldDark: "#8A6508", goldSoft: "#FFF6DC",
-  green: "#0E7C4A", greenSoft: "#E6F5EC",
-  red: "#B42318", redSoft: "#FDECEC",
-  blue: "#3D4B6E", blueSoft: "#EEF0F5",
-  wash: "#F5F0E8",
-  s1: "0 1px 2px rgba(26,22,20,0.04), 0 1px 3px rgba(26,22,20,0.03)",
-  s2: "0 2px 4px rgba(26,22,20,0.05), 0 6px 16px rgba(26,22,20,0.06)",
-  s3: "0 4px 12px rgba(26,22,20,0.08), 0 16px 40px rgba(26,22,20,0.10)",
-  focus: "0 0 0 3px rgba(192,0,0,0.12)",
+  paper: "var(--paper)", paperDeep: "var(--paper-deep)", card: "var(--card)",
+  ink: "var(--ink)", sub: "var(--sub)", faint: "var(--faint)", title: "var(--title)",
+  line: "var(--line)", lineDark: "var(--line-dark)",
+  crimson: "var(--crimson)", crimsonDark: "var(--crimson-dark)", crimsonSoft: "var(--crimson-soft)", crimsonText: "var(--crimson-text)",
+  maroon: "var(--maroon)", maroonText: "var(--maroon-text)",
+  gold: "var(--gold)", goldDark: "var(--gold-dark)", goldSoft: "var(--gold-soft)", goldText: "var(--gold-text)",
+  green: "var(--green)", greenSoft: "var(--green-soft)", greenText: "var(--green-text)",
+  red: "var(--red)", redSoft: "var(--red-soft)", redText: "var(--red-text)",
+  blue: "var(--blue)", blueSoft: "var(--blue-soft)", blueText: "var(--blue-text)",
+  wash: "var(--wash)",
+  s1: "var(--s1)", s2: "var(--s2)", s3: "var(--s3)", focus: "var(--focus)",
 };
 
-const fontStack =
-  "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif";
+const fontStack = "var(--sans)";
 
 const S = {
   card: { background: P.card, border: `1px solid ${P.line}`, borderRadius: 14, boxShadow: P.s1 },
@@ -724,6 +723,7 @@ const Icon = ({ name, size = 16, stroke = 2, color = "currentColor", className }
 export default function App() {
   const [lang] = useState("en"); // [ZH disabled for now] was: const [lang, setLang] = useState("en");
   const [tab, setTab] = useState("kb");
+  useEffect(() => { window.scrollTo(0, 0); }, [tab]); // a newly opened tab starts at its top, not where the last one was scrolled to
   const [kbWorking, setKbWorking] = useState(false); // an extraction / save is running inside the Knowledge Base tab
   const [isAdmin, setIsAdmin] = useState(!!(window.storage?.remote && window.storage.user?.isAdmin)); // with sign-in, admin accounts are admins as soon as they log in
   const [config, setConfig] = useState(null);
@@ -861,7 +861,7 @@ export default function App() {
     return (
       <div style={{ background: P.paper, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: P.ink, fontFamily: fontStack, padding: 24, textAlign: "center" }}>
         <div>
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: P.crimsonSoft, color: P.crimson, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: P.crimsonSoft, color: P.crimsonText, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
             <Icon name="alert" size={26} />
           </div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>{T.en.loadErr}</div>
@@ -872,6 +872,7 @@ export default function App() {
 
   return (
     <div className="yyc-root" style={{ fontFamily: fontStack }}>
+      <a className="skip-link" href="#yyc-main">Skip to the content</a>
       <GlobalStyles />
       <div className="yyc-brandbar" />
 
@@ -941,7 +942,7 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="yyc-main">
+        <main className="yyc-main" id="yyc-main" tabIndex={-1}>
           <header className="yyc-topbar">
             <div className="yyc-brand">
               <div className="yyc-brand-mark"><img src="/logo.png" alt="YYC Logo" /></div>
@@ -1075,18 +1076,18 @@ function GlobalStyles() {
       .yyc-brand-mark img { width: 60px; height: 50px; object-fit: contain; display: block; }
       .yyc-brand-text { min-width: 0; }
       .yyc-brand-name { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .yyc-brand-sub { color: ${P.faint}; font-size: 11px; line-height: 1.3; margin-top: 1px; }
+      .yyc-brand-sub { color: ${P.faint}; font-size: 12px; line-height: 1.3; margin-top: 1px; }
       .yyc-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; }
-      .yyc-nav-label { font-size: 10.5px; font-weight: 700; color: ${P.faint}; text-transform: uppercase; letter-spacing: 0.09em; padding: 0 10px 8px; }
-      .yyc-nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 9px; background: transparent; border: none; cursor: pointer; font-size: 13.5px; font-weight: 600; color: ${P.sub}; text-align: left; font-family: inherit; transition: background .15s, color .15s; position: relative; }
+      .yyc-nav-label { font-size: 11.5px; font-weight: 700; color: ${P.faint}; text-transform: uppercase; letter-spacing: 0.09em; padding: 0 10px 8px; }
+      .yyc-nav-item { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 9px 11px; border-radius: 10px; background: transparent; border: none; cursor: pointer; font-size: 13.5px; font-weight: 600; color: ${P.sub}; text-align: left; font-family: inherit; transition: background .15s, color .15s; position: relative; }
       .yyc-nav-item:hover { background: ${P.wash}; color: ${P.ink}; }
-      .yyc-nav-item.is-active { background: ${P.crimsonSoft}; color: ${P.crimson}; font-weight: 700; }
+      .yyc-nav-item.is-active { background: ${P.crimsonSoft}; color: ${P.crimsonText}; font-weight: 700; }
       .yyc-nav-item.is-active::before { content: ""; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; background: ${P.crimson}; border-radius: 0 3px 3px 0; }
       .yyc-sidebar-foot { padding-top: 16px; border-top: 1px solid ${P.line}; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
       .yyc-lang { display: flex; border: 1px solid ${P.lineDark}; border-radius: 8px; overflow: hidden; background: ${P.card}; }
       .yyc-lang-btn { flex: 1; padding: 6px 8px; font-size: 12px; font-weight: 650; background: transparent; color: ${P.sub}; border: none; cursor: pointer; font-family: inherit; }
       .yyc-lang-btn:hover { background: ${P.wash}; }
-      .yyc-lang-btn.is-active { background: ${P.ink}; color: #fff; }
+      .yyc-lang-btn.is-active { background: ${P.ink}; color: ${P.paper}; }
       .yyc-admin-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; font-size: 12.5px; font-weight: 650; cursor: pointer; font-family: inherit; }
       .yyc-profile-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.ink}; cursor: pointer; font-family: inherit; text-align: left; }
       .yyc-profile-btn:hover:not(:disabled) { background: ${P.wash}; border-color: ${P.ink}; }
@@ -1094,10 +1095,10 @@ function GlobalStyles() {
       .yyc-profile-compact { width: auto; padding: 3px; border-radius: 999px; }
       .yyc-avatar { width: 30px; height: 30px; border-radius: 50%; background: ${P.maroon}; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; flex-shrink: 0; }
       .yyc-admin-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
-      .yyc-admin-btn.is-on { background: ${P.maroon}; border-color: ${P.maroon}; color: #fff; }
-      .yyc-foot-note { font-size: 10.5px; color: ${P.faint}; line-height: 1.5; padding: 0 4px; }
+      .yyc-admin-btn.is-on { background: ${P.maroon}; border-color: ${P.maroonText}; color: #fff; }
+      .yyc-foot-note { font-size: 11.5px; color: ${P.faint}; line-height: 1.5; padding: 0 4px; }
       .yyc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: ${P.paper}; }
-      .yyc-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; background: rgba(255,255,255,0.9); backdrop-filter: blur(10px); border-bottom: 1px solid ${P.line}; position: sticky; top: 3px; z-index: 30; }
+      .yyc-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; background: var(--glass); backdrop-filter: blur(10px); border-bottom: 1px solid ${P.line}; position: sticky; top: 3px; z-index: 30; }
       @media (min-width: 900px) { .yyc-topbar { display: none; } }
       .yyc-topbar .yyc-brand { padding: 0; }
       .yyc-topbar-actions { display: flex; align-items: center; gap: 8px; }
@@ -1106,19 +1107,22 @@ function GlobalStyles() {
       .yyc-fade { animation: yycFadeUp .3s ease-out; } /* replays whenever a hidden panel is shown again (display none → block) */
       @media (min-width: 900px) { .yyc-content { padding: 30px 36px; } }
       @media (max-width: 899px) { .yyc-content { padding: 18px 16px 90px; } }
-      @keyframes yycFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-      @keyframes yycPopIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+      @keyframes yycFadeUp { from { transform: translateY(8px); } to { transform: translateY(0); } }
+      @keyframes yycPopIn { from { transform: scale(.97); } to { transform: scale(1); } }
       @keyframes yycFade { from { opacity: 0; } to { opacity: 1; } }
       @keyframes yycSpin { to { transform: rotate(360deg); } }
       @keyframes yycToastIn { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
       @keyframes yycDot { 0%, 80%, 100% { opacity: .3; transform: scale(.8); } 40% { opacity: 1; transform: scale(1); } }
-      .yyc-botnav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.96); backdrop-filter: blur(12px); border-top: 1px solid ${P.line}; padding: 6px 4px 8px; z-index: 40; }
+      .yyc-botnav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; background: var(--glass); backdrop-filter: blur(12px); border-top: 1px solid ${P.line}; padding: 6px 4px calc(8px + env(safe-area-inset-bottom)); z-index: 40; }
       @media (min-width: 900px) { .yyc-botnav { display: none; } }
-      .yyc-botnav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px; background: transparent; border: none; cursor: pointer; font-family: inherit; font-size: 10.5px; font-weight: 600; color: ${P.faint}; }
-      .yyc-botnav-item.is-active { color: ${P.crimson}; }
-      .yyc-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-      .yyc-section-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin: 0; color: #270303}
-      .yyc-section-sub { color: ${P.sub}; font-size: 13.5px; margin-top: 6px; line-height: 1.5; max-width: 640px; }
+      .yyc-botnav-item { flex: 1; min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 6px 2px; background: transparent; border: none; border-radius: 10px; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 650; line-height: 1.15; text-align: center; color: ${P.sub}; }
+      .yyc-botnav-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .yyc-botnav-item.is-active { color: ${P.crimsonText}; background: ${P.crimsonSoft}; }
+      .yyc-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px 20px; flex-wrap: wrap; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid ${P.line}; }
+      .yyc-section-head > div:first-child { min-width: 0; flex: 1 1 320px; }
+      .yyc-section-title { position: relative; margin: 0; padding-left: 18px; font-size: clamp(1.625rem, 1.2rem + 1.7vw, 2.375rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; color: ${P.title}; text-wrap: balance; overflow-wrap: anywhere; }
+      .yyc-section-title::before { content: ""; position: absolute; left: 0; top: 0.1em; bottom: 0.1em; width: 6px; border-radius: 999px; background: linear-gradient(180deg, ${P.crimson} 0%, ${P.maroon} 55%, ${P.gold} 100%); }
+      .yyc-section-sub { color: ${P.sub}; font-size: 15px; margin-top: 10px; padding-left: 18px; line-height: 1.55; max-width: 64ch; }
       .yyc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
       .yyc-stat { position: relative; background: ${P.card}; border: 1px solid ${P.line}; border-radius: 14px; padding: 16px 18px; box-shadow: ${P.s1}; overflow: hidden; }
       .yyc-stat::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: ${P.crimson}; }
@@ -1128,11 +1132,11 @@ function GlobalStyles() {
       .yyc-stat.is-clickable { cursor: pointer; transition: box-shadow .15s, transform .15s; }
       .yyc-stat.is-clickable:hover, .yyc-stat.is-clickable:focus-visible { box-shadow: ${P.s2}; transform: translateY(-1px); outline: none; }
       .yyc-stat-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-      .yyc-stat-icon.is-red { background: ${P.crimsonSoft}; color: ${P.crimson}; }
-      .yyc-stat-icon.is-gold { background: ${P.goldSoft}; color: ${P.goldDark}; }
-      .yyc-stat-icon.is-green { background: ${P.greenSoft}; color: ${P.green}; }
-      .yyc-stat-label { font-size: 10px; color: ${P.sub}; font-weight: 650; letter-spacing: .00em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .yyc-stat-num { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 3px; }
+      .yyc-stat-icon.is-red { background: ${P.crimsonSoft}; color: ${P.crimsonText}; }
+      .yyc-stat-icon.is-gold { background: ${P.goldSoft}; color: ${P.goldText}; }
+      .yyc-stat-icon.is-green { background: ${P.greenSoft}; color: ${P.greenText}; }
+      .yyc-stat-label { font-size: 11.5px; color: ${P.sub}; font-weight: 650; letter-spacing: .00em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .yyc-stat-num { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 3px; }
       .yyc-toolbar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
       .yyc-search { position: relative; flex: 1; min-width: 220px; max-width: 380px; }
       .yyc-search input { padding-left: 38px !important; }
@@ -1140,12 +1144,12 @@ function GlobalStyles() {
       .yyc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
       .yyc-doc { background: ${P.card}; border: 1px solid ${P.line}; border-radius: 14px; padding: 18px; cursor: pointer; box-shadow: ${P.s1}; display: flex; flex-direction: column; gap: 12px; transition: box-shadow .2s, transform .2s, border-color .2s; }
       .yyc-doc:hover { box-shadow: ${P.s3}; transform: translateY(-2px); border-color: ${P.lineDark}; }
-      .yyc-doc:focus-visible { outline: none; box-shadow: ${P.focus}; border-color: ${P.crimson}; }
+      .yyc-doc:focus-visible { outline: none; box-shadow: ${P.focus}; border-color: ${P.crimsonText}; }
       .yyc-doc:focus-within .yyc-doc-actions { opacity: 1; }
       .yyc-doc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-      .yyc-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-size: 11px; font-weight: 700; border-radius: 999px; text-wrap: nowrap; }
-      .yyc-doc-title { font-size: 15.5px; font-weight: 750; line-height: 1.35; color: ${P.ink}; }
-      .yyc-doc-sig { font-size: 12.5px; color: ${P.sub}; line-height: 1.55; }
+      .yyc-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-size: 12px; font-weight: 700; border-radius: 999px; text-wrap: nowrap; }
+      .yyc-doc-title { font-size: 16px; font-weight: 750; line-height: 1.35; color: ${P.ink}; }
+      .yyc-doc-sig { font-size: 13.5px; color: ${P.sub}; line-height: 1.55; }
       .yyc-doc-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid ${P.line}; }
       .yyc-lever-pill {
         display: inline-block;
@@ -1154,7 +1158,7 @@ function GlobalStyles() {
         font-weight: 700;
         border-radius: 999px;
         background: ${P.goldSoft};
-        color: ${P.goldDark};
+        color: ${P.goldText};
         border: 1px solid rgba(184,134,11,0.25);
         max-width: 100%;
         white-space: normal;
@@ -1176,28 +1180,28 @@ function GlobalStyles() {
       @media (max-width: 899px) { .yyc-doc-actions { opacity: 1; } }
       .yyc-icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; cursor: pointer; }
       .yyc-icon-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
-      .yyc-icon-btn.is-danger { border-color: rgba(180,35,24,0.35); color: ${P.red}; }
-      .yyc-icon-btn.is-danger:hover { background: ${P.redSoft}; border-color: ${P.red}; }
+      .yyc-icon-btn.is-danger { border-color: rgba(180,35,24,0.35); color: ${P.redText}; }
+      .yyc-icon-btn.is-danger:hover { background: ${P.redSoft}; border-color: ${P.redText}; }
       .yyc-empty { background: ${P.card}; border: 1px dashed ${P.lineDark}; border-radius: 14px; padding: 56px 32px; text-align: center; color: ${P.sub}; font-size: 13.5px; line-height: 1.6; }
       .yyc-empty-icon { width: 52px; height: 52px; border-radius: 14px; background: ${P.wash}; color: ${P.faint}; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
       .yyc-chip-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
       .yyc-chip-row-label { font-size: 11px; font-weight: 700; color: ${P.faint}; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
       .yyc-lever-chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px; font-weight: 650; border-radius: 999px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; cursor: pointer; font-family: inherit; transition: all .15s; }
       .yyc-lever-chip:hover:not(:disabled) { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
-      .yyc-lever-chip.is-active { background: ${P.crimsonSoft}; border-color: ${P.crimson}; color: ${P.crimson}; }
+      .yyc-lever-chip.is-active { background: ${P.crimsonSoft}; border-color: ${P.crimsonText}; color: ${P.crimsonText}; }
       .yyc-lever-chip:disabled { opacity: 0.4; cursor: default; }
       .yyc-lever-chip-count { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: ${P.wash}; color: ${P.sub}; }
       .yyc-lever-chip.is-active .yyc-lever-chip-count { background: ${P.crimson}; color: #fff; }
       .yyc-filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
       .yyc-filter-select { display: inline-flex; align-items: center; gap: 6px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.ink}; padding: 8px 12px; border-radius: 9px; font-size: 12.5px; font-family: inherit; font-weight: 600; cursor: pointer; min-width: 150px; }
-      .yyc-filter-select:focus { outline: none; border-color: ${P.crimson}; box-shadow: ${P.focus}; }
+      .yyc-filter-select:focus { outline: none; border-color: ${P.crimsonText}; box-shadow: ${P.focus}; }
       .yyc-lever-group { margin-bottom: 24px; }
       .yyc-lever-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid ${P.line}; }
       .yyc-lever-group-title { font-size: 14px; font-weight: 750; color: ${P.ink}; }
       .yyc-lever-group-count { font-size: 11.5px; color: ${P.faint}; font-weight: 650; }
       .yyc-lever-record { background: ${P.card}; border: 1px solid ${P.line}; border-radius: 12px; padding: 16px 18px; cursor: pointer; box-shadow: ${P.s1}; transition: box-shadow .2s, border-color .2s, transform .15s; display: flex; flex-direction: column; gap: 9px; outline: none; }
-      .yyc-lever-record:hover { box-shadow: ${P.s2}; border-color: ${P.gold}; transform: translateY(-1px); }
-      .yyc-lever-record:focus-visible { box-shadow: ${P.focus}; border-color: ${P.crimson}; }
+      .yyc-lever-record:hover { box-shadow: ${P.s2}; border-color: ${P.goldText}; transform: translateY(-1px); }
+      .yyc-lever-record:focus-visible { box-shadow: ${P.focus}; border-color: ${P.crimsonText}; }
       .yyc-lever-record-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
       .yyc-lever-record-doc { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; color: ${P.sub}; }
       .yyc-lever-record-claim { font-size: 13.5px; line-height: 1.6; color: ${P.ink}; }
@@ -1205,12 +1209,12 @@ function GlobalStyles() {
       .yyc-lever-record-meta { font-size: 11px; color: ${P.faint}; font-weight: 600; }
       .yyc-lever-record-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: ${P.faint}; font-weight: 650; }
       .yyc-lever-record-chevron { transition: transform .15s, color .15s; }
-      .yyc-lever-record:hover .yyc-lever-record-chevron { transform: translateX(2px); color: ${P.gold}; }
+      .yyc-lever-record:hover .yyc-lever-record-chevron { transform: translateX(2px); color: ${P.goldText}; }
       .yyc-lever-records-stack { display: grid; gap: 10px; }
       .yyc-lever-picker-list { display: grid; gap: 6px; margin-top: 4px; }
       .yyc-lever-picker-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 9px; border: 1px solid ${P.line}; background: ${P.card}; cursor: pointer; font-family: inherit; transition: all .15s; text-align: left; }
-      .yyc-lever-picker-item:hover:not(:disabled) { border-color: ${P.gold}; background: ${P.goldSoft}; transform: translateX(2px); }
-      .yyc-lever-picker-item.is-active { border-color: ${P.crimson}; background: ${P.crimsonSoft}; }
+      .yyc-lever-picker-item:hover:not(:disabled) { border-color: ${P.goldText}; background: ${P.goldSoft}; transform: translateX(2px); }
+      .yyc-lever-picker-item.is-active { border-color: ${P.crimsonText}; background: ${P.crimsonSoft}; }
       .yyc-lever-picker-item:disabled { opacity: .4; cursor: not-allowed; }
       .yyc-lever-picker-count { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: ${P.wash}; color: ${P.sub}; }
       .yyc-lever-picker-item.is-active .yyc-lever-picker-count { background: ${P.crimson}; color: #fff; }
@@ -1237,53 +1241,53 @@ function GlobalStyles() {
       .yyc-bubble.is-refused { background: ${P.wash}; color: ${P.sub}; border: 1px solid ${P.lineDark}; border-left: 3px solid ${P.faint}; font-style: italic; box-shadow: none; }
       .yyc-cites { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; align-items: center; }
       .yyc-why-toggle { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; padding: 2px 0; font-family: inherit; font-size: 11.5px; font-weight: 650; color: ${P.sub}; cursor: pointer; }
-      .yyc-why-toggle:hover { color: ${P.crimson}; }
+      .yyc-why-toggle:hover { color: ${P.crimsonText}; }
       .yyc-ans-note { margin-top: 7px; padding: 7px 10px; border-radius: 8px; background: ${P.goldSoft}; border: 1px solid ${P.gold}; color: ${P.ink}; font-size: 12px; line-height: 1.5; }
       .yyc-fb { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; color: ${P.faint}; }
       .yyc-fb button { background: none; border: 1px solid ${P.lineDark}; border-radius: 999px; padding: 2px 10px; font-family: inherit; font-size: 11.5px; color: ${P.sub}; cursor: pointer; }
-      .yyc-fb button:hover { border-color: ${P.crimson}; color: ${P.crimson}; }
-      .yyc-fb button.is-on { background: ${P.greenSoft}; border-color: ${P.green}; color: ${P.green}; }
-      .yyc-fb button.is-on.is-down { background: ${P.redSoft}; border-color: ${P.red}; color: ${P.red}; }
+      .yyc-fb button:hover { border-color: ${P.crimsonText}; color: ${P.crimsonText}; }
+      .yyc-fb button.is-on { background: ${P.greenSoft}; border-color: ${P.greenText}; color: ${P.greenText}; }
+      .yyc-fb button.is-on.is-down { background: ${P.redSoft}; border-color: ${P.redText}; color: ${P.redText}; }
       .yyc-why-panel { margin-top: 6px; border: 1px solid ${P.line}; border-left: 3px solid ${P.gold}; border-radius: 10px; background: ${P.card}; padding: 10px 12px; box-shadow: ${P.s1}; animation: yycFadeUp .2s ease-out; }
       .yyc-why-row { padding: 8px 8px; border-radius: 8px; cursor: pointer; transition: background .15s; }
       .yyc-why-row:hover { background: ${P.wash}; }
       .yyc-why-row + .yyc-why-row { border-top: 1px solid ${P.line}; }
       .yyc-why-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-      .yyc-why-doc { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: ${P.maroon}; min-width: 0; }
+      .yyc-why-doc { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: ${P.maroonText}; min-width: 0; }
       .yyc-why-pct { font-size: 11px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .yyc-why-passage { font-size: 12.5px; color: ${P.ink}; font-style: italic; line-height: 1.55; margin-top: 4px; }
       .yyc-why-bar { height: 4px; border-radius: 999px; background: ${P.wash}; margin-top: 7px; overflow: hidden; }
       .yyc-why-bar > div { height: 100%; border-radius: 999px; transition: width .3s ease-out; }
       .yyc-why-checked { font-size: 11px; color: ${P.faint}; margin-top: 8px; padding: 6px 8px 0; border-top: 1px dashed ${P.line}; line-height: 1.5; }
-      .yyc-why-doclink { background: none; border: none; padding: 0; font-family: inherit; font-size: inherit; font-weight: 700; color: ${P.maroon}; text-decoration: underline; cursor: pointer; }
+      .yyc-why-doclink { background: none; border: none; padding: 0; font-family: inherit; font-size: inherit; font-weight: 700; color: ${P.maroonText}; text-decoration: underline; cursor: pointer; }
       .yyc-sugg-chip { display: block; width: 100%; max-width: 420px; text-align: left; padding: 10px 14px; margin-top: 8px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.ink}; border-radius: 11px; font-family: inherit; font-size: 13px; font-weight: 550; cursor: pointer; transition: all .15s; box-shadow: ${P.s1}; }
-      .yyc-sugg-chip:hover { border-color: ${P.crimson}; color: ${P.crimson}; background: ${P.crimsonSoft}; transform: translateY(-1px); }
-      .yyc-kbar-overlay { position: fixed; inset: 0; background: rgba(34,29,24,0.4); z-index: 70; display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px; }
+      .yyc-sugg-chip:hover { border-color: ${P.crimsonText}; color: ${P.crimsonText}; background: ${P.crimsonSoft}; transform: translateY(-1px); }
+      .yyc-kbar-overlay { position: fixed; inset: 0; background: var(--backdrop); z-index: 70; display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px; }
       .yyc-kbar { width: 560px; max-width: 100%; background: ${P.card}; border: 1px solid ${P.lineDark}; border-radius: 14px; box-shadow: ${P.s2}; overflow: hidden; animation: yycFadeUp .15s ease-out; }
       .yyc-kbar-inputrow { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid ${P.line}; }
       .yyc-kbar-input { flex: 1; border: none; outline: none; background: transparent; font-family: inherit; font-size: 14.5px; color: ${P.ink}; }
       .yyc-kbar-kbd { font-size: 10.5px; font-weight: 700; color: ${P.faint}; border: 1px solid ${P.lineDark}; border-radius: 5px; padding: 2px 6px; }
       .yyc-kbar-list { max-height: 340px; overflow-y: auto; padding: 6px; }
       .yyc-kbar-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: none; border-left: 3px solid transparent; border-radius: 8px; padding: 9px 10px; font-family: inherit; font-size: 13.5px; font-weight: 600; color: ${P.ink}; cursor: pointer; }
-      .yyc-kbar-item.is-active { background: ${P.wash}; border-left-color: ${P.crimson}; }
-      .yyc-kbar-badge { flex-shrink: 0; font-size: 10.5px; font-weight: 750; color: ${P.maroon}; background: ${P.goldSoft}; border-radius: 999px; padding: 2px 9px; }
+      .yyc-kbar-item.is-active { background: ${P.wash}; border-left-color: ${P.crimsonText}; }
+      .yyc-kbar-badge { flex-shrink: 0; font-size: 10.5px; font-weight: 750; color: ${P.maroonText}; background: ${P.goldSoft}; border-radius: 999px; padding: 2px 9px; }
       .yyc-kbar-sub { color: ${P.faint}; font-weight: 500; font-size: 12.5px; }
       .yyc-kbar-empty { padding: 18px; font-size: 13px; color: ${P.faint}; text-align: center; }
       .yyc-mention-pop { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(420px, 100%); background: ${P.card}; border: 1px solid ${P.lineDark}; border-radius: 12px; box-shadow: ${P.s2}; padding: 6px; z-index: 40; animation: yycFadeUp .12s ease-out; }
       .yyc-tag-row { position: absolute; bottom: calc(100% + 4px); right: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
-      .yyc-tag-chip { display: inline-flex; align-items: center; gap: 5px; background: ${P.goldSoft}; color: ${P.maroon}; border: 1px solid rgba(184,134,11,0.45); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 700; }
-      .yyc-tag-chip button { background: none; border: none; color: ${P.maroon}; font-size: 13px; line-height: 1; cursor: pointer; padding: 0; }
+      .yyc-tag-chip { display: inline-flex; align-items: center; gap: 5px; background: ${P.goldSoft}; color: ${P.maroonText}; border: 1px solid rgba(184,134,11,0.45); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 700; }
+      .yyc-tag-chip button { background: none; border: none; color: ${P.maroonText}; font-size: 13px; line-height: 1; cursor: pointer; padding: 0; }
       .yyc-cites-label { font-size: 11px; color: ${P.faint}; font-weight: 600; }
-      .yyc-cite-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 5px 11px; border: 1px solid rgba(184,134,11,0.4); background: ${P.goldSoft}; color: ${P.maroon}; cursor: pointer; border-radius: 999px; font-weight: 650; font-family: inherit; transition: all .15s; }
-      .yyc-cite-btn:hover { background: #FBE9B8; border-color: ${P.gold}; transform: translateY(-1px); }
+      .yyc-cite-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 5px 11px; border: 1px solid rgba(184,134,11,0.4); background: ${P.goldSoft}; color: ${P.maroonText}; cursor: pointer; border-radius: 999px; font-weight: 650; font-family: inherit; transition: all .15s; }
+      .yyc-cite-btn:hover { background: ${P.wash}; border-color: ${P.goldText}; transform: translateY(-1px); }
       .yyc-typing { display: inline-flex; align-items: center; gap: 4px; padding: 12px 16px; background: ${P.card}; border: 1px solid ${P.line}; border-left: 3px solid ${P.crimson}; border-radius: 4px 16px 16px 16px; box-shadow: ${P.s1}; }
       .yyc-typing span { width: 6px; height: 6px; border-radius: 50%; background: ${P.faint}; animation: yycDot 1.2s infinite; }
       .yyc-typing span:nth-child(2) { animation-delay: .15s; }
       .yyc-typing span:nth-child(3) { animation-delay: .3s; }
       .yyc-chat-input-wrap { border-top: 1px solid ${P.line}; padding: 14px 16px; background: ${P.card}; display: flex; gap: 10px; align-items: center; }
       .yyc-chat-input { flex: 1; border: 1px solid ${P.lineDark}; background: ${P.paper}; padding: 12px 16px; border-radius: 12px; font-size: 13.5px; font-family: inherit; color: ${P.ink}; outline: none; }
-      .yyc-chat-input:focus { border-color: ${P.crimson}; background: ${P.card}; box-shadow: ${P.focus}; }
-      .yyc-modal-backdrop { position: fixed; inset: 0; background: rgba(26,22,20,0.5); backdrop-filter: blur(4px); z-index: 55; display: flex; align-items: center; justify-content: center; padding: 16px; }
+      .yyc-chat-input:focus { border-color: ${P.crimsonText}; background: ${P.card}; box-shadow: ${P.focus}; }
+      .yyc-modal-backdrop { position: fixed; inset: 0; background: var(--backdrop); backdrop-filter: blur(4px); z-index: 55; display: flex; align-items: center; justify-content: center; padding: 16px; }
       .yyc-modal {
         background: ${P.paper};
         border-radius: 16px;
@@ -1298,7 +1302,7 @@ function GlobalStyles() {
       .yyc-modal::-webkit-scrollbar { display: none; }
       .yyc-modal { scrollbar-width: none; -ms-overflow-style: none; }
       .yyc-modal-head { padding: 20px 26px; border-bottom: 2px solid ${P.crimson}; background: ${P.card}; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-      .yyc-toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: ${P.ink}; color: #fff; padding: 12px 22px; font-size: 13px; font-weight: 600; z-index: 70; border-radius: 11px; box-shadow: ${P.s3}; display: inline-flex; align-items: center; gap: 10px; animation: yycToastIn .28s cubic-bezier(.2,.8,.3,1.2); font-family: inherit; }
+      .yyc-toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 12px 22px; font-size: 13px; font-weight: 600; z-index: 70; border-radius: 11px; box-shadow: ${P.s3}; display: inline-flex; align-items: center; gap: 10px; animation: yycToastIn .28s cubic-bezier(.2,.8,.3,1.2); font-family: inherit; }
       .yyc-toast-dot { width: 6px; height: 6px; border-radius: 50%; background: ${P.green}; box-shadow: 0 0 0 3px rgba(14,124,74,0.25); }
       .yyc-btn-primary { ${Object.entries(btnP(false)).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
       .yyc-btn-primary:hover:not(:disabled) { background: ${P.crimsonDark} !important; box-shadow: 0 3px 10px rgba(154,0,0,0.25) !important; }
@@ -1307,7 +1311,7 @@ function GlobalStyles() {
       .yyc-btn-secondary { ${Object.entries(btnG).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
       .yyc-btn-secondary:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
       .yyc-input { ${Object.entries(S.input).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 10px ;}
-      .yyc-input:focus { border-color: ${P.crimson}; box-shadow: ${P.focus}; }
+      .yyc-input:focus { border-color: ${P.crimsonText}; box-shadow: ${P.focus}; }
       .yyc-edit-record-modal { max-height: calc(100vh - 32px); overflow-y: auto; }
       .yyc-edit-record-field { margin-top: 16px; }
       .yyc-edit-record-textarea { resize: none; min-height: 108px; line-height: 1.55; }
@@ -1315,6 +1319,51 @@ function GlobalStyles() {
       .yyc-chat-scroll::-webkit-scrollbar-thumb, .yyc-content::-webkit-scrollbar-thumb, .yyc-sidebar::-webkit-scrollbar-thumb { background: ${P.lineDark}; border-radius: 999px; border: 3px solid ${P.paper}; }
       .yyc-chat-scroll::-webkit-scrollbar-thumb:hover { background: ${P.faint}; }
       .yyc-spin { animation: yycSpin .8s linear infinite; }
+
+      /* ── every screen size (UI-04) ── */
+      .yyc-root { min-height: 100dvh; }
+      .yyc-content { overflow-wrap: anywhere; }
+      .yyc-btn-primary, .yyc-btn-secondary { min-height: 40px; }
+      .yyc-btn-primary:disabled { opacity: .7; }
+      .yyc-card-rise { transition: transform .15s var(--ease), box-shadow .15s; }
+      @media (hover: hover) { .yyc-btn-secondary:hover { transform: translateY(-1px); } }
+
+      /* phones and small tablets: bigger targets, 16px inputs (no zoom-on-focus), filter chips in one swipeable row, pop-ups as bottom sheets */
+      @media (max-width: 899px) {
+        .yyc-topbar { padding: 10px 14px; }
+        .yyc-topbar .yyc-brand-mark img { width: 44px; height: 38px; }
+        .yyc-topbar .yyc-brand-sub { display: none; }
+        .yyc-section-head { margin-bottom: 18px; padding-bottom: 14px; }
+        .yyc-section-head > .yyc-btn-primary, .yyc-section-head > .yyc-btn-secondary { flex: 1 1 auto; }
+        .yyc-btn-primary, .yyc-btn-secondary { min-height: 44px; }
+        .yyc-input, .yyc-filter-select, .yyc-chat-input { min-height: 46px; font-size: 16px; }
+        .yyc-filter-select { flex: 1 1 150px; min-width: 0; }
+        .yyc-search { max-width: none; }
+        .yyc-icon-btn { width: 44px; height: 44px; border-radius: 10px; }
+        .yyc-admin-btn { min-height: 44px; min-width: 44px; }
+        .yyc-profile-compact { min-height: 44px; min-width: 44px; justify-content: center; }
+        .yyc-chip-row { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px 6px; }
+        .yyc-chip-row::-webkit-scrollbar { display: none; }
+        .yyc-chip-row > * { flex-shrink: 0; }
+        .yyc-lever-chip { min-height: 44px; padding: 8px 14px; font-size: 13.5px; }
+        .yyc-grid { grid-template-columns: 1fr; }
+        .yyc-stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .yyc-stat { padding: 14px; }
+        .yyc-stat-label { white-space: normal; line-height: 1.25; }
+        .yyc-modal-backdrop { padding: 0; align-items: flex-end; }
+        .yyc-modal { width: 100% !important; max-width: 100% !important; max-height: 92dvh; border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+        .yyc-modal-head { padding: 16px 18px; }
+        .yyc-chat-wrap { min-height: calc(100dvh - 250px); }
+        .yyc-chat-scroll { padding: 16px 14px; }
+        .yyc-toast { bottom: calc(84px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px); }
+      }
+      /* a phone held sideways: the bars must not eat the short screen */
+      @media (max-width: 899px) and (max-height: 480px) {
+        .yyc-topbar { position: static; }
+        .yyc-botnav-item { min-height: 44px; flex-direction: row; gap: 6px; }
+      }
+      /* very wide screens: the content keeps a comfortable width instead of stretching */
+      @media (min-width: 1700px) { .yyc-content { max-width: 1400px; } }
     `}</style>
   );
 }
@@ -1414,7 +1463,7 @@ function ConfirmModal({ message, title, details, confirmLabel = "Confirm", cance
     <div className="yyc-modal-backdrop" onClick={onCancel}>
       <div className="yyc-modal" role="dialog" aria-modal="true" aria-label={title || message} style={{ width: 440, maxWidth: "94vw", padding: 24 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 18 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: danger ? P.redSoft : P.goldSoft, color: danger ? P.red : P.goldDark, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: danger ? P.redSoft : P.goldSoft, color: danger ? P.redText : P.goldText, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Icon name={danger ? "alert" : "check"} size={18} />
           </div>
           <div style={{ paddingTop: title ? 0 : 6 }}>
@@ -1447,7 +1496,7 @@ function MnaChoiceModal({ ask, onPick }) {
     <div className="yyc-modal-backdrop">
       <div className="yyc-modal" role="dialog" aria-modal="true" aria-label="M&A or normal case study?" style={{ width: 470, maxWidth: "94vw", padding: 24 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 18 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: P.goldSoft, color: P.goldDark, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: P.goldSoft, color: P.goldText, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Icon name="alert" size={18} />
           </div>
           <div>
@@ -1515,7 +1564,7 @@ function ProfileModal({ user, onClose }) {
 
         {view === "main" ? (
           <div style={{ display: "grid", gap: 10 }}>
-            {done && <div role="status" style={{ fontSize: 13, color: P.green, fontWeight: 650 }}>Your password was changed.</div>}
+            {done && <div role="status" style={{ fontSize: 13, color: P.greenText, fontWeight: 650 }}>Your password was changed.</div>}
             <button className="yyc-btn-secondary" style={{ justifyContent: "center", ...lock }} disabled={busy} onClick={() => { setDone(false); setErr(""); setView("password"); }}>
               <Icon name="lock" size={14} /> Change password
             </button>
@@ -1532,7 +1581,7 @@ function ProfileModal({ user, onClose }) {
             <label style={{ fontSize: 12, fontWeight: 700, color: P.sub }}>Type the new password again</label>
             <input className="yyc-input" type="password" autoComplete="new-password" disabled={busy} value={pw2} onChange={(e) => { setPw2(e.target.value); setErr(""); }} style={{ margin: "5px 0 6px" }} />
             <div style={{ fontSize: 12, color: P.faint, lineHeight: 1.5 }}>At least 10 characters.</div>
-            {err && <div role="alert" style={{ color: P.red, fontSize: 13, fontWeight: 600, marginTop: 10, lineHeight: 1.5 }}>{err}</div>}
+            {err && <div role="alert" style={{ color: P.redText, fontSize: 13, fontWeight: 600, marginTop: 10, lineHeight: 1.5 }}>{err}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
               <button type="button" className="yyc-btn-secondary" style={lock} disabled={busy} onClick={() => { setErr(""); setView("main"); }}>Cancel</button>
               <button type="submit" className="yyc-btn-primary" style={lock} disabled={busy}>{busy ? "Saving…" : "Save new password"}</button>
@@ -1569,7 +1618,7 @@ function AdminGate({ t, config, onOk, onClose }) {
           onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
           className="yyc-input"
           style={{ borderColor: err ? P.red : undefined }} />
-        {err && <div style={{ color: P.red, fontSize: 12.5, marginTop: 8, fontWeight: 600 }}>{t.passWrong}</div>}
+        {err && <div style={{ color: P.redText, fontSize: 12.5, marginTop: 8, fontWeight: 600 }}>{t.passWrong}</div>}
         <div style={{ color: P.faint, fontSize: 12, marginTop: 12, lineHeight: 1.55 }}>{t.passNote}</div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 22 }}>
           <button className="yyc-btn-secondary" onClick={onClose}>{t.cancel}</button>
@@ -1628,8 +1677,8 @@ function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, onEdit,
         </div>
         {isAdmin && (
           <div className="yyc-doc-actions" style={{ opacity: 1 }} onClick={(e) => e.stopPropagation()}>
-            <button className="yyc-icon-btn" onClick={() => onEdit(record)} title={t.edit}><Icon name="edit" size={13} /></button>
-            <button className="yyc-icon-btn is-danger" onClick={() => onDelete(record)} title={t.del}><Icon name="trash" size={13} /></button>
+            <button className="yyc-icon-btn" onClick={() => onEdit(record)} title={t.edit} aria-label={t.edit}><Icon name="edit" size={13} /></button>
+            <button className="yyc-icon-btn is-danger" onClick={() => onDelete(record)} title={t.del} aria-label={t.del}><Icon name="trash" size={13} /></button>
           </div>
         )}
       </div>
@@ -1646,7 +1695,7 @@ function LeverPickerModal({ t, currentLever, counts, onSelect, onClose, onOpenSo
             <div style={{ fontSize: 16, fontWeight: 750, letterSpacing: "-0.01em" }}>{t.pickLeverTitle}</div>
             <div style={{ fontSize: 12.5, color: P.sub, marginTop: 4, lineHeight: 1.5 }}>{t.pickLeverHint}</div>
           </div>
-          <button className="yyc-icon-btn" onClick={onClose} style={{ width: 30, height: 30 }}>
+          <button className="yyc-icon-btn" onClick={onClose} aria-label="Close" style={{ width: 30, height: 30 }}>
             <Icon name="close" size={13} />
           </button>
         </div>
@@ -2820,7 +2869,7 @@ ${capped}`;
 
 /* Import Backup preview: every material found in the backup, with its status and strategies, and the lever settings found in it.
    Nothing is saved until "Import selected" is pressed; only what is ticked is imported. */
-const IMPORT_STATE = { new: ["New", "#0E7C4A", "#E6F5EC"], exists: ["Already in the library: skipped", "#8A6508", "#FFF6DC"], deleted: ["Was deleted: skipped", "#9A0000", "#FDEDED"] };
+const IMPORT_STATE = { new: ["New", P.greenText, P.greenSoft], exists: ["Already in the library: skipped", P.goldText, P.goldSoft], deleted: ["Was deleted: skipped", "#9A0000", "#FDEDED"] };
 function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
   const [selDocs, setSelDocs] = useState(() => new Set(plan.docs.filter((d) => d.state === "new").map((d) => d.id)));
   const [selCfg, setSelCfg] = useState(() => new Set(plan.cfgItems.filter((c) => !c.exists).map((c) => c.key)));
@@ -2836,13 +2885,13 @@ function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
       <div className="yyc-modal" style={{ width: 760, maxWidth: "100%", padding: 24, maxHeight: "90vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Import backup</div>
-            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: "#4a0707", fontWeight: "bolder" }}>Review what will be imported</h2>
+            <div style={{ fontSize: 11, color: P.crimsonText, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Import backup</div>
+            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: P.title, fontWeight: "bolder" }}>Review what will be imported</h2>
             <div style={{ fontSize: 12.5, color: P.sub, marginTop: 4, lineHeight: 1.5 }}>
               {plan.fileName}{plan.exportedAt ? ` · exported ${new Date(plan.exportedAt).toLocaleString("en-MY")}` : ""} · {plan.docs.length} material{plan.docs.length === 1 ? "" : "s"}: {counts("new")} new, {counts("exists")} already in the library, {counts("deleted")} previously deleted. Nothing is saved until you press Import selected.
             </div>
           </div>
-          <button className="yyc-icon-btn" onClick={onCancel} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
+          <button className="yyc-icon-btn" onClick={onCancel} disabled={busy} title={t.close} aria-label={t.close}><Icon name="close" size={13} /></button>
         </div>
 
         <div style={{ display: "flex", gap: 8, margin: "14px 0 8px", alignItems: "center", flexWrap: "wrap" }}>
@@ -2890,7 +2939,7 @@ function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
                 <label key={c.key} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 14px", borderTop: i ? `1px solid ${P.line}` : "none", opacity: c.exists ? 0.7 : 1, cursor: c.exists || busy ? "default" : "pointer" }}>
                   <input type="checkbox" checked={selCfg.has(c.key)} disabled={busy || c.exists} onChange={() => toggle(selCfg, setSelCfg, c.key)} />
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.45 }}><b>{c.label}</b>{c.detail ? <span style={{ color: P.sub }}> — {String(c.detail).slice(0, 110)}{String(c.detail).length > 110 ? "…" : ""}</span> : null}</div>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: c.exists ? "#8A6508" : "#0E7C4A" }}>{c.exists ? "Already set: skipped" : "New"}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: c.exists ? P.goldText : P.greenText }}>{c.exists ? "Already set: skipped" : "New"}</span>
                 </label>
               ))}
             </div>
@@ -3559,7 +3608,7 @@ function KnowledgePanel({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 14 }}>
             <div>
               <label style={S.label}>{t.docType}</label>
-              <select value={editDoc.doc_type} onChange={(e) => setD({ doc_type: e.target.value })} className="yyc-input">
+              <select value={editDoc.doc_type} aria-label="Document type" onChange={(e) => setD({ doc_type: e.target.value })} className="yyc-input">
                 {Object.entries(t.docTypes).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </div>
@@ -3587,7 +3636,7 @@ function KnowledgePanel({
           </div>
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `2px solid ${P.crimson}`, paddingBottom: 8, marginTop: 26 }}>
-            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroon }}>
+            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroonText }}>
               {t.sections} <span style={{ color: P.faint }}>({editDoc.sections.length})</span>
             </div>
             <button className="yyc-btn-secondary" onClick={addSec} style={{ padding: "6px 12px", fontSize: 12 }}>
@@ -3598,7 +3647,7 @@ function KnowledgePanel({
             <div key={i} style={{ borderTop: i ? `1px solid ${P.line}` : "none", padding: "14px 0" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <input value={s.heading} onChange={(e) => setSec(i, { heading: e.target.value })} className="yyc-input" style={{ flex: 1, fontWeight: 600 }} placeholder="Heading" />
-                <button onClick={() => delSec(i)} className="yyc-icon-btn is-danger"><Icon name="trash" size={13} /></button>
+                <button onClick={() => delSec(i)} className="yyc-icon-btn is-danger" aria-label="Remove this section"><Icon name="trash" size={13} /></button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginTop: 8 }}>
                 <textarea value={s.summary_en || ""} onChange={(e) => setSec(i, { summary_en: e.target.value })} rows={2} placeholder="EN summary" className="yyc-input" />
@@ -3608,7 +3657,7 @@ function KnowledgePanel({
           ))}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `2px solid ${P.gold}`, paddingBottom: 8, marginTop: 26 }}>
-            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroon }}>
+            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroonText }}>
               {t.leverRecords} <span style={{ color: P.faint }}>({editLevers.length})</span>
             </div>
             <button className="yyc-btn-secondary" onClick={addLev} style={{ padding: "6px 12px", fontSize: 12 }}>
@@ -3618,15 +3667,15 @@ function KnowledgePanel({
           {editLevers.map((l, i) => (
             <div key={l.id || i} style={{ borderTop: i ? `1px solid ${P.line}` : "none", padding: "14px 0" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <select value={l.lever} onChange={(e) => setLev(i, { lever: e.target.value })} className="yyc-input" style={{ width: 170 }}>
+                <select value={l.lever} aria-label="Lever" onChange={(e) => setLev(i, { lever: e.target.value })} className="yyc-input" style={{ width: 170 }}>
                   {leverKeys.map((k) => <option key={k} value={k}>{t.levers[k]}</option>)}
                 </select>
                 <input value={l.section || ""} onChange={(e) => setLev(i, { section: e.target.value })} placeholder={t.sections} className="yyc-input" style={{ flex: 1, minWidth: 140 }} />
-                <button onClick={() => delLev(i)} className="yyc-icon-btn is-danger"><Icon name="trash" size={13} /></button>
+                <button onClick={() => delLev(i)} className="yyc-icon-btn is-danger" aria-label="Remove this lever record"><Icon name="trash" size={13} /></button>
               </div>
               {l.lever === "others" && (
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-                  <select value={OTHER_CATS.includes(l.other_category) ? l.other_category : "uncategorized"} onChange={(e) => setLev(i, { other_category: e.target.value })} className="yyc-input" style={{ width: 210 }} title={t.otherCat}>
+                  <select value={OTHER_CATS.includes(l.other_category) ? l.other_category : "uncategorized"} aria-label="Others sub-category" onChange={(e) => setLev(i, { other_category: e.target.value })} className="yyc-input" style={{ width: 210 }} title={t.otherCat}>
                     {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k]}</option>)}
                   </select>
                   <input value={l.related_to || ""} onChange={(e) => setLev(i, { related_to: e.target.value })} placeholder={t.relatedToPh} className="yyc-input" style={{ flex: 1, minWidth: 200 }} />
@@ -3641,7 +3690,7 @@ function KnowledgePanel({
           ))}
         </div>
 
-        {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
+        {errMsg && <div style={{ color: P.redText, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
 
         <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
           <button className="yyc-btn-primary" onClick={askSaveEdit} disabled={busy}>{busy ? "…" : t.saveChanges}</button>
@@ -3716,7 +3765,7 @@ function KnowledgePanel({
             <b style={{ color: P.ink }}>{t.problemSig}:</b> {extraction.problem_signature}
           </div>
 
-          <div style={{ fontWeight: 750, fontSize: 14, marginTop: 24, color: P.maroon }}>
+          <div style={{ fontWeight: 750, fontSize: 14, marginTop: 24, color: P.maroonText }}>
             {t.sections} <span style={{ color: P.faint }}>({(extraction.sections || []).length})</span>
           </div>
           {(extraction.sections || []).map((s, i) => (
@@ -3729,7 +3778,7 @@ function KnowledgePanel({
           ))}
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
-            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroon }}>
+            <div style={{ fontWeight: 750, fontSize: 14, color: P.maroonText }}>
               {t.leverRecords} <span style={{ color: P.faint }}>({(extraction.levers || []).length})</span>
             </div>
             <button className="yyc-btn-secondary" onClick={addRecord} style={{ padding: "6px 12px", fontSize: 12 }}>
@@ -3745,7 +3794,7 @@ function KnowledgePanel({
           {(extraction.levers || []).map((l, i) => {
             return (
             <div id={`review-record-${i}`} key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", borderTop: i ? `1px solid ${P.line}` : "none", padding: "12px 0", opacity: l.skip ? 0.45 : 1 }}>
-              <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "3px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
+              <span style={{ background: P.goldSoft, color: P.goldText, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "3px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
                 {leverTag(t, l)}
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -3793,7 +3842,7 @@ function KnowledgePanel({
                 )}
                 {conflicts[i] && (
                   <div style={{ marginTop: 7, padding: "8px 11px", borderRadius: 8, background: P.goldSoft, border: `1px solid rgba(184,134,11,0.45)`, fontSize: 12.5, lineHeight: 1.55 }}>
-                    <span style={{ fontWeight: 750, color: P.goldDark }}>⚠ {t.similarExisting} ({Math.round(conflicts[i].sim * 100)}%):</span>{" "}
+                    <span style={{ fontWeight: 750, color: P.goldText }}>⚠ {t.similarExisting} ({Math.round(conflicts[i].sim * 100)}%):</span>{" "}
                     <b>{conflicts[i].doc_title}</b> — "{conflicts[i].claim}"
                   </div>
                 )}
@@ -3803,7 +3852,7 @@ function KnowledgePanel({
                 {conflicts[i] && (
                   <button
                     className="yyc-btn-secondary"
-                    style={{ padding: "5px 12px", fontSize: 12, ...(l.skip ? { borderColor: P.goldDark, color: P.goldDark } : {}) }}
+                    style={{ padding: "5px 12px", fontSize: 12, ...(l.skip ? { borderColor: P.goldDark, color: P.goldText } : {}) }}
                     onClick={() => setExtraction((x) => ({ ...x, levers: x.levers.map((v, k) => (k === i ? { ...v, skip: !v.skip } : v)) }))}
                   >
                     {l.skip ? t.skippedNote : t.skipRecord}
@@ -3815,7 +3864,7 @@ function KnowledgePanel({
           })}
         </div>
 
-        {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
+        {errMsg && <div style={{ color: P.redText, fontSize: 13, marginTop: 12, fontWeight: 600 }}>{errMsg}</div>}
 
         <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
           <button className="yyc-btn-primary" onClick={askSaveReview} disabled={busy}>{busy ? "…" : t.saveDoc}</button>
@@ -3847,7 +3896,7 @@ function KnowledgePanel({
             <div className="yyc-section-sub">{t.bulkHint}</div>
           </div>
           {bulkRunning && (
-            <button className="yyc-btn-secondary" onClick={askStopQueue} style={{ borderColor: P.red, color: P.red }}>
+            <button className="yyc-btn-secondary" onClick={askStopQueue} style={{ borderColor: P.red, color: P.redText }}>
               {t.bulkStop}
             </button>
           )}
@@ -3877,7 +3926,7 @@ function KnowledgePanel({
                 <button className="yyc-btn-primary" style={{ padding: "7px 14px", fontSize: 12.5 }} disabled={!sum.docs || saving} onClick={askSaveSelected}>
                   {saving ? `Saving ${bulkSaving.done} of ${bulkSaving.total}…` : `Save selected (${sum.docs})`}
                 </button>
-                <button className="yyc-btn-secondary" style={{ padding: "7px 14px", fontSize: 12.5, borderColor: P.red, color: P.red }} disabled={!sum.docs || saving} onClick={askDiscardSelected}>
+                <button className="yyc-btn-secondary" style={{ padding: "7px 14px", fontSize: 12.5, borderColor: P.red, color: P.redText }} disabled={!sum.docs || saving} onClick={askDiscardSelected}>
                   <Icon name="trash" size={13} /> Discard selected ({sum.docs})
                 </button>
               </div>
@@ -3907,9 +3956,9 @@ function KnowledgePanel({
                 </div>
                 {it.status === "done" && (flagsOf(it).warnings.length > 0 || flagsOf(it).similar > 0 || flagsOf(it).records === 0) && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
-                    {flagsOf(it).records === 0 && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.redSoft, color: P.red }}>no records to save</span>}
-                    {flagsOf(it).warnings.length > 0 && <span title={flagsOf(it).warnings.join("\n")} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldDark }}>⚠ needs a look: {flagsOf(it).warnings.length === 1 ? "1 warning" : `${flagsOf(it).warnings.length} warnings`}</span>}
-                    {flagsOf(it).similar > 0 && <span title="These records look like records already in the library (same lever, similar wording). Open Review & save to compare them." style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldDark }}>⚠ {plural(flagsOf(it).similar, "record")} similar to the library</span>}
+                    {flagsOf(it).records === 0 && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.redSoft, color: P.redText }}>no records to save</span>}
+                    {flagsOf(it).warnings.length > 0 && <span title={flagsOf(it).warnings.join("\n")} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldText }}>⚠ needs a look: {flagsOf(it).warnings.length === 1 ? "1 warning" : `${flagsOf(it).warnings.length} warnings`}</span>}
+                    {flagsOf(it).similar > 0 && <span title="These records look like records already in the library (same lever, similar wording). Open Review & save to compare them." style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: P.goldSoft, color: P.goldText }}>⚠ {plural(flagsOf(it).similar, "record")} similar to the library</span>}
                   </div>
                 )}
                 {it.status === "ready" && (
@@ -3918,8 +3967,8 @@ function KnowledgePanel({
                     <span><b style={{ color: P.ink }}>M&amp;A document</b> · {it.mna === it.detectedMna ? (it.detectedMna ? "detected from its M&A section headings" : "no M&A headings found, so it is read as a normal case study") : "changed by you (the app checks it against the headings before extracting)"}</span>
                   </label>
                 )}
-                {it.status === "ready" && it.storyCount > 0 && <div style={{ fontSize: 12, color: P.goldDark, marginTop: 3, fontWeight: 600 }}>Looks like {it.storyCount} separate stories: you will be asked whether to split it into cards.</div>}
-                {it.status === "error" && it.error && <div style={{ fontSize: 11.5, color: P.red, marginTop: 3, lineHeight: 1.4 }}>{it.error}</div>}
+                {it.status === "ready" && it.storyCount > 0 && <div style={{ fontSize: 12, color: P.goldText, marginTop: 3, fontWeight: 600 }}>Looks like {it.storyCount} separate stories: you will be asked whether to split it into cards.</div>}
+                {it.status === "error" && it.error && <div style={{ fontSize: 11.5, color: P.redText, marginTop: 3, lineHeight: 1.4 }}>{it.error}</div>}
                 {it.status === "offer" && it.offer && (
                   <div style={{ fontSize: 12, color: P.ink, marginTop: 4, lineHeight: 1.5 }}>
                     <b>{t.splitTitle.replace("{n}", String(it.offer.cards.length))}.</b> {t.splitBody.replace(/\{n\}/g, String(it.offer.cards.length))}
@@ -3947,7 +3996,7 @@ function KnowledgePanel({
                 </button>
               )}
               {(it.status === "ready" || it.status === "done" || it.status === "error" || (it.status === "offer" && splitBusyId !== it.id) || (it.status === "pending" && !bulkRunning)) && (
-                <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.red }} disabled={saving} onClick={() => askDiscardItem(it)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
+                <button className="yyc-btn-secondary" style={{ padding: "6px 12px", fontSize: 12.5, borderColor: P.red, color: P.redText }} disabled={saving} onClick={() => askDiscardItem(it)} title={t.bulkDiscardHint} aria-label={`${t.bulkDiscard}: ${it.title}`}>
                   <Icon name="trash" size={13} /> {t.bulkDiscard}
                 </button>
               )}
@@ -3959,9 +4008,9 @@ function KnowledgePanel({
             </div>
           )}
           {aiNote && <div style={{ padding: "10px 14px", fontSize: 12.5, color: P.sub, fontWeight: 600 }}>⏳ {t.rateWaiting} {aiNote.sec}s</div>}
-          {errMsg && <div style={{ padding: "10px 14px", fontSize: 13, color: P.red, fontWeight: 600, lineHeight: 1.5 }}>{errMsg}</div>}
+          {errMsg && <div style={{ padding: "10px 14px", fontSize: 13, color: P.redText, fontWeight: 600, lineHeight: 1.5 }}>{errMsg}</div>}
           {!bulkRunning && pendingN === 0 && doneN > 0 && (
-            <div style={{ padding: "12px 14px", fontSize: 13, color: P.green, fontWeight: 700 }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, color: P.greenText, fontWeight: 700 }}>
               {t.bulkDoneAll}
             </div>
           )}
@@ -3999,7 +4048,7 @@ function KnowledgePanel({
             <input ref={fileRef} type="file" accept=".docx" multiple onChange={onFile} style={{ display: "none" }} />
             <span style={{ color: P.faint, fontSize: 13 }}>{t.orPaste}</span>
             {html && (
-              <span style={{ color: P.green, fontSize: 12, fontWeight: 700, background: P.greenSoft, padding: "4px 11px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <span style={{ color: P.greenText, fontSize: 12, fontWeight: 700, background: P.greenSoft, padding: "4px 11px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 5 }}>
                 <Icon name="check" size={12} /> {t.docView}
               </span>
             )}
@@ -4008,7 +4057,7 @@ function KnowledgePanel({
           <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={t.textPh} rows={12} className="yyc-input" style={{ marginTop: 14, resize: "none", fontSize: 13, lineHeight: 1.6 }} />
 
           {aiBanner}
-          {errMsg && <div style={{ color: P.red, fontSize: 13, marginTop: 10, fontWeight: 600 }}>{errMsg}</div>}
+          {errMsg && <div style={{ color: P.redText, fontSize: 13, marginTop: 10, fontWeight: 600 }}>{errMsg}</div>}
 
           {splitOffer && splitOffer.forText === text && (
             <div role="status" style={{ marginTop: 14, padding: "14px 16px", borderRadius: 10, background: P.goldSoft, border: `1px solid ${P.gold}`, fontSize: 13, lineHeight: 1.6 }}>
@@ -4049,7 +4098,7 @@ function KnowledgePanel({
                   const done = me < cur;
                   const activeNow = me === cur;
                   return (
-                    <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: done ? P.green : activeNow ? P.maroon : P.faint }}>
+                    <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: done ? P.greenText : activeNow ? P.maroonText : P.faint }}>
                       {done ? <Icon name="check" size={12} /> : activeNow ? (
                         <span className="yyc-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: `2px solid ${P.line}`, borderTopColor: P.maroon, display: "inline-block" }} />
                       ) : "○"}
@@ -4100,9 +4149,9 @@ function KnowledgePanel({
       </div>
 
       {errMsg && !editLeverRecord && !importPlan && (
-        <div role="alert" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", margin: "0 0 14px", padding: "10px 14px", borderRadius: 10, background: "#FDEDED", border: `1px solid rgba(154,0,0,0.25)`, color: P.red, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+        <div role="alert" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", margin: "0 0 14px", padding: "10px 14px", borderRadius: 10, background: "#FDEDED", border: `1px solid rgba(154,0,0,0.25)`, color: P.redText, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
           <span>{errMsg}</span>
-          <button className="yyc-icon-btn" onClick={() => setErrMsg("")} title={t.close} style={{ flexShrink: 0 }}><Icon name="close" size={12} /></button>
+          <button className="yyc-icon-btn" onClick={() => setErrMsg("")} title={t.close} aria-label={t.close} style={{ flexShrink: 0 }}><Icon name="close" size={12} /></button>
         </div>
       )}
 
@@ -4177,12 +4226,12 @@ function KnowledgePanel({
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t.searchPh} className="yyc-input" />
           </div>
 
-          <select className="yyc-filter-select" value={mainCat} onChange={(e) => { setMainCat(e.target.value); setSubCat("all"); }}>
+          <select className="yyc-filter-select" aria-label="Industry" value={mainCat} onChange={(e) => { setMainCat(e.target.value); setSubCat("all"); }}>
             <option value="all">{t.allMainCat}</option>
             {mainCategories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          <select className="yyc-filter-select" style={{ gap: 100 }} value={subCat} onChange={(e) => setSubCat(e.target.value)} disabled={subCategories.length === 0}>
+          <select className="yyc-filter-select" aria-label="Sub-industry" style={{ gap: 100 }} value={subCat} onChange={(e) => setSubCat(e.target.value)} disabled={subCategories.length === 0}>
             <option value="all">{t.allSubCat}</option>
             {subCategories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
@@ -4242,7 +4291,7 @@ function KnowledgePanel({
               return (
                 <div key={docId} className="yyc-lever-group">
                   <div className="yyc-lever-group-head">
-                    <Icon name="book" size={14} color={P.maroon} />
+                    <Icon name="book" size={14} color={P.maroonText} />
                     <span className="yyc-lever-group-title">{meta?.title || records[0]?.doc_title || "(unknown)"}</span>
                     <span className="yyc-lever-group-count">({records.length})</span>
                     <span style={{ marginLeft: "auto", fontSize: 11.5, color: P.faint, fontWeight: 600 }}>
@@ -4321,8 +4370,8 @@ function KnowledgePanel({
                   </span>
                   {isAdmin && (
                     <div className="yyc-doc-actions" onClick={(e) => e.stopPropagation()}>
-                      <button className="yyc-icon-btn" onClick={() => startEdit(d.id)} title={t.edit}><Icon name="edit" size={13} /></button>
-                      <button className="yyc-icon-btn is-danger" onClick={() => deleteDoc(d.id)} title={t.del}><Icon name="trash" size={13} /></button>
+                      <button className="yyc-icon-btn" onClick={() => startEdit(d.id)} title={t.edit} aria-label={t.edit}><Icon name="edit" size={13} /></button>
+                      <button className="yyc-icon-btn is-danger" onClick={() => deleteDoc(d.id)} title={t.del} aria-label={t.del}><Icon name="trash" size={13} /></button>
                     </div>
                   )}
                 </div>
@@ -4347,18 +4396,18 @@ function KnowledgePanel({
           <div className="yyc-modal yyc-edit-record-modal" style={{ width: 700, maxWidth: "100%", padding: 26 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 2, paddingBottom: 16, borderBottom: `1px solid ${P.line}` }}>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: P.crimson, letterSpacing: ".08em", textTransform: "uppercase" }}>{t.levers[editLeverRecord.lever] || editLeverRecord.lever}</div>
-                <h2 style={{ margin: "4px 0 0", fontSize: 21, letterSpacing: "-.02em", color: "#4a0707", fontWeight: "bolder"}}>{t.editTitle}</h2>
+                <div style={{ fontSize: 11, fontWeight: 700, color: P.crimsonText, letterSpacing: ".08em", textTransform: "uppercase" }}>{t.levers[editLeverRecord.lever] || editLeverRecord.lever}</div>
+                <h2 style={{ margin: "4px 0 0", fontSize: 21, letterSpacing: "-.02em", color: P.title, fontWeight: "bolder"}}>{t.editTitle}</h2>
               </div>
-              <button className="yyc-icon-btn" onClick={() => setEditLeverRecord(null)} disabled={busy} title={t.cancel}><Icon name="close" size={13} /></button>
+              <button className="yyc-icon-btn" onClick={() => setEditLeverRecord(null)} disabled={busy} title={t.cancel} aria-label={t.cancel}><Icon name="close" size={13} /></button>
             </div>
             <label style={S.label}>Lever</label>
-            <select className="yyc-input" value={editLeverRecord.lever || "price"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, lever: e.target.value }))}>
+            <select className="yyc-input" aria-label="Lever" value={editLeverRecord.lever || "price"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, lever: e.target.value }))}>
               {leverKeys.map((lever) => <option key={lever} value={lever}>{t.levers[lever]}</option>)}
             </select>
             {editLeverRecord.lever === "others" && (<>
               <label className="yyc-edit-record-field" style={S.label}>{t.otherCat}</label>
-              <select className="yyc-input" value={OTHER_CATS.includes(editLeverRecord.other_category) ? editLeverRecord.other_category : "uncategorized"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, other_category: e.target.value }))}>
+              <select className="yyc-input" aria-label="Others sub-category" value={OTHER_CATS.includes(editLeverRecord.other_category) ? editLeverRecord.other_category : "uncategorized"} onChange={(e) => setEditLeverRecord((r) => ({ ...r, other_category: e.target.value }))}>
                 {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k] || k}</option>)}
               </select>
               <label className="yyc-edit-record-field" style={S.label}>{t.relatedTo}</label>
@@ -4374,7 +4423,7 @@ function KnowledgePanel({
             <textarea className="yyc-input yyc-edit-record-textarea" rows={3} value={editLeverRecord.impact || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, impact: e.target.value }))} />
             <label className="yyc-edit-record-field" style={S.label}>Source section</label>
             <input className="yyc-input" value={editLeverRecord.section || ""} onChange={(e) => setEditLeverRecord((r) => ({ ...r, section: e.target.value }))} />
-            {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
+            {errMsg && <div style={{ color: P.redText, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 24, paddingTop: 16, borderTop: `1px solid ${P.line}` }}>
               <button className="yyc-btn-secondary" onClick={() => setEditLeverRecord(null)} disabled={busy}>{t.cancel}</button>
               <button className="yyc-btn-primary" onClick={saveLeverRecord} disabled={busy}>{busy ? "Saving…" : t.saveChanges}</button>
@@ -4619,14 +4668,14 @@ function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }) {
       </div>
 
       {index.length === 0 && (
-        <div style={{ color: P.red, fontSize: 13, marginBottom: 14, fontWeight: 600 }}>{t.noDocsChat}</div>
+        <div style={{ color: P.redText, fontSize: 13, marginBottom: 14, fontWeight: 600 }}>{t.noDocsChat}</div>
       )}
 
       <div className="yyc-chat-wrap">
         <div className="yyc-chat-scroll">
           {msgs.length === 0 ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", height: "100%", color: P.faint, textAlign: "left", padding: 20 }}>
-              <div style={{ width: 60, height: 60, borderRadius: 18, background: P.crimsonSoft, color: P.crimson, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+              <div style={{ width: 60, height: 60, borderRadius: 18, background: P.crimsonSoft, color: P.crimsonText, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
                 <Icon name="brain" size={26} />
               </div>
               <div style={{ fontSize: 15, fontWeight: 700, color: P.ink, marginBottom: 6 }}>Ask the Brain</div>
@@ -4953,10 +5002,10 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
       <div className="yyc-modal yyc-edit-record-modal" style={{ width: 640, maxWidth: "100%", padding: 24, maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 11, color: P.crimson, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin settings</div>
-            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: "#4a0707", fontWeight: "bolder" }}>Lever Categories</h2>
+            <div style={{ fontSize: 11, color: P.crimsonText, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>Admin settings</div>
+            <h2 style={{ margin: "4px 0 0", fontSize: 20, color: P.title, fontWeight: "bolder" }}>Lever Categories</h2>
           </div>
-          <button className="yyc-icon-btn" onClick={onClose} disabled={busy} title={t.close}><Icon name="close" size={13} /></button>
+          <button className="yyc-icon-btn" onClick={onClose} disabled={busy} title={t.close} aria-label={t.close}><Icon name="close" size={13} /></button>
         </div>
         <div style={{ display: "flex", gap: 8, margin: "16px 0 4px" }}>
           {tabBtn("edit", "Edit existing")}
@@ -4965,7 +5014,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
 
         {tab === "edit" && (<>
           <MgrField label="Lever">
-            <select className="yyc-input" value={target} onChange={(e) => pick(e.target.value)}>
+            <select className="yyc-input" aria-label="Category to edit" value={target} onChange={(e) => pick(e.target.value)}>
               <optgroup label="Built-in levers">
                 {[...Object.keys(BUILTIN_LEVER_DEFAULTS), "others"].map((id) => <option key={id} value={id}>{t.levers[id] || id}</option>)}
               </optgroup>
@@ -4995,7 +5044,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
           {isOthers && (
             <MgrSection title="Sub-categories of Others">
               <MgrField label="Sub-category">
-                <select className="yyc-input" value={subId} onChange={(e) => pickSub(e.target.value)}>
+                <select className="yyc-input" aria-label="Sub-category to edit" value={subId} onChange={(e) => pickSub(e.target.value)}>
                   {OTHER_CATS.map((k) => <option key={k} value={k}>{t.otherCats[k] || k}</option>)}
                 </select>
               </MgrField>
@@ -5037,7 +5086,7 @@ function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLocked, f
           </>)}
         </>)}
 
-        {errMsg && <div style={{ color: P.red, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
+        {errMsg && <div style={{ color: P.redText, fontSize: 12.5, marginTop: 12 }}>{errMsg}</div>}
       </div>
     </div>
   );
@@ -5113,7 +5162,7 @@ function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConf
               <span style={{
                 fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: "1px 7px", fontVariantNumeric: "tabular-nums",
                 background: active ? "rgba(255,255,255,0.22)" : n ? P.goldSoft : P.wash,
-                color: active ? "#fff" : n ? P.goldDark : P.faint,
+                color: active ? "#fff" : n ? P.goldText : P.faint,
               }}>{n}</span>
             </button>
           );
@@ -5135,7 +5184,7 @@ function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConf
 
       {/* filters + stats */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        <select value={cat} onChange={(e) => setCat(e.target.value)} className="yyc-input" style={{ width: "auto", padding: "8px 12px", fontSize: 13 }}>
+        <select value={cat} aria-label="Industry" onChange={(e) => setCat(e.target.value)} className="yyc-input" style={{ width: "auto", padding: "8px 12px", fontSize: 13 }}>
           <option value="all">{t.allMainCat}</option>
           {cats.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
@@ -5154,7 +5203,7 @@ function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConf
             <div key={docId} style={{ ...S.card, padding: 0, marginBottom: 14, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "13px 18px", borderBottom: `1px solid ${P.line}`, background: P.wash }}>
                 <button onClick={() => openPreview(docId)}
-                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 14.5, fontWeight: 750, color: P.maroon, textAlign: "left" }}>
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 14.5, fontWeight: 750, color: P.maroonText, textAlign: "left" }}>
                   {meta.title || "—"}
                 </button>
                 {meta.industry_main && (
@@ -5176,7 +5225,7 @@ function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConf
                   <ImpactBox record={r} style={{ marginTop: 6 }} />
                   {r.section && (
                     <button onClick={() => openPreview(docId, r.section)}
-                      style={{ background: "none", border: "none", padding: 0, marginTop: 5, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: P.crimson, textDecoration: "underline" }}>
+                      style={{ background: "none", border: "none", padding: 0, marginTop: 5, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: P.crimsonText, textDecoration: "underline" }}>
                       {r.section} →
                     </button>
                   )}
@@ -5234,7 +5283,7 @@ function AskLogPanel({ t }) {
                 {Array.isArray(r.unsupported) && r.unsupported.length > 0 && badge(`${t.askLogFigureTag}: ${r.unsupported.join(", ")}`, P.goldSoft, P.goldDark)}
               </div>
               {r.feedback_note && <div style={{ fontSize: 12.5, color: P.sub, marginTop: 5 }}>“{r.feedback_note}”</div>}
-              {r.error && <div style={{ fontSize: 12, color: P.red, marginTop: 4 }}>{r.error}</div>}
+              {r.error && <div style={{ fontSize: 12, color: P.redText, marginTop: 4 }}>{r.error}</div>}
               <div style={{ fontSize: 12, color: P.faint, marginTop: 5 }}>
                 {new Date(r.created_at).toLocaleString("en-MY")} · {r.user_email || "?"}{r.mode ? ` · ${r.mode}` : ""}{r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ""}
               </div>
@@ -5333,7 +5382,9 @@ function UsersPanel({ flash, setConfirm }) {
   };
   const decide = (r, decision, mode) => {
     const rl = reqRole[r.id] || "viewer";
-    if (decision === "approve" && mode === "email") ask(`Approve ${r.name || r.email}?`, `An invite email is sent to ${r.email}. They join as ${roleWord(rl)}.`, "Approve and invite", () => window.db.requestDecide(r.id, "approve", rl, "email"), "Approved: invite sent");
+    if (decision === "approve" && r.isOwner) ask(`Approve ${r.name || r.email} as an owner?`, `${r.email} is listed as an admin in the server settings, so this account will have full control whatever role you pick. Only another server-settings admin can approve it. Approve only if you are certain this person sent the request.`, "Approve owner account", () => window.db.requestDecide(r.id, "approve", rl, r.hasPassword || !emailInvites ? "password" : "email"), "Approved", true);
+    else if (decision === "approve" && mode === "email") ask(`Approve ${r.name || r.email}?`, `An invite email is sent to ${r.email}. They join as ${roleWord(rl)}.`, "Approve and invite", () => window.db.requestDecide(r.id, "approve", rl, "email"), "Approved: invite sent");
+    else if (decision === "approve" && r.hasPassword) ask(`Approve ${r.name || r.email}?`, `${r.email} can then sign in as ${roleWord(rl)} with the password they chose when they asked. No email is sent, and nobody has checked that the address is really theirs, so approve only if you know this person sent the request.`, "Approve", () => window.db.requestDecide(r.id, "approve", rl, "password"), "Approved: they can sign in now");
     else if (decision === "approve") ask(`Approve ${r.name || r.email}?`, `An account is created for ${r.email} as ${roleWord(rl)}. You are shown a one-time temporary password to give them. They must choose their own at first sign-in.`, "Approve and create account", () => window.db.requestDecide(r.id, "approve", rl, "password"), "Approved: account created");
     else ask(`Reject ${r.name || r.email}?`, `${r.email} is not given access. They are not contacted.`, "Reject", () => window.db.requestDecide(r.id, "reject"), "Request rejected", true);
   };
@@ -5350,6 +5401,7 @@ function UsersPanel({ flash, setConfirm }) {
 
   if (users === null) return <div style={{ color: P.sub }}>…</div>;
   const pending = reqs.filter((r) => r.status === "pending");
+  const people = users.filter((u) => !u.pending); // someone waiting for approval is a request, not a person yet
   const chip = (text, bg, fg) => <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" }}>{text}</span>;
   const when = (x) => (x ? new Date(x).toLocaleString("en-MY") : "never");
   const small = { padding: "5px 10px", fontSize: 12 };
@@ -5361,10 +5413,10 @@ function UsersPanel({ flash, setConfirm }) {
       <div className="yyc-section-head">
         <div>
           <h1 className="yyc-section-title">Users</h1>
-          <div className="yyc-section-sub">Nobody can register on their own. People ask for access on the sign-in screen and you approve them here, or create an account directly. {emailInvites ? "They get an email with a link to set their own password." : "You are shown a one-time temporary password to give them, and they choose their own at first sign-in."}</div>
+          <div className="yyc-section-sub">Nobody can register on their own. People ask for access on the sign-in screen and you approve them here, or create an account directly. {emailInvites ? "They get an email with a link to set their own password." : "People who ask for access choose their own password, and can sign in once you approve. For an account you create yourself, you are shown a one-time temporary password to give them."}</div>
         </div>
       </div>
-      {err && <div role="alert" style={{ color: P.red, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
+      {err && <div role="alert" style={{ color: P.redText, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
 
       <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>
         <div style={{ fontWeight: 750, marginBottom: 10 }}>Access requests {pending.length ? <span style={{ marginLeft: 6 }}>{chip(`${pending.length} waiting`, P.goldSoft, P.goldDark)}</span> : null}</div>
@@ -5374,7 +5426,7 @@ function UsersPanel({ flash, setConfirm }) {
             <div style={{ flex: 1, minWidth: 220 }}>
               <div style={{ fontSize: 14, fontWeight: 650 }}>{r.name} <span style={{ fontWeight: 500, color: P.sub }}>· {r.email}</span></div>
               {r.note && <div style={{ fontSize: 12.5, color: P.sub, marginTop: 2, lineHeight: 1.45 }}>{r.note}</div>}
-              <div style={{ fontSize: 11.5, color: P.faint, marginTop: 2 }}>asked {when(r.requested_at)}</div>
+              <div style={{ fontSize: 11.5, color: P.faint, marginTop: 2 }}>asked {when(r.requested_at)}{r.hasPassword ? " · chose their own password" : ""}</div>
             </div>
             <select className="yyc-input" aria-label={`Role for ${r.email}`} value={reqRole[r.id] || "viewer"} onChange={(e) => setReqRole({ ...reqRole, [r.id]: e.target.value })} style={{ width: 110, padding: "6px 8px", fontSize: 13 }}>
               <option value="viewer">Viewer</option>
@@ -5382,7 +5434,7 @@ function UsersPanel({ flash, setConfirm }) {
             </select>
             {emailInvites && <button className="yyc-btn-primary" style={small} onClick={() => decide(r, "approve", "email")}>Approve (email invite)</button>}
             <button className={emailInvites ? "yyc-btn-secondary" : "yyc-btn-primary"} style={small} onClick={() => decide(r, "approve", "password")}>{emailInvites ? "Approve (temporary password)" : "Approve"}</button>
-            <button className="yyc-btn-secondary" style={{ ...small, borderColor: P.red, color: P.red }} onClick={() => decide(r, "reject")}>Reject</button>
+            <button className="yyc-btn-secondary" style={{ ...small, borderColor: P.red, color: P.redText }} onClick={() => decide(r, "reject")}>Reject</button>
           </div>
         ))}
       </div>
@@ -5402,8 +5454,8 @@ function UsersPanel({ flash, setConfirm }) {
       </div>
 
       <div style={{ ...S.card, overflow: "hidden", marginBottom: 16 }}>
-        <div style={{ padding: "14px 18px", fontWeight: 750 }}>People ({users.length})</div>
-        {users.map((u) => (
+        <div style={{ padding: "14px 18px", fontWeight: 750 }}>People ({people.length})</div>
+        {people.map((u) => (
           <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 18px", borderTop: `1px solid ${P.line}` }}>
             <div style={{ flex: 1, minWidth: 220 }}>
               <div style={{ fontSize: 14, fontWeight: 650, wordBreak: "break-all" }}>{u.email}{u.id === meId ? <span style={{ fontWeight: 500, color: P.sub }}> (you)</span> : null}</div>
@@ -5420,7 +5472,7 @@ function UsersPanel({ flash, setConfirm }) {
                   : <button className="yyc-btn-secondary" style={small} onClick={() => changeRole(u)}>{u.role === "admin" ? "Make viewer" : "Make admin"}</button>}
                 {emailInvites && <button className="yyc-btn-secondary" style={small} onClick={() => resetByEmail(u)}>Send reset email</button>}
                 <button className="yyc-btn-secondary" style={small} onClick={() => tempPassword(u)}>Temporary password</button>
-                <button className="yyc-btn-secondary" style={{ ...small, ...(u.disabled ? {} : { borderColor: P.red, color: P.red }) }} onClick={() => toggleDisabled(u)}>{u.disabled ? "Enable" : "Disable"}</button>
+                <button className="yyc-btn-secondary" style={{ ...small, ...(u.disabled ? {} : { borderColor: P.red, color: P.redText }) }} onClick={() => toggleDisabled(u)}>{u.disabled ? "Enable" : "Disable"}</button>
               </div>
             )}
           </div>
@@ -5529,7 +5581,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
                     style={{
                       padding: "7px 15px", fontSize: 12.5, fontWeight: 650,
                       background: view === k ? P.ink : "transparent",
-                      color: view === k ? "#fff" : P.sub,
+                      color: view === k ? P.paper : P.sub, // dark on light in the light theme, light on dark in the dark theme
                       border: "none", cursor: "pointer", fontFamily: "inherit",
                     }}
                   >
@@ -5538,7 +5590,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
                 ))}
               </div>
             )}
-            <button className="yyc-icon-btn" onClick={onClose} style={{ width: 32, height: 32 }}><Icon name="close" size={14} /></button>
+            <button className="yyc-icon-btn" onClick={onClose} aria-label="Close" style={{ width: 32, height: 32 }}><Icon name="close" size={14} /></button>
           </div>
         </div>
 
@@ -5547,7 +5599,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
             <div style={{ background: P.card, borderRadius: 12, boxShadow: P.s2, maxWidth: 680, margin: "0 auto", padding: "40px 46px" }}>
               <style>{`
                 .yyc-docview h1 { font-size: 22px; font-weight: 800; margin: 18px 0 10px; line-height: 1.3; }
-                .yyc-docview h2 { font-size: 18px; font-weight: 750; margin: 16px 0 8px; line-height: 1.3; color: ${P.maroon}; }
+                .yyc-docview h2 { font-size: 18px; font-weight: 750; margin: 16px 0 8px; line-height: 1.3; color: ${P.maroonText}; }
                 .yyc-docview h3 { font-size: 15.5px; font-weight: 700; margin: 14px 0 6px; }
                 .yyc-docview p { font-size: 14px; line-height: 1.75; margin: 0 0 10px; }
                 .yyc-docview ul, .yyc-docview ol { padding-left: 22px; margin: 0 0 10px; }
@@ -5564,7 +5616,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
               <div key={r.id || i} ref={hasTargetRecord && r.id === targetRecordId ? targetRef : null}
                 style={{ ...S.card, padding: "16px 18px", marginBottom: 10, ...(hasTargetRecord && r.id === targetRecordId ? { background: P.goldSoft, border: `1px solid ${P.gold}`, borderLeft: `3px solid ${P.gold}` } : null) }}>
                 <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                  <span style={{ background: P.goldSoft, color: P.goldDark, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "4px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
+                  <span style={{ background: P.goldSoft, color: P.goldText, border: `1px solid rgba(184,134,11,0.4)`, fontSize: 11, fontWeight: 750, padding: "4px 11px", whiteSpace: "nowrap", borderRadius: 999 }}>
                     {leverTag(t, r)}
                   </span>
                   <div style={{ flex: 1 }}>
@@ -5603,7 +5655,7 @@ function PreviewModal({ t, lang, data, levers, onClose }) {
               })}
               {!hasHtml && (
                 <>
-                  <div style={{ fontWeight: 750, fontSize: 13, color: P.maroon, margin: "22px 0 10px", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                  <div style={{ fontWeight: 750, fontSize: 13, color: P.maroonText, margin: "22px 0 10px", textTransform: "uppercase", letterSpacing: ".04em" }}>
                     {t.fullText}
                   </div>
                   <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", lineHeight: 1.7, color: P.ink, background: P.card, padding: 20, borderRadius: 12, border: `1px solid ${P.line}` }}>

@@ -21,7 +21,7 @@ import { createClient } from '@supabase/supabase-js';
 import { authConfigured, authenticate, clearAuthCache } from './auth.js';
 import * as acct from './accounts.js';
 import { cleanDocHtml, cleanerReady } from './sanitize.js';
-import { hit, clientIp as ipOf, limitFrom } from './rateLimit.js';
+import { hit, waitFor, clientIp as ipOf, limitFrom } from './rateLimit.js';
 import { reindexDocSafe, deleteDocChunks } from './indexing.js';
 
 export const dbConfigured = (env = process.env) => !!(String(env.SUPABASE_URL || '').trim() && String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
@@ -63,19 +63,29 @@ function recordFromRow(r) {
   const base = prune(Object.fromEntries([...REC_COLS, 'status', 'created_by'].filter((c) => c in r).map((c) => [c, r[c]])));
   return { ...(r.extra && typeof r.extra === 'object' ? r.extra : {}), ...base };
 }
+/* One malformed entry here used to break search for the whole library, so only well-formed sections are kept. */
+function cleanSections(v) {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x) => x && typeof x === 'object' && !Array.isArray(x)).slice(0, 200).map((x) => {
+    const out = { heading: str(x.heading, 500) || '' };
+    for (const k of ['summary_en', 'summary_zh']) if (x[k] !== undefined && x[k] !== null) out[k] = str(x[k], 4000);
+    return out;
+  });
+}
+
 function docToRow(d, by) {
   if (!d || typeof d.id !== 'string' || !d.id || d.id.length > 100) throw bad('Bad document');
   return {
     id: d.id, title: str(d.title, 500) || '', doc_type: str(d.doc_type, 60), industry: str(d.industry, 300), industry_main: str(d.industry_main, 300),
     industry_sub: str(d.industry_sub, 300), language: str(d.language, 20), problem_signature: str(d.problem_signature, 3000),
-    sections: Array.isArray(d.sections) ? d.sections : [], full_text: str(d.full_text, 400000) || '', // scripts and anything else unsafe are removed before the HTML copy is stored; if the cleaner is unavailable the column is left alone (an existing copy is kept, nothing unchecked is written)
+    sections: cleanSections(d.sections), full_text: str(d.full_text, 400000) || '', // scripts and anything else unsafe are removed before the HTML copy is stored; if the cleaner is unavailable the column is left alone (an existing copy is kept, nothing unchecked is written)
     ...(cleanerReady() ? { html: str(cleanDocHtml(str(d.html, 400000) || ''), 400000) || '' } : {}),
     created: Number.isFinite(Number(d.created)) ? Number(d.created) : Date.now(),
     status: 'active', deleted_at: null, deleted_by: null, updated_by: by, updated_at: nowIso(),
   };
 }
 function recordToRow(r, position, by) {
-  if (!r || typeof r.id !== 'string' || !r.id || typeof r.doc_id !== 'string' || !r.doc_id || typeof r.lever !== 'string' || !r.lever) throw bad('Bad record');
+  if (!r || typeof r.id !== 'string' || !r.id || r.id.length > 100 || typeof r.doc_id !== 'string' || !r.doc_id || r.doc_id.length > 100 || typeof r.lever !== 'string' || !r.lever) throw bad('Bad record');
   const extra = Object.fromEntries(Object.entries(r).filter(([k, v]) => !REC_SYSTEM.has(k) && v !== undefined));
   return {
     id: r.id, doc_id: r.doc_id, doc_title: str(r.doc_title, 500), lever: str(r.lever, 200), other_category: str(r.other_category, 200), related_to: str(r.related_to, 1000),
@@ -291,14 +301,16 @@ const OPS = {
     run: async ({ sb, user, env }, a) => {
       const docs = (Array.isArray(a.docs) ? a.docs : []).slice(0, 20);
       const recs = (Array.isArray(a.records) ? a.records : []).slice(0, 2000);
-      const have = new Set(must(await sb.from('documents').select('id').in('id', docs.map((d) => String(d && d.id))), 'read documents').map((r) => r.id)); // any status: a deleted one is not resurrected
+      const found = must(await sb.from('documents').select('id,status').in('id', docs.map((d) => String(d && d.id))), 'read documents');
+      const have = new Set(found.map((r) => r.id)); // any status: a deleted one is not resurrected
+      const gone = new Set(found.filter((r) => r.status === 'deleted').map((r) => r.id)); // and its records are not brought back without it
       const fresh = docs.filter((d) => d && typeof d.id === 'string' && !have.has(d.id));
       for (const d of fresh) {
         const row = { ...docToRow(d, user.email), created_by: (d.created_by || user.email) };
         must(await sb.from('documents').upsert(row), 'write document');
         await reindexDocSafe(sb, env, row);
       }
-      const docIds = new Set([...have, ...fresh.map((d) => d.id)]);
+      const docIds = new Set([...[...have].filter((i) => !gone.has(i)), ...fresh.map((d) => d.id)]);
       const mine = recs.filter((r) => r && typeof r.id === 'string' && docIds.has(r.doc_id));
       const haveRec = new Set();
       for (const part of chunks(mine.map((r) => r.id))) must(await sb.from('records').select('id').in('id', part), 'read records').forEach((r) => haveRec.add(r.id));
@@ -349,13 +361,13 @@ const OPS = {
   access_request: { level: 'public', run: async ({ sb, env, ip, now }, a) => acct.createRequest(sb, env, a, ip, now()) },
   users_list: { level: 'admin', run: async ({ sb, env, now }) => ({ users: await acct.listUsers(sb, env, now()), emailInvites: acct.emailOn(env) }) },
   user_create: { level: 'admin', run: async ({ sb, env, user }, a) => acct.createUser(sb, env, user, a) },
-  user_temp_password: { level: 'admin', run: async ({ sb, env, user }, a) => acct.tempPassword(sb, env, user, a) },
-  set_password: { level: 'user', run: async ({ sb, user }, a) => { await acct.setOwnPassword(sb, user, a); clearAuthCache(); return {}; } },
+  user_temp_password: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.tempPassword(sb, env, user, a); clearAuthCache(); return out; } },
+  set_password: { level: 'user', run: async ({ sb, user, env }, a) => { await acct.setOwnPassword(sb, user, a, env); clearAuthCache(); return {}; } },
   user_invite: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.inviteUser(sb, env, user, a, headers) },
-  user_set_role: { level: 'admin', run: async ({ sb, env, user }, a) => acct.setRole(sb, env, user, a) },
+  user_set_role: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setRole(sb, env, user, a); clearAuthCache(); return out; } },
   user_set_disabled: { level: 'admin', run: async ({ sb, env, user }, a) => { const out = await acct.setDisabled(sb, env, user, a); clearAuthCache(); return out; } },
   user_send_reset: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.sendReset(sb, env, user, a, headers) },
-  requests_list: { level: 'admin', run: async ({ sb }) => ({ requests: await acct.listRequests(sb) }) },
+  requests_list: { level: 'admin', run: async ({ sb, env }) => ({ requests: await acct.listRequests(sb, env) }) },
   request_decide: { level: 'admin', run: async ({ sb, env, user, headers }, a) => acct.decideRequest(sb, env, user, a, headers) },
   account_events: { level: 'admin', run: async ({ sb }, a) => ({ events: await acct.listEvents(sb, a.limit) }) },
 };
@@ -378,16 +390,17 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   if (!authConfigured(env)) return json(503, { error: 'SUPABASE_ANON_KEY is not set on the server.' });
 
   const signedOut = !/^Bearer\s+\S/i.test(String(Object.entries(req.headers || {}).find(([k]) => k.toLowerCase() === 'authorization')?.[1] || ''));
-  const op = method === 'POST' && req.body && typeof req.body.op === 'string' ? OPS[req.body.op] : null;
+  const op = method === 'POST' && req.body && typeof req.body.op === 'string' && Object.hasOwn(OPS, req.body.op) ? OPS[req.body.op] : null;
 
   let user;
   if (signedOut && op && (op.level === 'public' || (op.level === 'guest' && guestAllowed(env)))) {
     user = { id: null, email: null, isAdmin: false, guest: true };
   } else {
+    if (!signedOut) { const blocked = waitFor('auth-fail', clientIp(req), 30, 60_000, now()); if (blocked) return tooMany(blocked); }
     const a = await authenticate(req.headers, env, now(), { allowMustChange: true });
     if (!a.ok) {
-      const wait = signedOut ? 0 : hit('auth-fail', clientIp(req), 30, 60_000, now()); // a wrong or forged token, over and over
-      return wait ? tooMany(wait) : json(a.status, { error: a.error });
+      if (!signedOut) hit('auth-fail', clientIp(req), 30, 60_000, now()); // a wrong or forged token, over and over
+      return json(a.status, { error: a.error });
     }
     user = a.user;
     // signed in with a temporary password: nothing but "who am I" and "choose a new password" until they have

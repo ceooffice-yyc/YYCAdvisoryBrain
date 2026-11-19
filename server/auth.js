@@ -39,6 +39,7 @@ export async function authenticate(headers = {}, env = process.env, now = Date.n
   }
 
   if (user.banned_until && new Date(user.banned_until).getTime() > now) return { ok: false, status: 403, error: 'This account has been disabled. Please contact your administrator.' }; // an admin disabled it in the Users tab
+  if (user.app_metadata && user.app_metadata.pending) return { ok: false, status: 403, error: 'Your request is waiting for an administrator to approve it.' }; // asked for access, not approved yet
   if (!(user.email_confirmed_at || user.confirmed_at)) return { ok: false, status: 403, error: 'This email address has not been confirmed yet.' }; // an unverified address proves nothing about who this is
   const email = String(user.email || '').toLowerCase();
   const domains = list(env.ALLOWED_EMAIL_DOMAINS);

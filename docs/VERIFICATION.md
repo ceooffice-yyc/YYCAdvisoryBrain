@@ -55,3 +55,62 @@ Each protection was switched off on purpose, the matching tests were run, and th
 - **Rate limits across several server instances:** they are per instance by design (see Known limits in `docs/REQUIREMENTS.md`).
 - **Accessibility and responsive checks of the main app:** these belong to Phase 3 and have not been run. Only the not-found page was looked at.
 - The unit tests for this phase were written by the same person who wrote the code, with the code in view. The mutation check is the independent evidence that they test the right thing.
+
+
+## Redesign and second security pass (2026-11-19, later the same day)
+
+### What was run
+
+| Check | Result |
+|---|---|
+| Lint (`npx eslint .`) | 0 problems |
+| Unit tests (`npm test`) | 151 of 151 pass |
+| Browser tests (`npm run e2e`, installed Chrome, production build, no database, no AI calls) | 23 of 23 pass |
+| Dependency audit (`npm audit`) | 0 vulnerabilities |
+| API start-up on a Node older than 22.12 (simulated) | all four entry points start |
+
+### Redesign, requirement by requirement
+
+| ID | Status | Evidence |
+|---|---|---|
+| UI-01 design system | **Verified** | Every colour in `src/App.jsx` and `src/Root.jsx` now comes from the tokens in `src/index.css`; the app builds and all screens render. |
+| UI-02 light and dark | **Verified on 10 screens** | The automated accessibility scan (WCAG 2.0 to 2.2, A and AA) passes in both themes on: knowledge base, document view, lever explorer, Ask the Brain, add material, gap log, empty library, sign in, request access, not found. Screenshots of all of them were looked at in both themes. |
+| UI-03 page titles | **Verified** | Each screen has exactly one page title, 26 to 38 px depending on width, with the brand accent bar. Before and after screenshots are in `e2e/.results/before` and `e2e/.results/after` (not committed). |
+| UI-04 every screen size | **Verified** | At 320, 375, 667x375 (phone sideways), 768, 1024, 1440 and 1920 px: no sideways scrolling, nothing past the right edge, page title not clipped, on all 10 screens. On a phone the navigation, filter chips, buttons, inputs and icon buttons are at least 44 px. A newly opened tab starts at its top. |
+| UI-05 accessible | **Partly** | Automated scan passes (above); skip link is the first Tab stop and focus is visibly outlined; motion is switched off for people who ask for less. **Not done:** a full keyboard walk-through of every pop-up, a screen-reader run, and the 200% text-size check. |
+| UI-06 clear states | **Partly** | The empty library, sign-in errors and "request sent" states were restyled and scanned. Loading skeletons were not added. |
+
+Found and fixed by these tests: 2 unlabelled filter menus on the knowledge base and 1 on the lever explorer, 9 more unlabelled menus elsewhere, 12 icon-only buttons with no name for screen readers, white-on-light text on the chosen Document / Summary tab in the dark theme, statistic labels cut off on phones, and a tab that opened scrolled halfway down.
+
+### Independent security review
+
+A separate reviewer read every server file, the sign-in code and the database script without seeing my notes. It found no way for a guest, a not-yet-approved, a disabled, an unconfirmed or a temporary-password account to reach data, and reported the problems below. Each fix has a test; the mutation check (break the fix, the tests must fail) caught 11 of 12, and the twelfth is harmless (with that line removed the request is still refused by the next check).
+
+| Review finding | Fix | Test |
+|---|---|---|
+| H1 A stranger could request access with an owner's address and become an owner when approved | Owner addresses are ignored by the public form; only an owner can approve or create an owner account; the approval dialog says so | `test/accounts.test.mjs` "review H1 / M1" |
+| M1 An ordinary admin could create an owner's account and receive its password | Refused (403) | same |
+| M2 The request form revealed who has an account (through the sign-in service) | No account is created when asking. The chosen password is kept only as a bcrypt hash on the request and the account is created at approval | "NO account exists until an admin approves" |
+| M3 The request form could be shut down for everyone | Only requests from allowed addresses count against the shared budget; requests older than 30 days are closed automatically | "review M3" |
+| M4 A half-failed request left an account nobody could approve or remove | Cannot happen any more (no account until approval; a failed approval puts the request back) | covered by the flow tests |
+| M5 `TRUST_PROXY=1` was read as an address, not "one proxy" | Parsed correctly; a bad value is ignored with a message instead of stopping the server | not unit-tested (start-up code) |
+| M6 "Current password" was only checked in the browser | The server checks it, with a limit on guesses | "review M6" |
+| L1 Wrong tokens were still sent to Supabase after the limit | Refused before the call | existing SEC-05 test |
+| L2 Rate-limit table could get slow under attack | Swept at most once a minute, hard cap | not load-tested |
+| L3 One malformed section could break search | Sections are cleaned when saved | not unit-tested |
+| L4 Role and password changes took up to a minute to apply | The sign-in cache is cleared at once | not unit-tested |
+| L5 Made-up operation names gave a server error | Clean "Unknown operation" | "review L5 / L3" |
+| L6 Vercel was missing one header | Added | needs a deployment |
+| L7 Future database functions would be public by default | Default removed in `supabase/schema.sql` | needs the script to be run |
+| L8 Old-style email links could sign a browser into another account | Only honoured when email links are switched on | not tested |
+| L9 Two admins deciding one request at once | The first one wins; the second is told | "review L9" |
+| L10 Import brought back records of deleted documents; ids had no length limit | Fixed | not unit-tested |
+| L11 Browser-only mode: the AI proxy could be reached through a DNS trick | It only answers requests addressed to this PC | not unit-tested |
+
+### Not verified, plainly
+
+- **Anything against the real Supabase project.** In particular: creating an account from a stored password hash at approval (the Supabase library documents `password_hash`, but it was not run against the live service), whether changing a password ends the open session (the app now signs in again with the new password either way), and the sign-in, Users and profile screens with real data.
+- **Vercel:** the extra header and that nothing else changed. The earlier `vercel.json` headers and the JSON 404 were confirmed on the live site.
+- **The Users tab, profile window, bulk list, review and edit screens in a browser.** The browser tests run without the shared database, so these were restyled through the shared tokens and classes but not looked at or scanned.
+- Screen readers, the 200% text size check, and real phones (the tests use Chrome at phone sizes).
+- Speed: the first-load script is unchanged (about 303 kB gzipped). Splitting it (PERF-01, PERF-02) has not been done.

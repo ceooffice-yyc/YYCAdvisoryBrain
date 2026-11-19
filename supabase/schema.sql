@@ -274,3 +274,11 @@ revoke execute on all functions in schema public from anon, authenticated;
 alter default privileges in schema public revoke all on tables    from anon, authenticated;
 alter default privileges in schema public revoke all on sequences from anon, authenticated;
 alter default privileges in schema public revoke execute on functions from anon, authenticated;
+
+
+-- Functions added later are callable by everyone unless that default is removed too (the lines above only cover the two named roles).
+alter default privileges in schema public revoke execute on functions from public;
+
+-- Request access without email: the password the person chose is kept only as a bcrypt hash, here, until an admin approves the request
+-- (then the account is created from it and the hash is erased). The table is server-only: Row Level Security is on with no policies.
+alter table public.access_requests add column if not exists password_hash text;

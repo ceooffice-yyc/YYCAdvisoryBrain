@@ -18,7 +18,9 @@ const makeLocal = () => ({
 
 async function makeRemote(local, cfg, sdk) {
   const { createClient } = sdk || (await import("@supabase/supabase-js")); // only loaded when sign-in is in use
-  const auth = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true, autoRefreshToken: true } });
+  // A link that signs the browser in by itself is only honoured when the site sends such links (EMAIL_INVITES=on). Otherwise a crafted link
+  // could quietly sign a person into someone else's account.
+  const auth = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !!cfg.emailInvites } });
   const token = async () => { try { return (await auth.auth.getSession()).data.session?.access_token || ""; } catch { return ""; } };
   const authHeader = async () => { const t = await token(); return t ? { Authorization: `Bearer ${t}` } : {}; };
   const GUEST_KEY = "yyc:guest"; // "continue as guest" lasts for this browser tab only
@@ -57,7 +59,7 @@ async function makeRemote(local, cfg, sdk) {
     },
     async signIn(email, password) {
       const { error } = await auth.auth.signInWithPassword({ email: String(email).trim(), password });
-      if (error) throw new Error(/invalid login/i.test(error.message) ? "Wrong email or password." : error.message);
+      if (error) throw new Error(/invalid login/i.test(error.message) ? "Wrong email or password." : /banned/i.test(error.message) ? "This account is not active. If you asked for access, an administrator still has to approve it; otherwise contact your administrator." : error.message);
       storage.hooks.signedIn(); // start loading the library while the server confirms who this is
       try { const me = await storage.loadMe(); setGuest(false); return me; } catch (e) { storage.hooks.signedOut(); await auth.auth.signOut(); throw e; }
     },
@@ -77,17 +79,17 @@ async function makeRemote(local, cfg, sdk) {
       if (error) throw new Error(error.message || "The link could not be used.");
     },
     // the first sign-in with a temporary password: the server applies the new password and lifts the restriction
-    async changePassword(password) {
-      const { res, data } = await storage.api("POST", { body: { op: "set_password", password }, quiet: true });
+    async changePassword(password, current) {
+      const email = storage.user && storage.user.email;
+      const { res, data } = await storage.api("POST", { body: { op: "set_password", password, ...(current ? { current } : {}) }, quiet: true });
       if (!res.ok) throw new Error((data && data.error) || "Could not save the password.");
+      // changing a password can end the sessions that were open; sign in again with the new one so the person simply carries on
+      if (email) { try { await auth.auth.signInWithPassword({ email, password }); } catch { /* the next request will ask them to sign in */ } }
     },
     // Profile → Change password: the current password is checked first, so a borrowed open session cannot change it
     async changeOwnPassword(current, next) {
-      const email = storage.user && storage.user.email;
-      if (!email) throw new Error("You are not signed in.");
-      const { error } = await auth.auth.signInWithPassword({ email, password: current });
-      if (error) throw new Error(/invalid login/i.test(error.message) ? "Your current password is wrong." : error.message);
-      await storage.changePassword(next);
+      if (!(storage.user && storage.user.email)) throw new Error("You are not signed in.");
+      await storage.changePassword(next, current); // the SERVER checks the current password
     },
     // "Request access": a public call, no sign-in
     async requestAccess(fields) {

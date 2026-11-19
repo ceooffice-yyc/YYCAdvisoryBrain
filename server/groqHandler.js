@@ -8,7 +8,7 @@
 import { forwardToGroq, loadGroqKeys } from './groqProxy.js';
 import { authenticate } from './auth.js';
 import { dbConfigured } from './db.js';
-import { hit, clientIp, limitFrom } from './rateLimit.js';
+import { hit, waitFor, clientIp, limitFrom } from './rateLimit.js';
 
 export const ALLOWED_MODEL = 'openai/gpt-oss-120b';
 const MAX_MESSAGES = 4;
@@ -16,6 +16,15 @@ const MAX_CONTENT_CHARS = 60_000;   // one extraction part is about 27,000 chara
 const MAX_TOKENS = 8_000;
 
 const json = (status, body, headers = {}) => ({ status, body, headers });
+/* With no sign-in the proxy is meant for this PC only: the request must be addressed to it by a local name (unless HOST opens it to the LAN on purpose). */
+function localHost(headers = {}, env = process.env) {
+  const bind = String(env.HOST || '127.0.0.1').trim();
+  if (bind && !['127.0.0.1', 'localhost', '::1'].includes(bind)) return true; // deliberately served to the network (npm start with HOST=0.0.0.0)
+  const h = Object.fromEntries(Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+  const host = String(h.host || '').toLowerCase().replace(/:\d+$/, '');
+  return !host || ['localhost', '127.0.0.1', '[::1]'].includes(host);
+}
+
 const hosted = (env) => !!String(env.VERCEL || '').trim() || String(env.NODE_ENV || '').trim() === 'production';
 
 /* Rebuilds the request from the fields the app really uses; anything else (other models, tools, streaming, extra options) is dropped or refused.
@@ -58,18 +67,22 @@ export async function handleGroq(req, opts = {}) {
   if (method !== 'POST') return json(405, { error: 'Method not allowed' }, { Allow: 'GET, POST' });
 
   let who;
+  const ip = req.ip || clientIp(req.headers);
   if (withDb) {
+    const blocked = waitFor('auth-fail', ip, 30, 60_000, now()); // already over the wrong-token limit: refused before Supabase is asked again
+    if (blocked) return json(429, { error: 'Too many attempts. Please wait a moment.' }, { 'Retry-After': String(blocked) });
     const a = await auth(req.headers || {}, env, now());
     if (!a.ok) {
-      const wait = hit('auth-fail', req.ip || clientIp(req.headers), 30, 60_000, now());
-      return wait ? json(429, { error: 'Too many attempts. Please wait a moment.' }, { 'Retry-After': String(wait) }) : json(a.status, { error: a.error, ...(a.code ? { code: a.code } : {}) });
+      hit('auth-fail', ip, 30, 60_000, now());
+      return json(a.status, { error: a.error, ...(a.code ? { code: a.code } : {}) });
     }
     if (!a.user.isAdmin) return json(403, { error: 'You need an admin account to do that.' });
     who = a.user.id || a.user.email;
   } else {
     // No sign-in configured. Fine on your own PC (the server only listens on this machine); never on a hosted site, where it would be open to everyone.
     if (hosted(env)) return json(503, { error: 'The AI service needs sign-in to be configured on this site (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY).' });
-    who = `ip:${req.ip || clientIp(req.headers)}`;
+    if (!localHost(req.headers, env)) return json(403, { error: 'This address is not allowed.' });
+    who = `ip:${ip}`;
   }
 
   const wait = hit('groq', who, limitFrom(env, 'GROQ_RATE_PER_MIN', 300), 60_000, now());

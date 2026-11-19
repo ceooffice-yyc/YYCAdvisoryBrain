@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as acct from '../server/accounts.js';
 import { handleDb } from '../server/db.js';
 import { authenticate, _test as authTest } from '../server/auth.js';
+import { _test as rateLimits } from '../server/rateLimit.js';
 
 // A small in-memory stand-in for the Supabase client: just enough of the table queries and the auth admin calls the account code uses.
 function fakeSb({ users = [], requests = [] } = {}) {
@@ -14,6 +15,7 @@ function fakeSb({ users = [], requests = [] } = {}) {
     const api = {
       select() { return api; }, order() { return api; },
       eq(k, v) { filters.push((r) => r[k] === v); return api; },
+      lt(k, v) { filters.push((r) => r[k] < v); return api; },
       limit(n) { lim = n; return api; },
       insert(row) { mode = 'insert'; patch = row; return api; },
       update(p) { mode = 'update'; patch = p; return api; },
@@ -21,14 +23,14 @@ function fakeSb({ users = [], requests = [] } = {}) {
         const rows = tables[name] || (tables[name] = []);
         if (mode === 'insert') { rows.push({ id: `r${seq++}`, status: 'pending', requested_at: new Date().toISOString(), ...patch }); return resolve({ data: null, error: null }); }
         const hit = rows.filter((r) => filters.every((f) => f(r)));
-        if (mode === 'update') { hit.forEach((r) => Object.assign(r, patch)); return resolve({ data: null, error: null }); }
+        if (mode === 'update') { hit.forEach((r) => Object.assign(r, patch)); return resolve({ data: hit.map((r) => ({ id: r.id })), error: null }); }
         return resolve({ data: hit.slice(0, lim), error: null });
       },
     };
     return api;
   };
   return {
-    tables, sent,
+    tables, sent, users,
     from: table,
     auth: {
       resetPasswordForEmail: async (email) => { sent.resets.push(email); return { error: null }; },
@@ -36,7 +38,8 @@ function fakeSb({ users = [], requests = [] } = {}) {
         listUsers: async ({ page }) => ({ data: { users: page === 1 ? users : [] }, error: null }),
         getUserById: async (id) => { const u = users.find((x) => x.id === id); return u ? { data: { user: u }, error: null } : { data: null, error: { message: 'not found' } }; },
         inviteUserByEmail: async (email) => { const u = { id: `u${seq++}`, email, app_metadata: {}, email_confirmed_at: null }; users.push(u); sent.invites.push(email); return { data: { user: u }, error: null }; },
-        createUser: async ({ email, password, email_confirm, app_metadata }) => { const u = { id: `u${seq++}`, email, app_metadata: { ...app_metadata }, email_confirmed_at: email_confirm ? new Date().toISOString() : null, _pw: password }; users.push(u); return { data: { user: u }, error: null }; },
+        createUser: async ({ email, password, password_hash, email_confirm, app_metadata, ban_duration }) => { if (users.some((x) => x.email === email)) return { data: null, error: { message: 'A user with this email address has already been registered' } }; const u = { id: `u${seq++}`, email, _hash: password_hash, app_metadata: { ...app_metadata }, email_confirmed_at: email_confirm ? new Date().toISOString() : null, banned_until: ban_duration && ban_duration !== 'none' ? new Date(Date.now() + 1e12).toISOString() : null, _pw: password }; users.push(u); return { data: { user: u }, error: null }; },
+        deleteUser: async (id) => { const i = users.findIndex((x) => x.id === id); if (i >= 0) users.splice(i, 1); return { data: {}, error: null }; },
         updateUserById: async (id, attrs) => {
           const u = users.find((x) => x.id === id);
           if (attrs.password) u._pw = attrs.password;
@@ -181,8 +184,10 @@ test('database API: "request access" needs no sign-in, but its failures never sh
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
   const bad = await handleDb({ method: 'POST', headers: { 'x-forwarded-for': '3.3.3.3' }, body: { op: 'access_request', name: '', email: 'q' } }, { env, now: () => T });
   assert.equal(bad.status, 400);
-  const down = await handleDb({ method: 'POST', headers: { 'x-forwarded-for': '3.3.3.4' }, body: { op: 'access_request', name: 'Q', email: 'q@yycadvisors.com' } }, { env, now: () => T });
+  const down = await handleDb({ method: 'POST', headers: { 'x-forwarded-for': '3.3.3.4' }, body: { op: 'access_request', name: 'Q', email: 'q@yycadvisors.com', password: 'a long enough passphrase' } }, { env, now: () => T });
   assert.equal(down.status, 502);
+  const weak = await handleDb({ method: 'POST', headers: { 'x-forwarded-for': '3.3.3.5' }, body: { op: 'access_request', name: 'Q', email: 'q@yycadvisors.com', password: 'short' } }, { env, now: () => T });
+  assert.equal(weak.status, 400, 'with emails off a password is required');
   assert.equal(down.body.error, 'The request could not be saved. Please try again later.');
 });
 
@@ -191,7 +196,8 @@ test('no email (the default): accounts are created with a one-time temporary pas
   assert.equal(await code(acct.inviteUser(sb, ENV_OFF, actor, { email: 'a@yycadvisors.com' })), 400, 'email invites are off');
   assert.equal(await code(acct.sendReset(sb, ENV_OFF, actor, { id: 'u-boss' })), 400, 'reset emails are off');
   assert.equal(await code(acct.createUser(sb, ENV_OFF, actor, { email: 'a@example.org' })), 400);
-  assert.equal(await code(acct.createUser(sb, ENV_OFF, actor, { email: 'boss@yycadvisors.com' })), 409);
+  assert.equal(await code(acct.createUser(sb, ENV_OFF, actor, { email: 'two@yycadvisors.com' })), 409);
+  assert.equal(await code(acct.createUser(sb, ENV_OFF, actor, { email: 'boss@yycadvisors.com' })), 403, 'an owner address is never handed to an ordinary admin');
   const out = await acct.createUser(sb, ENV_OFF, actor, { email: 'New@YYCAdvisors.com', role: 'admin' });
   assert.match(out.password, /^[a-zA-Z2-9]{4}(-[a-zA-Z2-9]{4}){3}$/);
   const made = (await acct.listUsers(sb, ENV_OFF)).find((u) => u.email === 'new@yycadvisors.com');
@@ -216,7 +222,7 @@ test('temporary password for an existing person: not your own, and not a server-
 test('choosing your own password: length rules, applied by the server, lifts the temporary-password restriction', async () => {
   const u = person('u-t', 't@yycadvisors.com', { app_metadata: { must_change_password: true } });
   const sb = fakeSb({ users: [u] });
-  const me = { id: 'u-t', email: 't@yycadvisors.com' };
+  const me = { id: 'u-t', email: 't@yycadvisors.com', mustChangePassword: true }; // signed in with the temporary password, so no "current password" is asked
   assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'short' })), 400);
   assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'x'.repeat(73) })), 400);
   assert.equal(await code(acct.setOwnPassword(sb, me, { password: 't@yycadvisors.com' })), 400);
@@ -229,7 +235,7 @@ test('choosing your own password: length rules, applied by the server, lifts the
 test('approving a request without email creates the account and hands the temporary password to the admin', async () => {
   acct._test.resetLimits();
   const sb = fakeSb({ users: [boss, second] });
-  await acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com' }, '4.4.4.4');
+  sb.tables.access_requests.push({ id: 'old-1', email: 'ann@yycadvisors.com', name: 'Ann', status: 'pending', requested_at: new Date().toISOString() }); // a request with no password behind it
   const out = await acct.decideRequest(sb, ENV_OFF, actor, { id: sb.tables.access_requests[0].id, decision: 'approve', role: 'viewer' });
   assert.deepEqual([out.status, sb.sent.invites.length, typeof out.password], ['approved', 0, 'string']);
   assert.ok((await acct.listUsers(sb, ENV_OFF)).some((u) => u.email === 'ann@yycadvisors.com' && u.mustChange));
@@ -258,4 +264,150 @@ test('the public status tells the sign-in screen whether emails are used', async
   const base = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y' };
   assert.equal((await handleDb({ method: 'GET', query: { action: 'status' }, headers: {} }, { env: base })).body.emailInvites, false);
   assert.equal((await handleDb({ method: 'GET', query: { action: 'status' }, headers: {} }, { env: { ...base, EMAIL_INVITES: 'on' } })).body.emailInvites, true);
+});
+
+test('no email: the person chooses their own password when asking; NO account exists until an admin approves', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com' }, '5.5.5.1')), 400, 'no password');
+  assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com', password: 'short' }, '5.5.5.2')), 400);
+  assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com', password: 'ann@yycadvisors.com' }, '5.5.5.3')), 400, 'the email as the password');
+  await acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'Ann@YYCAdvisors.com', password: 'my own long password' }, '5.5.5.4');
+  assert.equal((await acct.listUsers(sb, ENV_OFF)).some((u) => u.email === 'ann@yycadvisors.com'), false, 'asking creates no account, so there is nothing to probe or squat');
+  const row = sb.tables.access_requests[0];
+  assert.match(row.password_hash, /^\$2[aby]\$10\$/, 'only a bcrypt hash is kept');
+  assert.ok(!JSON.stringify([sb.tables.access_requests, sb.tables.account_events]).includes('my own long password'), 'the password itself is in neither the request nor the trail');
+  const listed = (await acct.listRequests(sb, ENV_OFF))[0];
+  assert.deepEqual([listed.hasPassword, 'password_hash' in listed], [true, false], 'the admin screen is told a password exists, never the hash');
+
+  const storedHash = row.password_hash;
+  const out = await acct.decideRequest(sb, ENV_OFF, actor, { id: row.id, decision: 'approve', role: 'viewer' });
+  assert.deepEqual([out.status, out.activated, out.password], ['approved', true, undefined], 'no temporary password is involved');
+  const after = (await acct.listUsers(sb, ENV_OFF)).find((u) => u.email === 'ann@yycadvisors.com');
+  assert.deepEqual([after.disabled, after.role, after.accepted, after.mustChange], [false, 'viewer', true, false]);
+  assert.equal(sb.users.find((u) => u.email === 'ann@yycadvisors.com')._hash, storedHash, 'the account was created from the stored hash');
+  assert.equal(row.password_hash, null, 'the hash is erased once it has been used');
+});
+
+test('no email: a request can never touch an existing account or replace an earlier request', async () => {
+  acct._test.resetLimits();
+  const victim = person('u-vic', 'victim@yycadvisors.com', { _pw: 'the real password' });
+  const sb = fakeSb({ users: [boss, second, victim] });
+  assert.deepEqual(await acct.createRequest(sb, ENV_OFF, { name: 'Not Them', email: 'victim@yycadvisors.com', password: 'attacker password 1' }, '6.6.6.1'), { ok: true }, 'the same answer as for anyone');
+  assert.equal(victim._pw, 'the real password');
+  // if an admin approved it by mistake, the existing account is still untouched and the request is simply closed
+  const out = await acct.decideRequest(sb, ENV_OFF, actor, { id: sb.tables.access_requests[0].id, decision: 'approve' });
+  assert.deepEqual([out.status, out.activated, victim._pw, sb.users.filter((u) => u.email === 'victim@yycadvisors.com').length], ['approved', undefined, 'the real password', 1]);
+  // a second request for an address already waiting does not replace the first password
+  await acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com', password: 'first long password' }, '6.6.6.2');
+  const first = sb.tables.access_requests.find((r) => r.email === 'ann@yycadvisors.com').password_hash;
+  await acct.createRequest(sb, ENV_OFF, { name: 'Ann', email: 'ann@yycadvisors.com', password: 'second long password' }, '6.6.6.3');
+  const rows = sb.tables.access_requests.filter((r) => r.email === 'ann@yycadvisors.com');
+  assert.deepEqual([rows.length, rows[0].password_hash], [1, first]);
+});
+
+test('no email: rejecting erases the stored hash, and the address can ask again', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  await acct.createRequest(sb, ENV_OFF, { name: 'Bob', email: 'bob@yycadvisors.com', password: 'bob long password' }, '7.7.7.1');
+  const row = sb.tables.access_requests[0];
+  await acct.decideRequest(sb, ENV_OFF, actor, { id: row.id, decision: 'reject' });
+  assert.deepEqual([row.status, row.password_hash], ['rejected', null]);
+  assert.equal(sb.users.some((u) => u.email === 'bob@yycadvisors.com'), false);
+  await acct.createRequest(sb, ENV_OFF, { name: 'Bob', email: 'bob@yycadvisors.com', password: 'bob second password' }, '7.7.7.2');
+  assert.equal(sb.tables.access_requests.filter((r) => r.status === 'pending').length, 1, 'they can ask again');
+});
+
+test('with emails on, a request needs no password and stores none', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  await acct.createRequest(sb, ENV, { name: 'Eve', email: 'eve@yycadvisors.com' }, '8.8.8.1');
+  assert.equal(sb.tables.access_requests[0].password_hash, null);
+  assert.equal(sb.users.some((u) => u.email === 'eve@yycadvisors.com'), false);
+});
+
+test('review H1 / M1: an address that is an owner in the server settings cannot be obtained through a request or by another admin', async () => {
+  acct._test.resetLimits();
+  const env = { ...ENV_OFF, ADMIN_EMAILS: 'boss@yycadvisors.com, second.owner@yycadvisors.com' };
+  const sb = fakeSb({ users: [boss, second] });
+  // the public form quietly keeps nothing for an owner address
+  assert.deepEqual(await acct.createRequest(sb, env, { name: 'Second Owner', email: 'second.owner@yycadvisors.com', password: 'stranger password 1' }, '9.1.1.1'), { ok: true });
+  assert.equal(sb.tables.access_requests.length, 0);
+  // a request row for an owner address that got in some other way: only an owner may approve it
+  sb.tables.access_requests.push({ id: 'own-1', email: 'second.owner@yycadvisors.com', name: 'x', status: 'pending', requested_at: new Date().toISOString(), password_hash: '$2b$10$abcdefghijklmnopqrstuuJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8rJ8' });
+  assert.equal(await code(acct.decideRequest(sb, env, actor, { id: 'own-1', decision: 'approve' })), 403, 'an ordinary admin cannot');
+  assert.equal(sb.tables.access_requests[0].status, 'pending', 'and the request is left as it was');
+  assert.equal((await acct.listRequests(sb, env))[0].isOwner, true, 'the admin screen is told it is an owner address');
+  // an ordinary admin cannot create the owner's account and so receive its temporary password
+  assert.equal(await code(acct.createUser(sb, env, actor, { email: 'second.owner@yycadvisors.com' })), 403);
+  assert.equal(sb.users.some((u) => u.email === 'second.owner@yycadvisors.com'), false);
+  // an owner can
+  assert.equal(await code(acct.createUser(sb, env, { id: 'u-boss', email: 'boss@yycadvisors.com' }, { email: 'second.owner@yycadvisors.com' })), 200);
+});
+
+test('review M3: outsiders cannot use up the shared hourly budget, and stale requests are closed', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  const T0 = 1_800_000_000_000;
+  for (let i = 0; i < 70; i++) await acct.createRequest(sb, ENV_OFF, { name: 'Spam', email: `s${i}@example.org`, password: 'a long enough passphrase' }, `10.0.${i}.1`, T0 + i); // 70 different addresses, wrong domain
+  assert.equal(await code(acct.createRequest(sb, ENV_OFF, { name: 'Real', email: 'real@yycadvisors.com', password: 'a long enough passphrase' }, '10.9.9.9', T0 + 100)), 200, 'a real person still gets through');
+  // an old undecided request is closed the next time somebody asks
+  sb.tables.access_requests.push({ id: 'old', email: 'old@yycadvisors.com', name: 'Old', status: 'pending', requested_at: new Date(T0 - 40 * 86_400_000).toISOString(), password_hash: 'h' });
+  await acct.createRequest(sb, ENV_OFF, { name: 'Next', email: 'next@yycadvisors.com', password: 'a long enough passphrase' }, '10.9.9.8', T0 + 200);
+  const old = sb.tables.access_requests.find((r) => r.id === 'old');
+  assert.deepEqual([old.status, old.decided_by, old.password_hash], ['rejected', 'expired', null]);
+});
+
+test('review L9: a request is decided once, even if two admins press at the same moment', async () => {
+  acct._test.resetLimits();
+  const sb = fakeSb({ users: [boss, second] });
+  await acct.createRequest(sb, ENV_OFF, { name: 'Cat', email: 'cat@yycadvisors.com', password: 'cat long password' }, '11.1.1.1');
+  const id = sb.tables.access_requests[0].id;
+  const results = await Promise.all([
+    code(acct.decideRequest(sb, ENV_OFF, actor, { id, decision: 'approve' })),
+    code(acct.decideRequest(sb, ENV_OFF, { id: 'u-boss', email: 'boss@yycadvisors.com' }, { id, decision: 'reject' })),
+  ]);
+  assert.deepEqual([...results].sort(), [200, 409], 'one wins, the other is told it was already decided');
+  const exists = sb.users.some((u) => u.email === 'cat@yycadvisors.com');
+  assert.equal(exists, sb.tables.access_requests[0].status === 'approved', 'the account exists exactly when the request ended approved');
+  // two approvals at once: one does the work, the other is told it was already decided
+  await acct.createRequest(sb, ENV_OFF, { name: 'Dan', email: 'dan@yycadvisors.com', password: 'dan long password' }, '11.1.1.2');
+  const danId = sb.tables.access_requests.find((r) => r.email === 'dan@yycadvisors.com').id;
+  const both = await Promise.all([
+    code(acct.decideRequest(sb, ENV_OFF, actor, { id: danId, decision: 'approve' })),
+    code(acct.decideRequest(sb, ENV_OFF, { id: 'u-boss', email: 'boss@yycadvisors.com' }, { id: danId, decision: 'approve' })),
+  ]);
+  assert.deepEqual([...both].sort(), [200, 409]);
+  assert.equal(sb.users.filter((u) => u.email === 'dan@yycadvisors.com').length, 1);
+});
+
+test('review M6: changing a password needs the current one, checked by the server', async () => {
+  rateLimits.reset();
+  const u = person('u-p', 'p@yycadvisors.com', { _pw: 'old password here' });
+  const sb = fakeSb({ users: [u] });
+  const me = { id: 'u-p', email: 'p@yycadvisors.com', mustChangePassword: false };
+  const checkPassword = async (env, email, current) => current === u._pw;
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'a brand new password' }, {}, { checkPassword })), 400, 'no current password: refused (a stolen session is not enough)');
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'a brand new password', current: 'wrong guess' }, {}, { checkPassword })), 400);
+  assert.equal(u._pw, 'old password here');
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'old password here', current: 'old password here' }, {}, { checkPassword })), 400, 'the new one must differ');
+  assert.equal(await code(acct.setOwnPassword(sb, me, { password: 'a brand new password', current: 'old password here' }, {}, { checkPassword })), 200);
+  assert.equal(u._pw, 'a brand new password');
+  // guessing the current password is limited
+  rateLimits.reset();
+  const tries = [];
+  for (let i = 0; i < 10; i++) tries.push(await code(acct.setOwnPassword(sb, me, { password: 'another new password', current: `guess ${i}` }, {}, { checkPassword })));
+  assert.deepEqual([tries[0], tries[9]], [400, 429]);
+});
+
+test('review L5 / L3: made-up operation names are refused cleanly, and malformed sections are dropped', async () => {
+  rateLimits.reset();
+  const T = 1_700_000_000_000;
+  const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y' };
+  authTest.cache.clear();
+  authTest.cache.set('adm', { at: T, user: { id: 'a', email: 'a@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: { role: 'admin' } } });
+  for (const op of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    const out = await handleDb({ method: 'POST', headers: { authorization: 'Bearer adm' }, body: { op } }, { env, now: () => T });
+    assert.deepEqual([out.status, out.body.error], [400, 'Unknown operation'], op);
+  }
 });

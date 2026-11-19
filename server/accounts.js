@@ -14,6 +14,9 @@
 //                           It must also be listed in Supabase → Authentication → URL Configuration → Redirect URLs.
 
 import { randomInt } from 'node:crypto';
+import bcrypt from 'bcryptjs';
+import { createClient } from '@supabase/supabase-js';
+import { hit } from './rateLimit.js';
 
 export class AccountError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const fail = (status, message) => new AccountError(status, message);
@@ -40,11 +43,20 @@ export async function logEvent(sb, actor, action, target, detail = {}) {
   try { await sb.from('account_events').insert({ actor, action, target, detail }); } catch (e) { console.error('could not write the account trail:', e.message); }
 }
 
+const BAN = '876000h'; // "switched off": about 100 years
+/* -> a message when the password is not acceptable, else '' */
+export function passwordProblem(password, email = '') {
+  const pw = typeof password === 'string' ? password : '';
+  if (pw.length < 10) return 'Choose a password of at least 10 characters.';
+  if (pw.length > 72) return 'Use 72 characters or fewer for the password.';
+  if (pw.trim().toLowerCase() === String(email).toLowerCase()) return 'The password cannot be your email address.';
+  return '';
+}
+
 /* ── people ── */
 const isBanned = (u, now = Date.now()) => !!u.banned_until && new Date(u.banned_until).getTime() > now;
 
-export async function listUsers(sb, env = process.env, now = Date.now()) {
-  const admins = new Set(list(env.ADMIN_EMAILS));
+async function rawUsers(sb) {
   const users = [];
   for (let page = 1; page <= 20; page++) {
     const { data, error } = await sb.auth.admin.listUsers({ page, perPage: 200 });
@@ -53,6 +65,12 @@ export async function listUsers(sb, env = process.env, now = Date.now()) {
     users.push(...got);
     if (got.length < 200) break;
   }
+  return users;
+}
+
+export async function listUsers(sb, env = process.env, now = Date.now()) {
+  const admins = new Set(list(env.ADMIN_EMAILS));
+  const users = await rawUsers(sb);
   return users.map((u) => {
     const email = normEmail(u.email);
     const fromEnv = admins.has(email);
@@ -63,6 +81,7 @@ export async function listUsers(sb, env = process.env, now = Date.now()) {
       disabled: isBanned(u, now),
       accepted: !!(u.email_confirmed_at || u.confirmed_at), // false = invited, link not opened yet
       mustChange: !!(u.app_metadata && u.app_metadata.must_change_password), // has a temporary password and has not chosen their own yet
+      pending: !!(u.app_metadata && u.app_metadata.pending), // asked for access with their own password; switched off until an admin approves
       invitedAt: u.invited_at || null, lastSignInAt: u.last_sign_in_at || null, createdAt: u.created_at || null,
     };
   }).sort((a, b) => a.email.localeCompare(b.email));
@@ -106,6 +125,7 @@ export async function createUser(sb, env, actor, { email, role = 'viewer' }) {
   if (!validEmail(to)) throw fail(400, 'Enter a valid email address.');
   if (!ROLES.includes(role)) throw fail(400, 'Choose viewer or admin.');
   if (!domainAllowed(to, env)) throw fail(400, 'That email address is not at a domain allowed to use the library.');
+  guardEnvAdmin(env, actor, to); // an owner's account (and its temporary password) is only ever handed to another owner
   if ((await listUsers(sb, env)).some((u) => u.email === to)) throw fail(409, 'That person already has an account.');
   const password = makeTempPassword();
   const { error } = await sb.auth.admin.createUser({ email: to, password, email_confirm: true, app_metadata: { ...(role === 'admin' ? { role: 'admin' } : {}), must_change_password: true } });
@@ -130,11 +150,25 @@ export async function tempPassword(sb, env, actor, { id }) {
 }
 
 /* The person chooses their own password (the first sign-in after a temporary one). The server applies it and clears the flag. */
-export async function setOwnPassword(sb, user, { password }) {
+/* Is this really the account's current password? Asked of Supabase with the public key (never the service key), in a throwaway client. */
+async function checkCurrentPassword(env, email, current) {
+  const probe = createClient(String(env.SUPABASE_URL).trim(), String(env.SUPABASE_ANON_KEY).trim(), { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const { error } = await probe.auth.signInWithPassword({ email, password: current });
+  return !error;
+}
+
+export async function setOwnPassword(sb, user, { password, current }, env = process.env, opts = {}) {
+  // Someone signed in with a temporary password is already proving it. Everyone else must give the current password, so a borrowed
+  // open session or a stolen token is not enough to take the account over.
+  if (!user.mustChangePassword) {
+    if (typeof current !== 'string' || !current) throw fail(400, 'Enter your current password.');
+    if (hit('pw-check', user.id, 8, 900_000)) throw fail(429, 'Too many attempts. Please wait a few minutes.');
+    if (!(await (opts.checkPassword || checkCurrentPassword)(env, user.email, current))) throw fail(400, 'Your current password is wrong.');
+    if (current === password) throw fail(400, 'Choose a password different from the current one.');
+  }
   const pw = typeof password === 'string' ? password : '';
-  if (pw.length < 10) throw fail(400, 'Use at least 10 characters.');
-  if (pw.length > 72) throw fail(400, 'Use 72 characters or fewer.');
-  if (pw.trim().toLowerCase() === String(user.email || '').toLowerCase()) throw fail(400, 'The password cannot be your email address.');
+  const problem = passwordProblem(pw, user.email || '');
+  if (problem) throw fail(400, problem);
   const target = await findUser(sb, user.id);
   must(await sb.auth.admin.updateUserById(target.id, { password: pw, app_metadata: { ...(target.app_metadata || {}), must_change_password: false } }), 'Saving the password');
   await logEvent(sb, normEmail(target.email), 'password_changed', normEmail(target.email));
@@ -176,7 +210,8 @@ export async function setDisabled(sb, env, actor, { id, disabled }) {
     left.delete(email);
     if (!left.size) throw fail(400, 'There must always be at least one active admin.');
   }
-  must(await sb.auth.admin.updateUserById(target.id, { ban_duration: disabled ? '876000h' : 'none' }), disabled ? 'Disabling the account' : 'Enabling the account');
+  if (target.app_metadata && target.app_metadata.pending) throw fail(400, 'This person is waiting for approval. Approve or reject their request instead.');
+  must(await sb.auth.admin.updateUserById(target.id, { ban_duration: disabled ? BAN : 'none' }), disabled ? 'Disabling the account' : 'Enabling the account');
   await logEvent(sb, actor.email, disabled ? 'disable' : 'enable', email);
   return { email, disabled: !!disabled };
 }
@@ -199,35 +234,55 @@ const recentRequests = new Map(); // ip -> timestamps (per server instance)
 const HOURLY_PER_IP = 5;
 const HOURLY_TOTAL = 60;
 const MAX_PENDING = 300;
+const STALE_DAYS = 30; // a request nobody decided in this time is closed, so old ones cannot fill the list for ever
 let totalHits = [];
+const isOwner = (email, env) => list(env.ADMIN_EMAILS).includes(normEmail(email));
 
-/* A public operation: no sign-in. It answers the same whether or not the address could ever be approved, so it cannot be used to find out who has an account. */
-export async function createRequest(sb, env, { name, email, note }, ip = 'unknown', now = Date.now()) {
+/* A public operation: no sign-in. It answers the same whether or not the address could ever be approved, and it creates NO account:
+   with emails off the person's chosen password is kept only as a bcrypt hash on the request (a server-only table) until an admin approves.
+   So the form cannot be used to find out who has an account, to take an address, or to fill the sign-in system with junk accounts. */
+export async function createRequest(sb, env, { name, email, note, password }, ip = 'unknown', now = Date.now()) {
   const to = normEmail(email);
   const who = String(name || '').trim().replace(/\s+/g, ' ').slice(0, 120);
   if (!who || !validEmail(to)) throw fail(400, 'Enter your name and a valid work email.');
+  const ownPassword = !emailOn(env); // without email there is no link to set a password later, so the person chooses it now
+  if (ownPassword) { const problem = passwordProblem(password, to); if (problem) throw fail(400, problem); }
 
   const hits = (recentRequests.get(ip) || []).filter((t) => now - t < 3_600_000);
-  totalHits = totalHits.filter((t) => now - t < 3_600_000);
-  if (hits.length >= HOURLY_PER_IP || totalHits.length >= HOURLY_TOTAL) throw fail(429, 'Too many requests. Please try again later.');
-  hits.push(now); totalHits.push(now);
+  if (hits.length >= HOURLY_PER_IP) throw fail(429, 'Too many requests. Please try again later.');
+  hits.push(now);
   recentRequests.set(ip, hits);
   if (recentRequests.size > 2000) for (const [k, v] of recentRequests) if (!v.some((t) => now - t < 3_600_000)) recentRequests.delete(k);
 
+  // The hash is worked out for every request, kept or not, so the time taken says nothing about the address.
+  const passwordHash = ownPassword ? await bcrypt.hash(password, 10) : null;
   const done = { ok: true };
-  if (!domainAllowed(to, env)) return done; // quietly ignored: the page shows the same message
+  // Quietly ignored (the page shows the same message): an address outside the allowed domains, and an address that is an admin in the
+  // server settings. Such an owner account is never created from a public form: another owner creates it in the Users tab.
+  if (!domainAllowed(to, env) || isOwner(to, env)) return done;
+
+  // only requests that could be kept count against the shared hourly budget, so strangers cannot use it up for everyone
+  totalHits = totalHits.filter((t) => now - t < 3_600_000);
+  if (totalHits.length >= HOURLY_TOTAL) throw fail(429, 'Too many requests. Please try again later.');
+  totalHits.push(now);
+
+  const cutoff = new Date(now - STALE_DAYS * 86_400_000).toISOString();
+  try { await sb.from('access_requests').update({ status: 'rejected', decided_by: 'expired', decided_at: new Date(now).toISOString(), password_hash: null }).eq('status', 'pending').lt('requested_at', cutoff); } catch { /* tidying up is best effort */ }
   const pending = must(await sb.from('access_requests').select('id').eq('status', 'pending').limit(MAX_PENDING + 1), 'Reading requests');
   if (pending.length > MAX_PENDING) throw fail(429, 'Too many pending requests. Please contact your administrator.');
   const dup = must(await sb.from('access_requests').select('id').eq('status', 'pending').eq('email', to).limit(1), 'Reading requests');
-  if (dup.length) return done;
-  must(await sb.from('access_requests').insert({ email: to, name: who, note: String(note || '').trim().slice(0, 500) || null }), 'Saving the request');
+  if (dup.length) return done; // the first request stands: a second one cannot replace its password
+  must(await sb.from('access_requests').insert({ email: to, name: who, note: String(note || '').trim().slice(0, 500) || null, password_hash: passwordHash }), 'Saving the request');
   await logEvent(sb, to, 'request', to, { name: who });
   return done;
 }
 
-export async function listRequests(sb) {
-  const rows = must(await sb.from('access_requests').select('id,email,name,note,status,requested_at,decided_by,decided_at').order('requested_at', { ascending: false }).limit(200), 'Reading requests');
-  return rows.sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+/* The password hash never leaves the server: the list only says whether a request carries one. */
+export async function listRequests(sb, env = process.env) {
+  const rows = must(await sb.from('access_requests').select('id,email,name,note,status,requested_at,decided_by,decided_at,password_hash').order('requested_at', { ascending: false }).limit(200), 'Reading requests');
+  return rows
+    .map(({ password_hash: hash, ...r }) => ({ ...r, hasPassword: r.status === 'pending' && !!hash, isOwner: isOwner(r.email, env) }))
+    .sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
 }
 
 export async function decideRequest(sb, env, actor, { id, decision, role = 'viewer', mode }, headers = {}) {
@@ -236,16 +291,39 @@ export async function decideRequest(sb, env, actor, { id, decision, role = 'view
   const req = rows[0];
   if (!req) throw fail(404, 'That request was not found.');
   if (req.status !== 'pending') throw fail(409, `That request was already ${req.status}.`);
+  const to = normEmail(req.email);
   let password;
+  let activated = false;
   if (decision === 'approve') {
+    if (!ROLES.includes(role)) throw fail(400, 'Choose viewer or admin.');
+    guardEnvAdmin(env, actor, to); // only an owner may approve an address that is an owner in the server settings
+    // Claim the request first: if two admins press at once (or one approves while the other rejects), only one of them gets past this line.
+    const claimed = must(await sb.from('access_requests').update({ status: 'approved', decided_by: actor.email, decided_at: nowIso() }).eq('id', req.id).eq('status', 'pending').select('id'), 'Saving the decision');
+    if (!claimed || !claimed.length) throw fail(409, 'That request was already decided.');
     try {
-      if ((mode || (emailOn(env) ? 'email' : 'password')) === 'email') await inviteUser(sb, env, actor, { email: req.email, role }, headers);
-      else password = (await createUser(sb, env, actor, { email: req.email, role })).password;
-    } catch (e) { if (!(e instanceof AccountError && e.status === 409)) throw e; } // already has an account: the request is simply closed
+      const how = mode || (emailOn(env) ? 'email' : 'password');
+      if (how === 'email') await inviteUser(sb, env, actor, { email: to, role }, headers);
+      else if (req.password_hash) {
+        // the person chose their password when asking: the account is created now, from the stored hash, and they can sign in at once
+        if (!domainAllowed(to, env)) throw fail(400, 'That email address is not at a domain allowed to use the library.');
+        if ((await listUsers(sb, env)).some((u) => u.email === to)) throw fail(409, 'That person already has an account.');
+        const { error } = await sb.auth.admin.createUser({ email: to, password_hash: req.password_hash, email_confirm: true, app_metadata: role === 'admin' ? { role: 'admin' } : {} });
+        if (error) { if (/already|registered|exists/i.test(error.message)) throw fail(409, 'That person already has an account.'); throw fail(502, `The account could not be created: ${error.message}`); }
+        activated = true;
+      } else password = (await createUser(sb, env, actor, { email: to, role })).password;
+    } catch (e) {
+      if (!(e instanceof AccountError && e.status === 409)) { // it did not work: put the request back so it can be tried again
+        try { await sb.from('access_requests').update({ status: 'pending', decided_by: null, decided_at: null }).eq('id', req.id); } catch { /* best effort */ }
+        throw e;
+      } // 409 = already has an account: the request is simply closed
+    }
+    try { await sb.from('access_requests').update({ password_hash: null }).eq('id', req.id); } catch { /* the hash is no longer needed */ }
+  } else {
+    const closed = must(await sb.from('access_requests').update({ status: 'rejected', decided_by: actor.email, decided_at: nowIso(), password_hash: null }).eq('id', req.id).eq('status', 'pending').select('id'), 'Saving the decision');
+    if (!closed || !closed.length) throw fail(409, 'That request was already decided.');
   }
-  must(await sb.from('access_requests').update({ status: decision === 'approve' ? 'approved' : 'rejected', decided_by: actor.email, decided_at: nowIso() }).eq('id', req.id), 'Saving the decision');
-  await logEvent(sb, actor.email, decision, req.email, decision === 'approve' ? { role } : {});
-  return { email: req.email, status: decision === 'approve' ? 'approved' : 'rejected', ...(password ? { password } : {}) };
+  await logEvent(sb, actor.email, decision, to, decision === 'approve' ? { role } : {});
+  return { email: to, status: decision === 'approve' ? 'approved' : 'rejected', ...(password ? { password } : {}), ...(activated ? { activated: true } : {}) };
 }
 
 export async function listEvents(sb, limit = 100) {

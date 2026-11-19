@@ -1,31 +1,47 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import App from './App.jsx'
 
 // Decides what to show before the app: with the shared database (Supabase) people must sign in first; without it the app opens directly.
 // Sign-in screen: sign in, "Request access" (an admin approves it), "Forgot password?". An invite or reset email leads to "Set your password".
-const CRIMSON = '#9A0000'
-const card = { width: 380, maxWidth: '100%', background: '#fff', border: '1px solid #e7e2dc', borderRadius: 16, padding: 28, boxShadow: '0 10px 40px rgba(60,20,20,0.10)' }
-const page = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: '#faf7f4', fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif', color: '#241414' }
-const field = { width: '100%', boxSizing: 'border-box', background: '#fff', color: '#241414', padding: '11px 12px', border: '1px solid #d9d2cb', borderRadius: 10, fontSize: 15, fontFamily: 'inherit', outline: 'none' }
-const label = { fontSize: 12, fontWeight: 700, color: '#7a6d66' }
-const primary = (busy) => ({ width: '100%', marginTop: 18, padding: '12px 14px', border: 0, borderRadius: 10, background: CRIMSON, color: '#fff', fontSize: 15, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.7 : 1, fontFamily: 'inherit' })
-const secondary = { width: '100%', marginTop: 10, padding: '11px 14px', border: '1px solid #d9d2cb', borderRadius: 10, background: '#fff', color: '#4a0707', fontSize: 14.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }
-const linkBtn = { background: 'none', border: 0, padding: 0, color: CRIMSON, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }
-const errStyle = { color: CRIMSON, fontSize: 13, fontWeight: 600, marginTop: 10, lineHeight: 1.5 }
+// The look comes from the .auth-* classes and the design tokens in src/index.css (light and dark themes).
 
 const EXPIRED = 'This link has expired or was already used. Ask an administrator for a new invite or a temporary password.'
 
-function Header({ subtitle }) {
+/* The frame every sign-in screen shares: brand, a real page title, then the content. */
+function Shell({ title, sub, children, as: Tag = 'div', onSubmit }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
-      <img src="/logo.png" alt="YYC" style={{ width: 44, height: 44, objectFit: 'contain' }} />
-      <div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: '#4a0707' }}>YYC Advisory Brain</div>
-        <div style={{ fontSize: 12.5, color: '#7a6d66' }}>{subtitle}</div>
-      </div>
-    </div>
+    <main className="auth-page">
+      <Tag className="auth-card" onSubmit={onSubmit} noValidate={Tag === 'form' ? true : undefined}>
+        <div className="auth-brand">
+          <img src="/logo.png" alt="" />
+          <div>
+            <div className="auth-eyebrow">YYC Advisory Brain</div>
+            <h1 className="auth-title">{title}</h1>
+          </div>
+        </div>
+        {sub && <p className="auth-sub">{sub}</p>}
+        {children}
+      </Tag>
+    </main>
   )
 }
+
+/* A labelled input: the label is tied to the field, so clicking it focuses the field and screen readers announce it. */
+function Field({ label, hint, textarea = false, ...props }) {
+  const id = useId()
+  const Input = textarea ? 'textarea' : 'input'
+  return (
+    <>
+      <label className="auth-label" htmlFor={id}>{label}</label>
+      <Input id={id} className="auth-field" aria-describedby={hint ? `${id}-hint` : undefined} {...props} />
+      {hint && <div className="auth-hint" id={`${id}-hint`}>{hint}</div>}
+    </>
+  )
+}
+
+const ErrorNote = ({ children }) => (children ? <div className="auth-error" role="alert"><span aria-hidden="true">!</span><span>{children}</span></div> : null)
+const Primary = ({ busy, children, ...props }) => <button type="submit" className="auth-btn is-primary" disabled={busy} aria-busy={busy || undefined} {...props}>{children}</button>
+const Quiet = ({ children, ...props }) => <button type="button" className="auth-btn is-quiet" {...props}>{children}</button>
 
 function Login({ onDone, onGuest, notice, emailInvites }) {
   const [view, setView] = useState('signin') // 'signin' | 'request' | 'forgot' | 'sent'
@@ -33,10 +49,11 @@ function Login({ onDone, onGuest, notice, emailInvites }) {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [note, setNote] = useState('')
+  const [password2, setPassword2] = useState('')
   const [err, setErr] = useState(notice || '')
   const [busy, setBusy] = useState(false)
   const [sentText, setSentText] = useState('')
-  const go = (v) => { setView(v); setErr(''); setPassword('') }
+  const go = (v) => { setView(v); setErr(''); setPassword(''); setPassword2('') }
 
   const signIn = async (e) => {
     e.preventDefault()
@@ -48,10 +65,15 @@ function Login({ onDone, onGuest, notice, emailInvites }) {
   const request = async (e) => {
     e.preventDefault()
     if (!name.trim() || !email.trim()) { setErr('Enter your name and work email.'); return }
+    if (!emailInvites) { // no emails are sent, so the password is chosen now
+      if (password.length < 10) { setErr('Choose a password of at least 10 characters.'); return }
+      if (password !== password2) { setErr('The two passwords do not match.'); return }
+    }
     setBusy(true); setErr('')
     try {
-      await window.storage.requestAccess({ name, email, note })
-      setSentText(emailInvites ? 'Thank you. An administrator will review your request. If it is approved, you will receive an email with a link to set your password.' : 'Thank you. An administrator will review your request and contact you if it is approved. They will give you a temporary password, which you change the first time you sign in.')
+      await window.storage.requestAccess(emailInvites ? { name, email, note } : { name, email, note, password })
+      setPassword(''); setPassword2('')
+      setSentText(emailInvites ? 'Thank you. An administrator will review your request. If it is approved, you will receive an email with a link to set your password.' : 'Thank you. An administrator will review your request. Once it is approved, sign in here with your email and the password you just chose.')
       setView('sent')
     } catch (ex) { setErr(String(ex.message || 'The request could not be sent.')) }
     setBusy(false)
@@ -70,64 +92,50 @@ function Login({ onDone, onGuest, notice, emailInvites }) {
 
   if (view === 'sent') {
     return (
-      <div style={page}>
-        <div style={card}>
-          <Header subtitle="Check your email" />
-          <div style={{ fontSize: 14, lineHeight: 1.6 }}>{sentText}</div>
-          <button type="button" style={secondary} onClick={() => go('signin')}>Back to sign in</button>
-        </div>
-      </div>
+      <Shell title={emailInvites ? 'Check your email' : 'Request sent'}>
+        <p className="auth-message" role="status">{sentText}</p>
+        <div style={{ marginTop: 18 }}><Quiet onClick={() => go('signin')}>Back to sign in</Quiet></div>
+      </Shell>
     )
   }
   if (view === 'request') {
     return (
-      <div style={page}>
-        <form onSubmit={request} style={card}>
-          <Header subtitle="Request access" />
-          <label style={label}>Full name</label>
-          <input style={{ ...field, margin: '5px 0 14px' }} autoComplete="name" autoFocus maxLength={120} value={name} onChange={(e) => { setName(e.target.value); setErr('') }} />
-          <label style={label}>Work email</label>
-          <input style={{ ...field, margin: '5px 0 14px' }} type="email" autoComplete="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
-          <label style={label}>Why do you need access? (optional)</label>
-          <textarea style={{ ...field, margin: '5px 0 6px', minHeight: 70, resize: 'none' }} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
-          {err && <div style={errStyle}>{err}</div>}
-          <button type="submit" disabled={busy} style={primary(busy)}>{busy ? 'Sending…' : 'Send request'}</button>
-          <button type="button" style={secondary} onClick={() => go('signin')}>Back to sign in</button>
-          <div style={{ fontSize: 12, color: '#7a6d66', marginTop: 14, lineHeight: 1.55 }}>{emailInvites ? 'An administrator reviews every request. You get an email only if it is approved.' : 'An administrator reviews every request and will contact you if it is approved.'}</div>
-        </form>
-      </div>
+      <Shell as="form" onSubmit={request} title="Request access" sub={emailInvites ? 'An administrator reviews every request. You get an email only if it is approved.' : 'An administrator reviews every request. You can sign in as soon as it is approved.'}>
+        <Field label="Full name" autoComplete="name" autoFocus maxLength={120} value={name} onChange={(e) => { setName(e.target.value); setErr('') }} />
+        <Field label="Work email" type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
+        {!emailInvites && (<>
+          <Field label="Choose a password" type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setErr('') }} />
+          <Field label="Type the password again" type="password" autoComplete="new-password" value={password2} onChange={(e) => { setPassword2(e.target.value); setErr('') }}
+            hint="At least 10 characters. You will sign in with it once your request is approved." />
+        </>)}
+        <Field label="Why do you need access? (optional)" textarea maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+        <ErrorNote>{err}</ErrorNote>
+        <Primary busy={busy}>{busy ? 'Sending…' : 'Send request'}</Primary>
+        <Quiet onClick={() => go('signin')}>Back to sign in</Quiet>
+      </Shell>
     )
   }
   if (view === 'forgot') {
     return (
-      <div style={page}>
-        <form onSubmit={forgot} style={card}>
-          <Header subtitle="Reset your password" />
-          <label style={label}>Email</label>
-          <input style={{ ...field, margin: '5px 0 6px' }} type="email" autoComplete="username" autoFocus value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
-          {err && <div style={errStyle}>{err}</div>}
-          <button type="submit" disabled={busy} style={primary(busy)}>{busy ? 'Sending…' : 'Email me a reset link'}</button>
-          <button type="button" style={secondary} onClick={() => go('signin')}>Back to sign in</button>
-        </form>
-      </div>
+      <Shell as="form" onSubmit={forgot} title="Reset your password" sub="Enter your email and we will send a link to choose a new password.">
+        <Field label="Email" type="email" autoComplete="username" inputMode="email" autoFocus value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
+        <ErrorNote>{err}</ErrorNote>
+        <Primary busy={busy}>{busy ? 'Sending…' : 'Email me a reset link'}</Primary>
+        <Quiet onClick={() => go('signin')}>Back to sign in</Quiet>
+      </Shell>
     )
   }
   return (
-    <div style={page}>
-      <form onSubmit={signIn} style={card}>
-        <Header subtitle="Sign in to continue" />
-        <label style={label}>Email</label>
-        <input style={{ ...field, margin: '5px 0 14px' }} type="email" autoComplete="username" autoFocus value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
-        <label style={label}>Password</label>
-        <input style={{ ...field, margin: '5px 0 6px' }} type="password" autoComplete="current-password" value={password} onChange={(e) => { setPassword(e.target.value); setErr('') }} />
-        {emailInvites ? <div style={{ textAlign: 'right' }}><button type="button" style={linkBtn} onClick={() => go('forgot')}>Forgot password?</button></div> : <div style={{ height: 4 }} />}
-        {err && <div style={errStyle}>{err}</div>}
-        <button type="submit" disabled={busy} style={primary(busy)}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        <button type="button" onClick={() => go('request')} style={secondary}>Request access</button>
-        {onGuest && <button type="button" onClick={onGuest} style={secondary}>Continue as guest</button>}
-        <div style={{ fontSize: 12, color: '#7a6d66', marginTop: 14, lineHeight: 1.55 }}>{onGuest ? 'Guests can browse the knowledge base and lever records only. ' : ''}New here? Request access and an administrator will review it.{emailInvites ? '' : ' Forgotten your password? Ask an administrator for a new temporary one.'}</div>
-      </form>
-    </div>
+    <Shell as="form" onSubmit={signIn} title="Sign in" sub="Find strategies and answers from the YYC knowledge base.">
+      <Field label="Email" type="email" autoComplete="username" inputMode="email" autoFocus value={email} onChange={(e) => { setEmail(e.target.value); setErr('') }} />
+      <Field label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => { setPassword(e.target.value); setErr('') }} />
+      {emailInvites && <div style={{ textAlign: 'right', marginTop: -10 }}><button type="button" className="auth-link" onClick={() => go('forgot')}>Forgot password?</button></div>}
+      <ErrorNote>{err}</ErrorNote>
+      <Primary busy={busy}>{busy ? 'Signing in…' : 'Sign in'}</Primary>
+      <Quiet onClick={() => go('request')}>Request access</Quiet>
+      {onGuest && <Quiet onClick={onGuest}>Continue as guest</Quiet>}
+      <p className="auth-note">{onGuest ? 'Guests can browse the knowledge base and lever records only. ' : ''}New here? Request access and an administrator will review it.{emailInvites ? '' : ' Forgotten your password? Ask an administrator for a new temporary one.'}</p>
+    </Shell>
   )
 }
 
@@ -146,18 +154,13 @@ function SetPassword({ kind, onDone }) {
     catch (ex) { setErr(String(ex.message || 'Could not save the password.')); setBusy(false) }
   }
   return (
-    <div style={page}>
-      <form onSubmit={submit} style={card}>
-        <Header subtitle={kind === 'invite' || kind === 'temp' ? 'Welcome. Choose your own password' : 'Choose a new password'} />
-        <label style={label}>New password</label>
-        <input style={{ ...field, margin: '5px 0 14px' }} type="password" autoComplete="new-password" autoFocus value={pw} onChange={(e) => { setPw(e.target.value); setErr('') }} />
-        <label style={label}>Type it again</label>
-        <input style={{ ...field, margin: '5px 0 6px' }} type="password" autoComplete="new-password" value={pw2} onChange={(e) => { setPw2(e.target.value); setErr('') }} />
-        <div style={{ fontSize: 12, color: '#7a6d66', marginTop: 8, lineHeight: 1.5 }}>At least 10 characters. A few random words is a good password.{kind === 'temp' ? ' The temporary password stops working once you save.' : ''}</div>
-        {err && <div style={errStyle}>{err}</div>}
-        <button type="submit" disabled={busy} style={primary(busy)}>{busy ? 'Saving…' : 'Save and continue'}</button>
-      </form>
-    </div>
+    <Shell as="form" onSubmit={submit} title={kind === 'invite' || kind === 'temp' ? 'Choose your own password' : 'Choose a new password'} sub={kind === 'invite' || kind === 'temp' ? 'Welcome. One last step before you start.' : undefined}>
+      <Field label="New password" type="password" autoComplete="new-password" autoFocus value={pw} onChange={(e) => { setPw(e.target.value); setErr('') }} />
+      <Field label="Type it again" type="password" autoComplete="new-password" value={pw2} onChange={(e) => { setPw2(e.target.value); setErr('') }}
+        hint={`At least 10 characters. A few random words is a good password.${kind === 'temp' ? ' The temporary password stops working once you save.' : ''}`} />
+      <ErrorNote>{err}</ErrorNote>
+      <Primary busy={busy}>{busy ? 'Saving…' : 'Save and continue'}</Primary>
+    </Shell>
   )
 }
 
@@ -171,18 +174,15 @@ function ConfirmLink({ kind, tokenHash, onVerified, onFailed }) {
     catch { onFailed() }
   }
   return (
-    <div style={page}>
-      <div style={card}>
-        <Header subtitle={kind === 'invite' ? 'You have been invited' : 'Reset your password'} />
-        <div style={{ fontSize: 14, lineHeight: 1.6 }}>{kind === 'invite' ? 'Press Continue to accept the invitation and choose your password.' : 'Press Continue to choose a new password.'}</div>
-        <button type="button" disabled={busy} style={primary(busy)} onClick={go}>{busy ? 'Checking…' : 'Continue'}</button>
-      </div>
-    </div>
+    <Shell title={kind === 'invite' ? 'You have been invited' : 'Reset your password'}>
+      <p className="auth-message">{kind === 'invite' ? 'Press Continue to accept the invitation and choose your password.' : 'Press Continue to choose a new password.'}</p>
+      <div style={{ marginTop: 18 }}><Primary busy={busy} type="button" onClick={go}>{busy ? 'Checking…' : 'Continue'}</Primary></div>
+    </Shell>
   )
 }
 
-function Message({ children }) {
-  return <div style={page}><div style={{ ...card, fontSize: 14, lineHeight: 1.6 }}>{children}</div></div>
+function Message({ title, children }) {
+  return <Shell title={title}><div className="auth-message" role="status">{children}</div></Shell>
 }
 
 export default function Root({ boot }) {
@@ -224,8 +224,8 @@ export default function Root({ boot }) {
     setPhase('app')
   }
 
-  if (phase === 'error') return <Message><b>The server is not set up correctly.</b><br />{boot.error}</Message>
-  if (phase === 'checking') return <Message>Loading…</Message>
+  if (phase === 'error') return <Message title="The site is not set up correctly">{boot.error} Please tell your administrator.</Message>
+  if (phase === 'checking') return <Message title="Loading…">Checking your sign-in.</Message>
   if (phase === 'confirm') {
     const clearUrl = () => { try { window.history.replaceState(null, '', window.location.pathname) } catch { /* ignore */ } }
     return <ConfirmLink kind={boot.tokenType} tokenHash={boot.tokenHash} onVerified={() => { clearUrl(); setPhase('setpw') }} onFailed={() => { clearUrl(); toLogin(EXPIRED) }} />

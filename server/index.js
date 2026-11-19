@@ -19,7 +19,10 @@ console.log(`Groq keys loaded: ${GROQ_KEYS.length} (the next one is used automat
 
 const app = express();
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY); // behind a reverse proxy: so rate limits see the visitor's address
+{ // behind a reverse proxy: so rate limits see the visitor's address. "1" = one proxy in front, "true" = trust all, or a list of addresses
+  const tp = String(process.env.TRUST_PROXY || '').trim();
+  if (tp) { try { app.set('trust proxy', /^\d+$/.test(tp) ? Number(tp) : tp === 'true' ? true : tp === 'false' ? false : tp); } catch (e) { console.error(`TRUST_PROXY="${tp}" is not valid and was ignored: ${e.message}`); } }
+}
 app.use(withSecurityHeaders());
 app.use(express.json({ limit: '4mb' }));
 

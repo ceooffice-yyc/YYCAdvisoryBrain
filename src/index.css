@@ -1,98 +1,126 @@
+/* Design tokens for the whole site (UI-01, UI-02). Components use these names, never raw colours, so the light and dark themes and any
+   contrast fix are a one-place change. The app's palette object `P` in src/App.jsx points at these variables.
+   Two kinds of colour token: a plain one (e.g. --crimson) is a FILL that carries white text or draws a border; its "-text" partner
+   (e.g. --crimson-text) is the same hue tuned to be READ on the page background. In the light theme they are the same colour. */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  color-scheme: light dark;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --paper: #FAF7F2; --paper-deep: #F3EDE3; --card: #FFFFFF; --wash: #F5F0E8;
+  --ink: #1A1614; --sub: #645D55; --faint: #6F675E;
+  --line: #EDE7DE; --line-dark: #D8CFC2;
+
+  --crimson: #C00000; --crimson-dark: #9A0000; --crimson-soft: #FDEDED; --crimson-text: #B00000;
+  --maroon: #7A0A0A; --maroon-text: #7A0A0A; --title: #2A0505;
+  --gold: #B8860B; --gold-dark: #8A6508; --gold-soft: #FFF6DC; --gold-text: #7A5906;
+  --green: #0E7C4A; --green-soft: #E6F5EC; --green-text: #0B6B40;
+  --red: #B42318; --red-soft: #FDECEC; --red-text: #A61F15;
+  --blue: #3D4B6E; --blue-soft: #EEF0F5; --blue-text: #3D4B6E;
+
+  --on-fill: #FFFFFF;                 /* text on a crimson / maroon / red fill */
+  --toast-bg: #1A1614; --toast-ink: #FFFFFF;
+  --glass: rgba(255, 255, 255, 0.92); /* the sticky bars on small screens */
+  --backdrop: rgba(26, 22, 20, 0.5);
+
+  --s1: 0 1px 2px rgba(26, 22, 20, 0.04), 0 1px 3px rgba(26, 22, 20, 0.03);
+  --s2: 0 2px 4px rgba(26, 22, 20, 0.05), 0 6px 16px rgba(26, 22, 20, 0.06);
+  --s3: 0 4px 12px rgba(26, 22, 20, 0.08), 0 16px 40px rgba(26, 22, 20, 0.10);
+  --focus: 0 0 0 3px rgba(192, 0, 0, 0.18);
+  --ring: #1A1614;                    /* keyboard focus outline */
+
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --ease: cubic-bezier(.2, .7, .3, 1);
+
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  font: 16px/1.5 var(--sans);
+  color: var(--ink);
+  background: var(--paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  -webkit-text-size-adjust: 100%;
 }
 
+/* Dark theme: follows the device setting. Tuned separately, not inverted: fills stay deep enough for white text, reading colours are lighter. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+    --paper: #151111; --paper-deep: #1B1616; --card: #1F1919; --wash: #2A2222;
+    --ink: #F4EDEA; --sub: #C2B5AF; --faint: #A99C96;
+    --line: #322929; --line-dark: #4B3F3F;
+
+    --crimson: #C22F28; --crimson-dark: #A3241E; --crimson-soft: #3A1B1A; --crimson-text: #FF9A91;
+    --maroon: #8E1F1F; --maroon-text: #F2B0A8; --title: #FBEDEA;
+    --gold: #C9981C; --gold-dark: #E0B648; --gold-soft: #33290F; --gold-text: #EDC865;
+    --green: #2E9F69; --green-soft: #15301F; --green-text: #7FDCAA;
+    --red: #C73E34; --red-soft: #3A1B19; --red-text: #FF9A91;
+    --blue: #7E8EC0; --blue-soft: #222739; --blue-text: #B4C0EA;
+
+    --on-fill: #FFFFFF;
+    --toast-bg: #F4EDEA; --toast-ink: #1A1614;
+    --glass: rgba(31, 25, 25, 0.92);
+    --backdrop: rgba(0, 0, 0, 0.62);
+
+    --s1: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --s2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px rgba(0, 0, 0, 0.3);
+    --s3: 0 6px 16px rgba(0, 0, 0, 0.45), 0 18px 44px rgba(0, 0, 0, 0.4);
+    --focus: 0 0 0 3px rgba(255, 154, 145, 0.3);
+    --ring: #F4EDEA;
   }
 }
 
-body {
-  margin: 0;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
-}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); min-height: 100vh; min-height: 100dvh; }
+h1, h2, h3 { font-family: var(--sans); color: var(--ink); }
+h2 { font-size: 20px; line-height: 1.2; letter-spacing: -0.01em; margin: 0 0 8px; }
+p { margin: 0; }
+img { max-width: 100%; }
+button, input, select, textarea { font: inherit; color: inherit; }
+code { font-family: var(--mono); font-size: 0.92em; padding: 2px 6px; border-radius: 4px; background: var(--wash); }
 
 /* Text areas have a fixed size everywhere: they cannot be dragged larger or smaller. */
 textarea { resize: none !important; }
+
+/* Keyboard users always see where they are (UI-05). The ring is added on top of each control's own focus style, never instead of it. */
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+:focus:not(:focus-visible) { outline: none; }
+
+/* "Skip to the content" for keyboard and screen-reader users: hidden until it is focused */
+.skip-link { position: absolute; left: 12px; top: -60px; z-index: 100; padding: 10px 16px; border-radius: var(--r-sm); background: var(--ink); color: var(--paper); font-weight: 700; text-decoration: none; }
+.skip-link:focus { top: 12px; }
+
+/* People who ask their device for less motion get none (UI-05) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+}
+
+/* ───────── Sign-in screens (src/Root.jsx) ───────── */
+.auth-page { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background:
+    radial-gradient(1200px 500px at 50% -10%, var(--crimson-soft), transparent 70%), var(--paper); }
+.auth-card { position: relative; width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 32px 28px 26px; box-shadow: var(--s3); overflow: hidden; }
+.auth-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: linear-gradient(90deg, var(--crimson) 0%, var(--maroon) 60%, var(--gold) 100%); }
+.auth-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.auth-brand img { width: 48px; height: 48px; object-fit: contain; flex-shrink: 0; }
+.auth-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--gold-text); }
+.auth-title { margin: 2px 0 0; font-size: clamp(1.35rem, 1.1rem + 1.2vw, 1.6rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; color: var(--title); }
+.auth-sub { font-size: 14px; color: var(--sub); margin: 0 0 18px; line-height: 1.5; }
+.auth-label { display: block; font-size: 13px; font-weight: 700; color: var(--sub); margin-bottom: 6px; }
+.auth-field { width: 100%; min-height: 46px; padding: 11px 13px; border: 1px solid var(--line-dark); border-radius: 10px; background: var(--card); color: var(--ink); font-size: 16px; margin-bottom: 14px; transition: border-color .15s, box-shadow .15s; }
+.auth-field:focus { border-color: var(--crimson); box-shadow: var(--focus); }
+textarea.auth-field { min-height: 76px; line-height: 1.5; }
+.auth-hint { font-size: 13px; color: var(--sub); line-height: 1.55; margin: -6px 0 14px; }
+.auth-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 46px; padding: 12px 16px; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; border: 1px solid transparent; transition: background .15s, transform .08s, box-shadow .15s, border-color .15s; }
+.auth-btn + .auth-btn { margin-top: 10px; }
+.auth-btn.is-primary { background: var(--crimson); color: var(--on-fill); box-shadow: 0 1px 3px rgba(154, 0, 0, 0.25); margin-top: 6px; }
+.auth-btn.is-primary:hover:not(:disabled) { background: var(--crimson-dark); }
+.auth-btn.is-quiet { background: var(--card); color: var(--ink); border-color: var(--line-dark); }
+.auth-btn.is-quiet:hover:not(:disabled) { background: var(--wash); border-color: var(--ink); }
+.auth-btn:active:not(:disabled) { transform: translateY(1px); }
+.auth-btn:disabled { opacity: .65; cursor: default; }
+.auth-link { background: none; border: 0; padding: 10px 0; min-height: 44px; color: var(--crimson-text); font-weight: 700; font-size: 14px; cursor: pointer; text-decoration: underline; }
+.auth-error { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--red-soft); color: var(--red-text); font-size: 14px; font-weight: 600; line-height: 1.5; margin: 4px 0 10px; }
+.auth-note { font-size: 13px; color: var(--sub); margin-top: 16px; line-height: 1.55; }
+.auth-message { font-size: 15px; line-height: 1.6; color: var(--ink); }

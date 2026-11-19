@@ -19,7 +19,7 @@ This file is also the traceability table: each requirement names the code that o
 | ACC-07 | Invite and reset links survive mail scanners | Must | A link of the form `/?token_hash=…&type=invite` shows a Continue button; the link is only used up when Continue is pressed. A used or expired link gives a clear message. The older link form keeps working. | `src/storage.js` (`readEmailLink`, `verifyEmailLink`), `src/Root.jsx` (`ConfirmLink`) | none yet (needs a real Supabase email) | Built, **not verified** |
 | ERR-01 | Real "not found" answers | Must | An unknown page address answers 404 with a not-found page; an unknown `/api` address answers 404 as JSON; a malformed request body answers 400 as JSON. | `server/index.js`, `public/404.html`, `api/notfound.js`, `vercel.json` | `e2e/security.spec.js` ERR-01, SEC-02 | Verified on the Express server. **Not verified on Vercel** |
 
-## Phase 2: speed (planned)
+## Phase 2: speed (planned, not started)
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
@@ -28,7 +28,7 @@ This file is also the traceability table: each requirement names the code that o
 | PERF-03 | Less lag while typing and scrolling | Should | Typing in a search or text box does not re-render unrelated panels; long lists render in pages. Measured before and after. |
 | PERF-04 | A stated budget, checked | Should | Build fails or warns when the first-load script grows past the budget. |
 
-## Phase 3: visuals (planned)
+## Phase 3: visuals (done 2026-11-19; evidence in `docs/VERIFICATION.md`)
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
