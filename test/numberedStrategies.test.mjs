@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { leverHeadingOf, leverFromHeading } from '../src/pipeline/headings.js';
-import { normalizeParas } from '../src/pipeline/extract.js';
+import { normalizeParas, findStrategyParas } from '../src/pipeline/extract.js';
 
 // The parsing rules are ordinary modules (src/pipeline/); all text here is invented.
 const f = { leverHeadingOf, leverFromHeading, normalizeParas };
@@ -45,4 +45,31 @@ test('a one-word label above its description is a title under Product Differenti
     'Functionality', 'Designed around how the customers actually work, including pocket placement and where they carry their tools during a long shift.',
   ));
   for (const t of ['Fit: Moved away', 'Comfort & Fabric Quality: Built', 'Functionality: Designed']) assert.ok(out.some((p) => p.startsWith(t)), `${t} was not paired`);
+});
+
+// The Figs case study: the Product Differentiation table (Differentiation | What FIGS Did) lost three of its four rows,
+// because a one-word title on a single line ("Fit: ...", "Functionality: ...", "Style/Fashion: ...") was not accepted as a strategy.
+const FIGS_TABLE = P(
+  'Pricing', 'Create more value: FIGS treated scrubs as a branded, technical and fashionable product rather than a basic commodity.',
+  'Unique Product Differentiation', 'Differentiation', 'What FIGS Did',
+  'Fit', 'Moved away from boxy, one-size-fits-all scrubs and created more tailored fits for men and women',
+  'Comfort & Fabric Quality', 'Built the product around technical comfort, using softer, stretchable fabrics that were more comfortable for healthcare professionals',
+  'Functionality', 'Designed around how healthcare professionals actually work, including pocket placement and where they carry their tools',
+  'Style/Fashion', 'Introduced more modern and fashionable silhouettes, including slim pants instead of traditional baggy scrubs',
+  'Talent Strategy', '1. Choose a business partner with complementary strengths: Heather and Trina had very different capabilities and covered each other.',
+);
+
+test('the Figs differentiation table: every row (Fit, Comfort & Fabric Quality, Functionality, Style/Fashion) is found as a strategy', () => {
+  const norm = f.normalizeParas(FIGS_TABLE).join('\n\n');
+  assert.ok(!/^Differentiation$/m.test(norm), 'the table header cell is dropped');
+  const found = findStrategyParas(norm).filter((x) => x.heading && f.leverFromHeading(x.heading) === 'product_differentiation');
+  assert.deepEqual(found.map((x) => x.title), ['Fit', 'Comfort & Fabric Quality', 'Functionality', 'Style/Fashion']);
+  assert.ok(found[0].text.startsWith('Fit: Moved away from boxy'));
+});
+
+test('one-word labels elsewhere, or with a short remark, are still NOT strategies (accuracy of the older case studies)', () => {
+  const a = findStrategyParas(f.normalizeParas(P('Pricing', 'Fit: Moved away from boxy, one-size-fits-all scrubs and created more tailored fits for men and women')).join('\n\n'));
+  assert.equal(a.length, 0, 'a one-word title outside Product Differentiation is not a strategy');
+  const b = findStrategyParas(f.normalizeParas(P('Unique Product Differentiation', 'Roy: a great product, he said')).join('\n\n'));
+  assert.equal(b.length, 0, 'a short remark under Product Differentiation is not a strategy');
 });

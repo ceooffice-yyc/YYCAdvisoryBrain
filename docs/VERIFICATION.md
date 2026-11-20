@@ -168,3 +168,11 @@ Not verified: the live Supabase behaviour behind sign-in. In particular that app
 - **The signed-in app with the shared database.** The browser tests use browser-only mode (no sign-in), so the Users, profile, bulk list, review and edit screens were not exercised in a browser in this phase (they are unchanged code, moved). The unit tests and the compile cover their logic and imports, not their screens.
 - **Vercel.** The year-long cache header for built files and the compressed responses depend on the host; the Express server's behaviour is tested, Vercel's needs a deployment to confirm.
 - **A document with thousands of cards.** Not measured; see "Not done" in `docs/PERFORMANCE.md`.
+
+## Extraction: the Figs "Unique Product Differentiation" table (2026-11-20)
+
+- **Issue:** in `19. Figs.docx` the Product Differentiation section is a two-column table (Differentiation | What FIGS Did) with four rows. Only one row (Comfort & Fabric Quality) was recognised as a strategy; Fit, Functionality and Style/Fashion were lost, so the table could not be read properly.
+- **Root cause:** the table rows were already rewritten as single lines ("Fit: Moved away from boxy scrubs ..."), but the strategy finder (`findStrategyParas`, `src/pipeline/extract.js`) rejects one-word titles unless the paragraph has several lines (a rule kept so one-word bullets like "Roy:" are not mistaken for titles). "Fit" and "Functionality" are one word, and "Style/Fashion" counts as one word. The table's header cell "Differentiation" was also left as a stray line.
+- **Fix:** under Product Differentiation only, a label of up to 6 words followed by a description of 8 or more words is accepted as a strategy even if the label is one word; the table's own "Differentiation" header cell is dropped.
+- **Evidence:** 2 new unit tests (164 of 164 pass, lint clean), including one proving one-word labels outside Product Differentiation, or with a short remark, are still not strategies. Old and new code were compared on all 18 case studies in the folder: Figs went from 36 to 39 strategies (added Fit, Functionality, Style/Fashion); the other 17 documents are identical.
+- **Not verified:** the live Groq step on Figs (the model is not called in these checks); only the code that prepares the text and the safety net were tested.

@@ -26,6 +26,7 @@
   --s3: 0 4px 12px rgba(26, 22, 20, 0.08), 0 16px 40px rgba(26, 22, 20, 0.10);
   --focus: 0 0 0 3px rgba(192, 0, 0, 0.18);
   --ring: #1A1614;                    /* keyboard focus outline */
+  --select-bg: #ffd4d4; --select-ink: #1A1614; /* selected text: a soft crimson wash instead of the browser blue (dark text on it is about 11:1) */
 
   --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
@@ -68,11 +69,13 @@
     --s3: 0 6px 16px rgba(0, 0, 0, 0.45), 0 18px 44px rgba(0, 0, 0, 0.4);
     --focus: 0 0 0 3px rgba(255, 154, 145, 0.3);
     --ring: #F4EDEA;
+    --select-bg: #7A2B27; --select-ink: #FFF4F2; /* about 9:1 */
   }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+::selection { background: var(--select-bg); color: var(--select-ink); }
 body { background: var(--paper); color: var(--ink); min-height: 100vh; min-height: 100dvh; }
 h1, h2, h3 { font-family: var(--sans); color: var(--ink); }
 h2 { font-size: 20px; line-height: 1.2; letter-spacing: -0.01em; margin: 0 0 8px; }

@@ -280,3 +280,18 @@ for (const [w, h] of [[320, 568], [375, 667], [768, 900], [1280, 800]]) {
     await ctx.close();
   });
 }
+
+test('UI-02 selected text uses the theme colour (soft crimson, readable), not the browser blue, in light and dark', async ({ page }) => {
+  await seed(page); await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor();
+  const lum = (rgb) => { const [r, g, b] = rgb.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    const sel = await page.locator('h1').first().evaluate((e) => { const c = getComputedStyle(e, '::selection'); return { bg: c.backgroundColor, fg: c.color }; });
+    expect(sel.bg, `${scheme}: not the default blue`).not.toMatch(/^rgb\(0, 120, 215\)|^rgba\(0, 0, 0, 0\)|^rgb\(51, 144, 255\)/);
+    const [a, b] = [lum(sel.bg), lum(sel.fg)].sort((x, y) => y - x);
+    expect((a + 0.05) / (b + 0.05), `${scheme}: selected text must stay readable`).toBeGreaterThanOrEqual(7);
+    const [r, , bl] = sel.bg.match(/\d+/g).map(Number);
+    expect(r, `${scheme}: warm (red) rather than blue`).toBeGreaterThan(bl);
+  }
+});

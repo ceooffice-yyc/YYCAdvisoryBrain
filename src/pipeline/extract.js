@@ -212,7 +212,10 @@ export function findStrategyParas(body) {
     if (isHeadingAt(paras, i)) { heading = leverHeadingOf(p); continue; }
     const m = p.match(/^([A-Za-z0-9"“‘'][^:\n]{2,299}?):\s+\S/);
     // "Buy-and-Build" is a title; a one-word "Roy:" bullet is not, except a one-word label ("Packaging") that heads a block of lines under Product Differentiation
-    const labelBlock = leverFromHeading(heading) === "product_differentiation" && /\n/.test(p);
+    // A table of "Differentiation | What <brand> did" rows arrives as single lines, "Fit: Moved away from boxy scrubs...", "Style/Fashion: ...":
+    // under Product Differentiation a short label (up to 6 words) followed by a real description (8+ words) is a strategy even when the label is one word.
+    const inPD = leverFromHeading(heading) === "product_differentiation";
+    const labelBlock = inPD && (/\n/.test(p) || (!!m && wordCount(m[1]) <= 6 && wordCount(p.slice(m[1].length + 1)) >= 8));
     if (!m || LABEL_PARA.test(p) || wordCount(m[1]) > 45 || (m[1].split(/[\s-]+/).filter(Boolean).length < 2 && !labelBlock)) continue;
     let full = p;
     for (let j = i + 1; j < paras.length && LABEL_PARA.test(paras[j]); j++) full += "\n\n" + paras[j];
@@ -287,6 +290,7 @@ export function normalizeParas(body) {
     const p = raw[i], next = raw[i + 1];
     if (isHeadingAt(raw, i)) curLever = leverFromHeading(leverHeadingOf(p));
     if (/^what\b.{0,40}\bdid$/i.test(p)) continue; // leftover table-template cell
+    if (/^differentiation$/i.test(p) && i > 0 && leverFromHeading(leverHeadingOf(raw[i - 1])) === "product_differentiation") continue; // the table's own header cell under "Unique Product Differentiation"
     // a numbered strategy + its intro sentence + labelled supporting points = ONE strategy
     const support = supportGroupAt(raw, i);
     if (support) { out.push(support.text); i = support.end; continue; }
