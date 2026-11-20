@@ -45,7 +45,8 @@ export default function App() {
   const [gateOpen, setGateOpen] = useState(false);
   const signedUser = window.storage?.remote ? window.storage.user : null; // { id, email, isAdmin } when the shared database is on
   const isGuest = !!(window.storage?.remote && !window.storage.user); // "continue as guest": may only browse the knowledge base and lever records
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState(null); // { msg, kind: "ok" | "error" }
+  const toastTimer = useRef(null);
   const [confirm, setConfirm] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false); // the signed-in person's profile window
   const [chatAll, setChatAll] = useState([]); // every message, deleted ones included
@@ -93,7 +94,13 @@ export default function App() {
       },
     };
   }, [lang, config]);
-  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2600); };
+  // A short message at the bottom of the screen, wherever the person has scrolled to. kind "error" is red, stays longer, is announced to screen readers and can be dismissed.
+  const dismissToast = useCallback(() => { clearTimeout(toastTimer.current); setToast(null); }, []);
+  const flash = useCallback((msg, kind = "ok") => {
+    clearTimeout(toastTimer.current);
+    setToast({ msg: String(msg), kind });
+    toastTimer.current = setTimeout(() => setToast(null), kind === "error" ? 9000 : 2600);
+  }, []);
   // The bottom-left button. With sign-in it is Log in (guest) / Log out (signed in); the SERVER decides who is an admin, so there is no
   // passcode. Without the shared database it stays "Unlock admin" with the passcode.
   const authLabel = window.storage?.remote ? (isGuest ? "Log in" : "Log out") : (isAdmin ? t.lockAdmin : t.unlockAdmin);
@@ -383,7 +390,12 @@ export default function App() {
       )}
       {profileOpen && signedUser && <ScreenBoundary><Suspense fallback={null}><ProfileModal user={signedUser} onClose={() => setProfileOpen(false)} /></Suspense></ScreenBoundary>}
       {confirm && <ConfirmModal {...confirm} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
-      {toast && (<div className="yyc-toast"><div className="yyc-toast-dot" />{toast}</div>)}
+      {toast && (
+        <div className={`yyc-toast${toast.kind === "error" ? " is-error" : ""}`} role={toast.kind === "error" ? "alert" : "status"}>
+          <div className="yyc-toast-dot" /><span className="yyc-toast-msg">{toast.msg}</span>
+          {toast.kind === "error" && <button type="button" className="yyc-toast-x" onClick={dismissToast} aria-label="Dismiss this message"><Icon name="close" size={13} /></button>}
+        </div>
+      )}
     </div>
   );
 }

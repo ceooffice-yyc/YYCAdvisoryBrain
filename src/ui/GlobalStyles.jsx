@@ -254,6 +254,12 @@ export function GlobalStyles() {
       .yyc-modal { scrollbar-width: none; -ms-overflow-style: none; }
       .yyc-modal-head { padding: 20px 26px; border-bottom: 2px solid ${P.crimson}; background: ${P.card}; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
       .yyc-toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 12px 22px; font-size: 13px; font-weight: 600; z-index: 70; border-radius: 11px; box-shadow: ${P.s3}; display: inline-flex; align-items: center; gap: 10px; animation: yycToastIn .28s cubic-bezier(.2,.8,.3,1.2); font-family: inherit; }
+      .yyc-toast { max-width: min(560px, calc(100vw - 32px)); }
+      .yyc-toast-msg { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+      .yyc-toast.is-error { background: var(--red); color: var(--on-fill); align-items: flex-start; padding: 12px 10px 12px 18px; }
+      .yyc-toast.is-error .yyc-toast-dot { background: var(--on-fill); box-shadow: 0 0 0 3px rgba(255,255,255,0.3); margin-top: 6px; flex-shrink: 0; }
+      .yyc-toast-x { flex-shrink: 0; width: 44px; height: 44px; margin: -12px 0 -12px 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: inherit; border: 0; border-radius: 10px; cursor: pointer; }
+      .yyc-toast-x:hover { background: rgba(255,255,255,0.16); }
       .yyc-toast-dot { width: 6px; height: 6px; border-radius: 50%; background: ${P.green}; box-shadow: 0 0 0 3px rgba(14,124,74,0.25); }
       .yyc-btn-primary { ${Object.entries(btnP(false)).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
       .yyc-btn-primary, .yyc-btn-secondary { gap: 8px; }

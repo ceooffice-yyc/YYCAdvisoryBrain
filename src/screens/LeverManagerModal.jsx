@@ -33,6 +33,7 @@ export function LeverManagerModal({ t, config, setConfig, setConfirm, setAdminLo
   const [createKind, setCreateKind] = useState("lever");
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState("");
+  useEffect(() => { if (errMsg) flash(errMsg, "error"); }, [errMsg, flash]); // also as a toast, so it is seen without scrolling inside the window
   const [target, setTarget] = useState("price"); // lever being edited: a built-in id, "others", or a custom lever id
   const draftFor = (id) => {
     const o = (config?.leverOverrides || {})[id] || {};

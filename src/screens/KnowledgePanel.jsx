@@ -235,6 +235,7 @@ export function KnowledgePanel({
   const [importPlan, setImportPlan] = useState(null); // the Import Backup preview window
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState("");
+  useEffect(() => { if (errMsg) flash(errMsg, "error"); }, [errMsg, flash]); // errors appear as a toast, wherever the person has scrolled to
   const [aiNote, setAiNote] = useState(null);                 // live rate-limit wait from askAI: {kind:"wait", sec}
   useEffect(() => { setAiListener(setAiNote); return () => setAiListener(null); }, []);
   const aiBanner = aiNote && (
@@ -1388,13 +1389,6 @@ export function KnowledgePanel({
           </div>
         )}
       </div>
-
-      {errMsg && !editLeverRecord && !importPlan && (
-        <div role="alert" style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", margin: "0 0 14px", padding: "10px 14px", borderRadius: 10, background: "#FDEDED", border: `1px solid rgba(154,0,0,0.25)`, color: P.redText, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
-          <span>{errMsg}</span>
-          <button className="yyc-icon-btn" onClick={() => setErrMsg("")} title={t.close} aria-label={t.close} style={{ flexShrink: 0 }}><Icon name="close" size={12} /></button>
-        </div>
-      )}
 
       <div className="yyc-stats">
         <div className="yyc-stat">

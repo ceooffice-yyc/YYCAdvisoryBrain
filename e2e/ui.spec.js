@@ -295,3 +295,49 @@ test('UI-02 selected text uses the theme colour (soft crimson, readable), not th
     expect(r, `${scheme}: warm (red) rather than blue`).toBeGreaterThan(bl);
   }
 });
+
+/* Errors appear as a toast at the bottom of the screen, wherever the person has scrolled to (like "Account enabled"), instead of a line at the top of the page. */
+for (const [w, h] of [[375, 667], [1280, 800]]) {
+  test(`UI-03 ${w}px: an error shows as a red toast in view (not at the top of the page), with a dismiss button`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: w < 900, hasTouch: w < 900 });
+    const page = await ctx.newPage();
+    await seed(page); await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor();
+    await unlockAdmin(page);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight)); // scrolled away from the top of the page
+    await page.locator('input[type="file"][accept*="json"]').setInputFiles({ name: 'not-a-backup.json', mimeType: 'application/json', buffer: Buffer.from('{"hello": 1}') });
+    const toast = page.getByRole('alert').filter({ has: page.locator('.yyc-toast-msg') });
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText(/backup/i);
+    const g = await toast.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: innerHeight, vw: innerWidth, bg: getComputedStyle(e).backgroundColor }; });
+    expect(g.top).toBeGreaterThan(0); expect(g.bottom).toBeLessThanOrEqual(g.vh); expect(g.left).toBeGreaterThanOrEqual(0); expect(g.right).toBeLessThanOrEqual(g.vw);
+    const [r, gr, b] = g.bg.match(/\d+/g).map(Number); expect(r).toBeGreaterThan(gr + 50); expect(r).toBeGreaterThan(b + 50); // red, not the dark success toast
+    const x = toast.getByRole('button', { name: 'Dismiss this message' });
+    const xb = await x.boundingBox(); expect(xb.width).toBeGreaterThanOrEqual(44); expect(xb.height).toBeGreaterThanOrEqual(44);
+    await x.click();
+    await expect(toast).toHaveCount(0);
+    await ctx.close();
+  });
+}
+
+test('UI-03 a failed action on the Users screen shows its error as a toast, in view', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await signedInAs(page);
+  await page.route('**/api/db', async (route) => {
+    if (route.request().method() === 'POST' && (route.request().postDataJSON() || {}).op === 'user_create') return route.fulfill({ status: 400, json: { error: 'That email address already has an account.' } });
+    return route.fallback();
+  });
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await page.locator('.yyc-botnav-item').filter({ hasText: 'Users' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 15_000 });
+  await page.getByPlaceholder('name@company.com').fill('someone@yyc-example.test');
+  await page.getByRole('button', { name: 'Create account', exact: true }).first().click();
+  await page.locator('.yyc-modal').getByRole('button', { name: 'Create account', exact: true }).click();
+  const toast = page.getByRole('alert').filter({ hasText: 'already has an account' });
+  await expect(toast).toBeVisible({ timeout: 10_000 });
+  const inView = await toast.evaluate((e) => { const r = e.getBoundingClientRect(); return r.top > 0 && r.bottom <= innerHeight; });
+  expect(inView).toBe(true);
+  await ctx.close();
+});

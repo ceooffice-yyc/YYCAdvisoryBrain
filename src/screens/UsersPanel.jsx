@@ -47,6 +47,7 @@ export function UsersPanel({ flash, setConfirm }) {
   const [schemaMissing, setSchemaMissing] = useState(false); // the database is missing the latest schema.sql
   const [events, setEvents] = useState([]);
   const [err, setErr] = useState("");
+  useEffect(() => { if (err) flash(err, "error"); }, [err, flash]); // errors appear as a toast, wherever the person has scrolled to
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("viewer");
   const [reqRole, setReqRole] = useState({}); // request id -> the role chosen when approving
@@ -130,7 +131,6 @@ export function UsersPanel({ flash, setConfirm }) {
         </div>
       </div>
       {schemaMissing && <div role="alert" style={{ ...S.card, padding: "12px 16px", marginBottom: 12, borderColor: P.gold, background: P.goldSoft, fontSize: 13.5, lineHeight: 1.55 }}><b>The database needs one update.</b> People cannot send access requests until you paste the latest <code>supabase/schema.sql</code> into Supabase → SQL Editor and run it (it is safe to run again).</div>}
-      {err && <div role="alert" style={{ color: P.redText, fontSize: 13, fontWeight: 600, margin: "0 0 12px", lineHeight: 1.5 }}>{err}</div>}
 
       <div style={{ ...S.card, padding: 18, marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}><div style={{ fontWeight: 750 }}>Access requests {pending.length ? <span style={{ marginLeft: 6 }}>{chip(`${pending.length} waiting`, P.goldSoft, P.goldText)}</span> : null}</div>{pending.length > 1 && <button className="yyc-btn-secondary" style={{ padding: "5px 10px", fontSize: 12, borderColor: P.red, color: P.redText }} onClick={rejectAll}>Reject all</button>}</div>
