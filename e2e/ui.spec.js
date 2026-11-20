@@ -341,3 +341,49 @@ test('UI-03 a failed action on the Users screen shows its error as a toast, in v
   expect(inView).toBe(true);
   await ctx.close();
 });
+
+/* Toasts stack: at most 3, the newest at the bottom; a 4th makes the oldest (top) fade out; they fade in and out. */
+for (const [w, h] of [[375, 667], [1280, 800]]) {
+  test(`UI-03 ${w}px: toasts stack (newest lowest), keep at most 3, fade in and out, and the same message does not repeat`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: w < 900, hasTouch: w < 900 });
+    const page = await ctx.newPage();
+    await seed(page); await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor();
+    const raise = (msg, kind = 'ok') => page.evaluate(([m, k]) => window.dispatchEvent(new CustomEvent('yyc-toast', { detail: { msg: m, kind: k } })), [msg, kind]);
+    const live = () => page.locator('.yyc-toast:not(.is-leaving) .yyc-toast-msg').allTextContents();
+    await raise('First'); await raise('Second'); await raise('Third');
+    await expect.poll(live).toEqual(['First', 'Second', 'Third']);
+    const ys = await page.locator('.yyc-toast').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().top));
+    expect(ys[0]).toBeLessThan(ys[1]); expect(ys[1]).toBeLessThan(ys[2]); // the newest is the lowest
+    // fading in
+    expect(await page.locator('.yyc-toast').first().evaluate((e) => getComputedStyle(e).animationName)).toBe('yycToastIn');
+    // a repeat of a message already showing does not add another toast
+    await raise('Third');
+    expect(await live()).toEqual(['First', 'Second', 'Third']);
+    // a 4th: the oldest (top) fades out (it only stays for about a fifth of a second, so a watcher records it), then is gone
+    await page.evaluate(() => { window.__leaving = []; new MutationObserver(() => { for (const e of document.querySelectorAll('.yyc-toast.is-leaving')) { const t = e.textContent; if (!window.__leaving.includes(t)) window.__leaving.push(t); } }).observe(document.body, { subtree: true, attributes: true, childList: true }); });
+    await raise('Fourth');
+    await expect.poll(() => page.evaluate(() => window.__leaving)).toEqual(['First']); // only the oldest one fades out
+    // the fade-out style itself (checked on a throw-away element, so it does not depend on timing)
+    expect(await page.evaluate(() => { const d = document.createElement('div'); d.className = 'yyc-toast is-leaving'; document.querySelector('.yyc-toasts').appendChild(d); const n = getComputedStyle(d).animationName; d.remove(); return n; })).toBe('yycToastOut');
+    await expect.poll(live).toEqual(['Second', 'Third', 'Fourth']);
+    await expect(page.locator('.yyc-toast')).toHaveCount(3, { timeout: 3000 }); // the faded one has been removed
+    expect(await page.locator('.yyc-toast').count()).toBeLessThanOrEqual(3);
+    // everything is inside the screen
+    const box = await page.locator('.yyc-toasts').boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(w + 0.5); expect(box.y).toBeGreaterThanOrEqual(0); expect(box.y + box.height).toBeLessThanOrEqual(h);
+    // an ordinary message fades out by itself
+    await expect(page.locator('.yyc-toast')).toHaveCount(0, { timeout: 7000 });
+    await ctx.close();
+  });
+}
+
+test('UI-03 an error toast stays longer than a normal one and screen readers hear it as an alert', async ({ page }) => {
+  await seed(page); await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor();
+  await page.evaluate(() => { window.dispatchEvent(new CustomEvent('yyc-toast', { detail: { msg: 'Saved', kind: 'ok' } })); window.dispatchEvent(new CustomEvent('yyc-toast', { detail: { msg: 'Something went wrong', kind: 'error' } })); });
+  await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Something went wrong' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toHaveCount(0, { timeout: 5000 }); // the normal one has gone after a few seconds
+  await expect(page.getByRole('alert').filter({ hasText: 'Something went wrong' })).toBeVisible(); // the error is still there
+});

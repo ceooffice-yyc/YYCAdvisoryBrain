@@ -55,7 +55,8 @@ export function GlobalStyles() {
       @keyframes yycPopIn { from { transform: scale(.97); } to { transform: scale(1); } }
       @keyframes yycFade { from { opacity: 0; } to { opacity: 1; } }
       @keyframes yycSpin { to { transform: rotate(360deg); } }
-      @keyframes yycToastIn { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
+      @keyframes yycToastIn { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+      @keyframes yycToastOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-10px) scale(.97); } }
       @keyframes yycDot { 0%, 80%, 100% { opacity: .3; transform: scale(.8); } 40% { opacity: 1; transform: scale(1); } }
       .yyc-botnav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; background: var(--glass); backdrop-filter: blur(12px); border-top: 1px solid ${P.line}; padding: 6px 4px calc(8px + env(safe-area-inset-bottom)); z-index: 40; }
       @media (min-width: 900px) { .yyc-botnav { display: none; } }
@@ -253,7 +254,9 @@ export function GlobalStyles() {
       .yyc-modal::-webkit-scrollbar { display: none; }
       .yyc-modal { scrollbar-width: none; -ms-overflow-style: none; }
       .yyc-modal-head { padding: 20px 26px; border-bottom: 2px solid ${P.crimson}; background: ${P.card}; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-      .yyc-toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--toast-bg); color: var(--toast-ink); padding: 12px 22px; font-size: 13px; font-weight: 600; z-index: 70; border-radius: 11px; box-shadow: ${P.s3}; display: inline-flex; align-items: center; gap: 10px; animation: yycToastIn .28s cubic-bezier(.2,.8,.3,1.2); font-family: inherit; }
+      .yyc-toasts { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 70; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100vw - 32px); pointer-events: none; }
+      .yyc-toast { pointer-events: auto; background: var(--toast-bg); color: var(--toast-ink); padding: 12px 22px; font-size: 13px; font-weight: 600; border-radius: 11px; box-shadow: ${P.s3}; display: inline-flex; align-items: center; gap: 10px; animation: yycToastIn .26s cubic-bezier(.2,.8,.3,1.1) both; font-family: inherit; }
+      .yyc-toast.is-leaving { animation: yycToastOut .22s ease-in forwards; pointer-events: none; }
       .yyc-toast { max-width: min(560px, calc(100vw - 32px)); }
       .yyc-toast-msg { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
       .yyc-toast.is-error { background: var(--red); color: var(--on-fill); align-items: flex-start; padding: 12px 10px 12px 18px; }
@@ -373,7 +376,7 @@ export function GlobalStyles() {
         .yyc-modal-head { padding: 16px 18px; }
         .yyc-chat-wrap { min-height: calc(100dvh - 250px); }
         .yyc-chat-scroll { padding: 16px 14px; }
-        .yyc-toast { bottom: calc(84px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px); }
+        .yyc-toasts { bottom: calc(84px + env(safe-area-inset-bottom)); }
       }
       /* a phone held sideways: the bars must not eat the short screen */
       @media (max-width: 899px) and (max-height: 480px) {

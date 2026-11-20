@@ -45,8 +45,10 @@ export default function App() {
   const [gateOpen, setGateOpen] = useState(false);
   const signedUser = window.storage?.remote ? window.storage.user : null; // { id, email, isAdmin } when the shared database is on
   const isGuest = !!(window.storage?.remote && !window.storage.user); // "continue as guest": may only browse the knowledge base and lever records
-  const [toast, setToast] = useState(null); // { msg, kind: "ok" | "error" }
-  const toastTimer = useRef(null);
+  const [toasts, setToasts] = useState([]); // up to 3, oldest first: { id, msg, kind: "ok" | "error", leaving }
+  const toastTimers = useRef(new Map());
+  const toastSeq = useRef(0);
+  const toastsRef = useRef([]);
   const [confirm, setConfirm] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false); // the signed-in person's profile window
   const [chatAll, setChatAll] = useState([]); // every message, deleted ones included
@@ -94,13 +96,34 @@ export default function App() {
       },
     };
   }, [lang, config]);
-  // A short message at the bottom of the screen, wherever the person has scrolled to. kind "error" is red, stays longer, is announced to screen readers and can be dismissed.
-  const dismissToast = useCallback(() => { clearTimeout(toastTimer.current); setToast(null); }, []);
-  const flash = useCallback((msg, kind = "ok") => {
-    clearTimeout(toastTimer.current);
-    setToast({ msg: String(msg), kind });
-    toastTimer.current = setTimeout(() => setToast(null), kind === "error" ? 9000 : 2600);
+  // Short messages at the bottom of the screen, wherever the person has scrolled to (up to 3 at a time: the newest is the lowest, and when a 4th arrives the
+  // oldest (top) one fades out to make room). kind "error" is red, stays longer, is announced to screen readers and can be dismissed. The same message again just stays longer.
+  const FADE_MS = 220;
+  const commitToasts = (list) => { toastsRef.current = list; setToasts(list); }; // the list lives in a ref too, so no timers are ever started inside a state updater
+  const clearToastTimer = (id) => { clearTimeout(toastTimers.current.get(id)); toastTimers.current.delete(id); };
+  const removeToast = useCallback((id) => { // fade out, then take it away
+    clearToastTimer(id);
+    if (!toastsRef.current.some((x) => x.id === id && !x.leaving)) return;
+    commitToasts(toastsRef.current.map((x) => (x.id === id ? { ...x, leaving: true } : x)));
+    toastTimers.current.set(id, setTimeout(() => { toastTimers.current.delete(id); commitToasts(toastsRef.current.filter((x) => x.id !== id)); }, FADE_MS));
   }, []);
+  const flash = useCallback((msg, kind = "ok") => {
+    const text = String(msg);
+    const life = kind === "error" ? 9000 : 2600;
+    const live = toastsRef.current.filter((x) => !x.leaving);
+    const same = live.find((x) => x.msg === text && x.kind === kind);
+    if (same) { clearToastTimer(same.id); toastTimers.current.set(same.id, setTimeout(() => removeToast(same.id), life)); return; }
+    const id = ++toastSeq.current;
+    commitToasts([...toastsRef.current, { id, msg: text, kind, leaving: false }]);
+    toastTimers.current.set(id, setTimeout(() => removeToast(id), life));
+    live.slice(0, Math.max(0, live.length + 1 - 3)).forEach((x) => removeToast(x.id)); // keep at most 3: the oldest (top) fade out to make room
+  }, [removeToast]);
+  useEffect(() => { // any part of the app can raise a toast with: window.dispatchEvent(new CustomEvent("yyc-toast", { detail: { msg, kind } }))
+    const on = (e) => { if (e.detail && e.detail.msg) flash(e.detail.msg, e.detail.kind === "error" ? "error" : "ok"); };
+    window.addEventListener("yyc-toast", on);
+    const timers = toastTimers.current;
+    return () => { window.removeEventListener("yyc-toast", on); timers.forEach(clearTimeout); timers.clear(); };
+  }, [flash]);
   // The bottom-left button. With sign-in it is Log in (guest) / Log out (signed in); the SERVER decides who is an admin, so there is no
   // passcode. Without the shared database it stays "Unlock admin" with the passcode.
   const authLabel = window.storage?.remote ? (isGuest ? "Log in" : "Log out") : (isAdmin ? t.lockAdmin : t.unlockAdmin);
@@ -390,10 +413,14 @@ export default function App() {
       )}
       {profileOpen && signedUser && <ScreenBoundary><Suspense fallback={null}><ProfileModal user={signedUser} onClose={() => setProfileOpen(false)} /></Suspense></ScreenBoundary>}
       {confirm && <ConfirmModal {...confirm} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
-      {toast && (
-        <div className={`yyc-toast${toast.kind === "error" ? " is-error" : ""}`} role={toast.kind === "error" ? "alert" : "status"}>
-          <div className="yyc-toast-dot" /><span className="yyc-toast-msg">{toast.msg}</span>
-          {toast.kind === "error" && <button type="button" className="yyc-toast-x" onClick={dismissToast} aria-label="Dismiss this message"><Icon name="close" size={13} /></button>}
+      {toasts.length > 0 && (
+        <div className="yyc-toasts">
+          {toasts.map((x) => (
+            <div key={x.id} className={`yyc-toast${x.kind === "error" ? " is-error" : ""}${x.leaving ? " is-leaving" : ""}`} role={x.kind === "error" ? "alert" : "status"}>
+              <div className="yyc-toast-dot" /><span className="yyc-toast-msg">{x.msg}</span>
+              {x.kind === "error" && <button type="button" className="yyc-toast-x" onClick={() => removeToast(x.id)} aria-label="Dismiss this message"><Icon name="close" size={13} /></button>}
+            </div>
+          ))}
         </div>
       )}
     </div>
