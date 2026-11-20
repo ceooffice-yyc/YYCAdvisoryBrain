@@ -24,8 +24,7 @@ const PRELOAD = { chat: ChatPanel, explorer: ExplorerPanel, gap: GapPanel, users
 
 export default function App() {
   const [lang] = useState("en"); // [ZH disabled for now] was: const [lang, setLang] = useState("en");
-  const [tab, setTab] = useState("kb");
-  useEffect(() => { window.scrollTo(0, 0); }, [tab]); // a newly opened tab starts at its top, not where the last one was scrolled to
+  const [tabRaw, setTab] = useState("kb");
   useEffect(() => { // once the page is up and the browser is idle, fetch the small document window so opening a card is instant (not on a slow or data-saving connection)
     const c = navigator.connection;
     if (c && (c.saveData || /2g/.test(c.effectiveType || ""))) return undefined;
@@ -35,7 +34,15 @@ export default function App() {
     return () => cancel(id);
   }, []);
   const [kbWorking, setKbWorking] = useState(false); // an extraction / save is running inside the Knowledge Base tab
-  const [isAdmin, setIsAdmin] = useState(!!(window.storage?.remote && window.storage.user?.isAdmin)); // with sign-in, admin accounts are admins as soon as they log in
+  const kbWorkingRef = useRef(false);
+  const [, setRoleTick] = useState(0); // bumps to redraw when the signed-in person's role changed
+  const [demoteHeld, setDemoteHeld] = useState(false); // demoted while unsaved work is open: the page stays until they leave it
+  const lastRoleCheck = useRef(0);
+  const [adminOn, setIsAdmin] = useState(!!(window.storage?.remote && window.storage.user?.isAdmin)); // with sign-in, admin accounts are admins as soon as they log in
+  // Admin now = the role says so, unless a demotion is being held back while unsaved work is open. An admin-only tab that is no longer allowed shows the Knowledge Base.
+  const isAdmin = adminOn && !(demoteHeld && !kbWorking);
+  const tab = !isAdmin && (tabRaw === "gap" || tabRaw === "users") ? "kb" : tabRaw;
+  useEffect(() => { window.scrollTo(0, 0); }, [tab]); // a newly opened tab starts at its top, not where the last one was scrolled to
   const [config, setConfig] = useState(null);
   const [index, setIndex] = useState([]);
   const [levers, setLevers] = useState([]);
@@ -118,6 +125,40 @@ export default function App() {
     toastTimers.current.set(id, setTimeout(() => removeToast(id), life));
     live.slice(0, Math.max(0, live.length + 1 - 3)).forEach((x) => removeToast(x.id)); // keep at most 3: the oldest (top) fade out to make room
   }, [removeToast]);
+  useEffect(() => { kbWorkingRef.current = kbWorking; }, [kbWorking]);
+
+  // Role changes while the page is open (an admin made someone a viewer, or the other way round, or disabled the account).
+  // The server already refuses anything the person may no longer do; this makes the SCREEN follow within minutes, with a message instead of a confusing refusal.
+  const checkRole = useCallback(async (fresh) => {
+    const W = window.storage;
+    if (!W?.remote || !W.user) return; // guests and the browser-only mode have no account
+    lastRoleCheck.current = Date.now();
+    const r = await W.refreshMe({ fresh });
+    if (!window.storage?.user) return; // signed out meanwhile
+    if (r.state === "ended") { window.dispatchEvent(new Event("yyc-auth-expired")); return; }
+    if (r.state === "blocked") { window.dispatchEvent(new CustomEvent("yyc-auth-blocked", { detail: { message: r.error } })); return; }
+    if (r.state !== "ok") return;
+    const was = !!W.user.isAdmin, now = !!r.me.isAdmin;
+    W.user = { ...W.user, ...r.me };
+    setRoleTick((n) => n + 1);
+    if (was === now) return;
+    if (now) { setIsAdmin(true); setDemoteHeld(false); flash("Your access changed: you are now an Admin.", "ok"); return; }
+    if (kbWorkingRef.current) { setDemoteHeld(true); flash("Your admin access has ended. Your open work stays on screen, but saving will be refused: copy what you need.", "error"); return; }
+    setIsAdmin(false);
+    flash("Your access changed: you are now a Viewer. Admin actions are no longer available.", "error");
+  }, [flash]);
+  useEffect(() => {
+    if (!(window.storage?.remote && window.storage.user)) return undefined;
+    const EVERY_MS = 5 * 60_000, MIN_GAP_MS = 2 * 60_000, FORCE_GAP_MS = 10_000;
+    // quiet moments only: the tab is visible, and not more often than every couple of minutes (a few requests an hour per person)
+    const maybe = () => { if (document.visibilityState === "visible" && Date.now() - lastRoleCheck.current > MIN_GAP_MS) checkRole(false); };
+    const force = () => { if (Date.now() - lastRoleCheck.current > FORCE_GAP_MS) checkRole(true); }; // an admin-only action was refused: look at once, with a fresh answer
+    const timer = setInterval(maybe, EVERY_MS);
+    document.addEventListener("visibilitychange", maybe);
+    window.addEventListener("focus", maybe);
+    window.addEventListener("yyc-role-check", force);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", maybe); window.removeEventListener("focus", maybe); window.removeEventListener("yyc-role-check", force); };
+  }, [checkRole]);
   useEffect(() => { // any part of the app can raise a toast with: window.dispatchEvent(new CustomEvent("yyc-toast", { detail: { msg, kind } }))
     const on = (e) => { if (e.detail && e.detail.msg) flash(e.detail.msg, e.detail.kind === "error" ? "error" : "ok"); };
     window.addEventListener("yyc-toast", on);

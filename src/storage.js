@@ -46,11 +46,23 @@ async function makeRemote(local, cfg, sdk) {
       let data = null;
       try { data = await res.json(); } catch { /* empty body */ }
       if (res.status === 401 && !quiet && !isGuest()) window.dispatchEvent(new Event("yyc-auth-expired")); // session ended: back to the sign-in screen
+      // an admin-only action was refused: the person's role may have changed, so the app asks the server again (src/App.jsx listens)
+      if (res.status === 403 && data && /need an admin account/i.test(String(data.error || ""))) window.dispatchEvent(new Event("yyc-role-check"));
       return { res, data };
     },
 
     // ── sign-in ──
     async hasSession() { return !!(await token()); },
+    /* Ask the server who this is NOW (role changed, account disabled). Never throws: { state: "ok", me } | "ended" (session over) | "blocked" (disabled, not allowed) | "offline". */
+    async refreshMe({ fresh = false } = {}) {
+      let out;
+      try { out = await storage.api("GET", { query: `?action=me${fresh ? "&fresh=1" : ""}`, quiet: true }); } catch { return { state: "offline" }; }
+      const { res, data } = out;
+      if (res.ok && data && data.id) return { state: "ok", me: data };
+      if (res.status === 401) return { state: "ended" };
+      if (res.status === 403) return { state: "blocked", error: (data && data.error) || "Your access has changed. Please sign in again." };
+      return { state: "offline" }; // a busy or briefly unavailable server is not a reason to change anything
+    },
     async loadMe() { // who am I, according to the server (also enforces ALLOWED_EMAIL_DOMAINS)
       const { res, data } = await storage.api("GET", { query: "?action=me" });
       if (!res.ok) { storage.user = null; throw new Error((data && data.error) || `Shared database error (${res.status})`); }

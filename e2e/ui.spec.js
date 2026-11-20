@@ -387,3 +387,119 @@ test('UI-03 an error toast stays longer than a normal one and screen readers hea
   await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toHaveCount(0, { timeout: 5000 }); // the normal one has gone after a few seconds
   await expect(page.getByRole('alert').filter({ hasText: 'Something went wrong' })).toBeVisible(); // the error is still there
 });
+
+/* Role changes while the page is open: the screen follows (a message, and the admin controls appear or go), instead of a confusing refusal later. */
+async function roleServer(page, state) {
+  await page.route('**/api/db?action=me*', (route) => {
+    state.meCalls++;
+    if (state.blocked) return route.fulfill({ status: 403, json: { error: state.blocked } });
+    return route.fulfill({ json: { id: 'u1', email: 'a.long.email.address@yyc-example.test', isAdmin: state.admin, mustChangePassword: false } });
+  });
+}
+const askNow = (page) => page.evaluate(() => window.dispatchEvent(new Event('yyc-role-check')));
+const usersTab = (page) => page.locator('.yyc-botnav-item:visible, .yyc-nav-item:visible').filter({ hasText: 'Users' });
+const phone = { viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true };
+
+test('SEC-07 a demoted admin sees a message and the admin controls disappear, without refreshing', async ({ browser }) => {
+  const ctx = await browser.newContext(phone);
+  const page = await ctx.newPage();
+  const state = { admin: true, meCalls: 0 };
+  await signedInAs(page, { admin: true }); await roleServer(page, state);
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Add material' }).first()).toBeVisible();
+  await expect(usersTab(page).first()).toBeVisible();
+  state.admin = false; await askNow(page);
+  await expect(page.getByRole('alert').filter({ hasText: 'you are now a Viewer' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Add material' })).toHaveCount(0);
+  await expect(usersTab(page)).toHaveCount(0);
+  await expect(page.locator('.yyc-botnav-item').filter({ hasText: 'Gap Log' })).toHaveCount(0);
+  await ctx.close();
+});
+
+test('SEC-07 a demoted admin who is on the Users screen is taken to the Knowledge Base', async ({ browser }) => {
+  const ctx = await browser.newContext(phone);
+  const page = await ctx.newPage();
+  const state = { admin: true, meCalls: 0 };
+  await signedInAs(page); await roleServer(page, state);
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await usersTab(page).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 15_000 });
+  state.admin = false; await askNow(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Knowledge Base' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toHaveCount(0);
+  await ctx.close();
+});
+
+test('SEC-07 a viewer who is made an admin is told, and the admin controls appear', async ({ browser }) => {
+  const ctx = await browser.newContext(phone);
+  const page = await ctx.newPage();
+  const state = { admin: false, meCalls: 0 };
+  await signedInAs(page, { admin: false }); await roleServer(page, state);
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Add material' })).toHaveCount(0);
+  state.admin = true; await askNow(page);
+  await expect(page.getByRole('status').filter({ hasText: 'you are now an Admin' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Add material' }).first()).toBeVisible();
+  await expect(usersTab(page).first()).toBeVisible();
+  await ctx.close();
+});
+
+test('SEC-07 when the server refuses an admin action, the screen checks the role and updates itself', async ({ browser }) => {
+  const ctx = await browser.newContext(phone);
+  const page = await ctx.newPage();
+  const state = { admin: true, meCalls: 0 };
+  await signedInAs(page); await roleServer(page, state);
+  await page.route('**/api/db', async (route) => {
+    if (route.request().method() === 'POST' && (route.request().postDataJSON() || {}).op === 'user_create') { state.admin = false; return route.fulfill({ status: 403, json: { error: 'You need an admin account to do that.' } }); } // demoted just now
+    return route.fallback();
+  });
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  await usersTab(page).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 15_000 });
+  await page.getByPlaceholder('name@company.com').fill('someone@yyc-example.test');
+  await page.getByRole('button', { name: 'Create account', exact: true }).first().click();
+  await page.locator('.yyc-modal').getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'you are now a Viewer' })).toBeVisible({ timeout: 10_000 });
+  await expect(usersTab(page)).toHaveCount(0);
+  await ctx.close();
+});
+
+test('SEC-07 an account disabled while its page is open is sent to the sign-in screen with the reason', async ({ browser }) => {
+  const ctx = await browser.newContext(phone);
+  const page = await ctx.newPage();
+  const state = { admin: false, meCalls: 0 };
+  await signedInAs(page, { admin: false }); await roleServer(page, state);
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  state.blocked = 'This account has been disabled. Please contact your administrator.'; await askNow(page);
+  await expect(page.getByText('This account has been disabled')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.yyc-doc')).toHaveCount(0);
+  await ctx.close();
+});
+
+test('SEC-07 the role is re-checked only now and then: once about every five minutes while the page is visible, once for a burst of refusals, not again right after a focus', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  const state = { admin: true, meCalls: 0 };
+  await signedInAs(page); await roleServer(page, state);
+  await page.clock.install();
+  await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+  const settle = async () => { let last = -1; while (last !== state.meCalls) { last = state.meCalls; await page.waitForTimeout(400); } return state.meCalls; }; // let in-flight requests finish
+  const base = await settle(); // start-up requests are done
+  await page.clock.runFor('04:30'); // 4.5 minutes: too early for the five-minute check
+  expect(await settle()).toBe(base);
+  await page.clock.runFor('01:00'); // 5.5 minutes: one check has run
+  const afterFirst = await settle();
+  expect(afterFirst).toBe(base + 1);
+  await page.evaluate(() => { for (let i = 0; i < 10; i++) window.dispatchEvent(new Event('yyc-role-check')); }); // ten refusals in a burst: one look, with a fresh answer
+  const afterBurst = await settle();
+  expect(afterBurst).toBe(afterFirst + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // coming back to the tab right after a check: nothing new
+  expect(await settle()).toBe(afterBurst);
+  await ctx.close();
+});

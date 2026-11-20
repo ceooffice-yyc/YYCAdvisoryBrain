@@ -398,7 +398,10 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
     user = { id: null, email: null, isAdmin: false, guest: true };
   } else {
     if (!signedOut) { const blocked = waitFor('auth-fail', clientIp(req), 30, 60_000, now()); if (blocked) return tooMany(blocked); }
-    const a = await authenticate(req.headers, env, now(), { allowMustChange: true });
+    // The role is read from Supabase again (not from the one-minute memory) for every admin-only action and for "who am I" with fresh=1, so a demoted
+    // admin is stopped at once, on every server instance; ordinary reads keep the memory.
+    const fresh = (!!op && op.level === 'admin') || (method === 'GET' && q.action === 'me' && String(q.fresh) === '1');
+    const a = await authenticate(req.headers, env, now(), { allowMustChange: true, fresh });
     if (!a.ok) {
       if (!signedOut) hit('auth-fail', clientIp(req), 30, 60_000, now()); // a wrong or forged token, over and over
       return json(a.status, { error: a.error });

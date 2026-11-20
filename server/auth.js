@@ -27,7 +27,7 @@ export async function authenticate(headers = {}, env = process.env, now = Date.n
   const token = m[1].trim();
 
   let user;
-  const hit = cache.get(token);
+  const hit = opts.fresh ? null : cache.get(token); // opts.fresh: ask Supabase again (admin actions, "who am I" after a 403)
   if (hit && now - hit.at < CACHE_MS) user = hit.user;
   else {
     let res;
@@ -60,4 +60,4 @@ function tokenIssuedAt(token) {
 
 export const clearAuthCache = () => cache.clear(); // after an admin disables someone, so the next request sees it at once
 
-export const _test = { cache };
+export const _test = { cache, setClient: (c) => { client = c; } };

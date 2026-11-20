@@ -201,6 +201,8 @@ export default function Root({ boot }) {
     let off = W.onSignedOut(() => toLogin(''))
     const expired = () => { W.signOut().finally(() => toLogin('Your session has ended. Please sign in again.')) }
     window.addEventListener('yyc-auth-expired', expired)
+    const blocked = (e) => { const m = (e.detail && e.detail.message) || 'Your access has changed. Please sign in again.'; W.signOut().finally(() => toLogin(m)) } // an admin disabled this account while it was open
+    window.addEventListener('yyc-auth-blocked', blocked)
     const showLogin = () => toLogin('') // the guest pressed "Log in"
     window.addEventListener('yyc-show-login', showLogin)
     ;(async () => {
@@ -214,7 +216,7 @@ export default function Root({ boot }) {
       }
       try { const me = await W.loadMe(); setUser(me); if (me.mustChangePassword) { setPwKind('temp'); setPhase('setpw') } else setPhase('app') } catch (e) { await W.signOut(); toLogin(String(e.message || '')) }
     })()
-    return () => { off(); window.removeEventListener('yyc-auth-expired', expired); window.removeEventListener('yyc-show-login', showLogin) }
+    return () => { off(); window.removeEventListener('yyc-auth-expired', expired); window.removeEventListener('yyc-auth-blocked', blocked); window.removeEventListener('yyc-show-login', showLogin) }
   }, [signedIn, boot.guest, boot.link, boot.linkError, boot.tokenHash, boot.tokenType, toLogin])
 
   // the password is saved: ask the server who this is (it also applies the allowed-domain and disabled-account rules), then open the library

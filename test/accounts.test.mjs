@@ -170,7 +170,9 @@ test('database API: admin-only operations refuse no sign-in (401) and viewers (4
   const T = 1_700_000_000_000;
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com', ALLOW_GUEST: 'false' };
   authTest.cache.clear();
-  authTest.cache.set('viewer', { at: T, user: { id: 'v', email: 'viewer@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {} } });
+  const viewerUser = { id: 'v', email: 'viewer@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: {} };
+  authTest.cache.set('viewer', { at: T, user: viewerUser });
+  authTest.setClient({ auth: { getUser: async (tok) => (tok === 'viewer' ? { data: { user: viewerUser } } : { data: { user: null }, error: { message: 'bad token' } }) } }); // stands in for Supabase
   const adminOps = ['doc_save', 'doc_update', 'doc_delete', 'record_save', 'record_delete', 'config_save', 'import_docs', 'ask_log_list', 'gap_list', 'gap_clear',
     'users_list', 'user_invite', 'user_create', 'user_temp_password', 'user_set_role', 'user_set_disabled', 'user_send_reset', 'requests_list', 'request_decide', 'account_events'];
   for (const op of adminOps) {
@@ -181,6 +183,7 @@ test('database API: admin-only operations refuse no sign-in (401) and viewers (4
   }
   const guestRead = await handleDb({ method: 'POST', headers: {}, body: { op: 'library' } }, { env, now: () => T });
   assert.equal(guestRead.status, 401, 'with ALLOW_GUEST=false even the guest reads need a sign-in');
+  authTest.setClient(null);
 });
 
 test('database API: "request access" needs no sign-in, but its failures never show internals', async () => {
@@ -579,4 +582,47 @@ test('review 9: disable and enable need a real true or false; two requests at th
   acct._test.resetLimits();
   const racing = fakeSb({ users: [boss, second], insertError: { code: '23505', message: 'duplicate key value violates unique constraint "access_requests_one_pending"' } });
   assert.deepEqual(await acct.createRequest(racing, ENV_OFF, { name: 'R', email: 'r@yycadvisors.com', password: 'a long enough passphrase' }, '17.1.1.1'), { ok: true });
+});
+
+// A role change takes effect on the SERVER at once for admin-only actions, on every instance: they never trust the one-minute memory.
+test('a demoted admin is stopped on the very next admin action, even while the one-minute memory still says admin', async () => {
+  const T = 1_700_000_000_000;
+  const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
+  const base = { id: 'a1', email: 'was.admin@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z' };
+  authTest.cache.clear();
+  authTest.cache.set('tok', { at: T, user: { ...base, app_metadata: { role: 'admin' } } }); // remembered as an admin a few seconds ago
+  let calls = 0, answer = { ...base, app_metadata: { role: 'viewer' } }; // ...but Supabase now says viewer
+  authTest.setClient({ auth: { getUser: async () => { calls++; if (answer === 'down') throw new Error('network'); return { data: { user: answer } }; } } });
+  try {
+    const req = (extra) => ({ method: 'POST', headers: { authorization: 'Bearer tok' }, body: { op: 'user_set_role', id: 'x', role: 'viewer' }, ...extra });
+    const demoted = await handleDb(req(), { env, now: () => T + 5000 });
+    assert.equal(demoted.status, 403, 'refused: the fresh answer says viewer');
+    assert.equal(calls, 1, 'Supabase was asked again');
+    // ordinary reads still use the memory (no extra call): it is refreshed by the fresh answer above, so this one is a plain cache hit
+    const before = calls;
+    await authenticate({ authorization: 'Bearer tok' }, env, T + 6000);
+    assert.equal(calls, before, 'an ordinary request does not ask Supabase again');
+    // fail closed: if the fresh check cannot be made, the admin action is refused, not allowed
+    answer = 'down';
+    authTest.cache.set('tok', { at: T + 7000, user: { ...base, app_metadata: { role: 'admin' } } });
+    const down = await handleDb(req(), { env, now: () => T + 7500 });
+    assert.equal(down.status, 401, 'cannot verify, so no admin action');
+  } finally { authTest.setClient(null); authTest.cache.clear(); }
+});
+
+test('"who am I" with fresh=1 reads the role again; without it the memory may answer', async () => {
+  const T = 1_700_000_000_000;
+  const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
+  const base = { id: 'a2', email: 'someone@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z' };
+  authTest.cache.clear();
+  authTest.cache.set('tok2', { at: T, user: { ...base, app_metadata: { role: 'admin' } } });
+  authTest.setClient({ auth: { getUser: async () => ({ data: { user: { ...base, app_metadata: {} } } }) } }); // now a viewer
+  try {
+    const cached = await handleDb({ method: 'GET', query: { action: 'me' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 1000 });
+    assert.equal(cached.body.isAdmin, true, 'the one-minute memory answers an ordinary "me"');
+    const fresh = await handleDb({ method: 'GET', query: { action: 'me', fresh: '1' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 1000 });
+    assert.equal(fresh.body.isAdmin, false, 'fresh=1 sees the demotion at once');
+    const again = await handleDb({ method: 'GET', query: { action: 'me' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 2000 });
+    assert.equal(again.body.isAdmin, false, 'and the memory is corrected for the next ordinary request');
+  } finally { authTest.setClient(null); authTest.cache.clear(); }
 });

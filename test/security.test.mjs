@@ -135,9 +135,13 @@ test('SEC-06 an unconfirmed email address is refused; a confirmed one is accepte
 test('SEC-06 the shared example questions can only be changed by an admin', async () => {
   limits.reset();
   authTest.cache.clear();
-  authTest.cache.set('viewer', { at: T, user: confirmed('v', 'v@yycadvisors.com') });
-  const out = await handleDb({ method: 'POST', headers: { authorization: 'Bearer viewer' }, body: { op: 'suggestions_set', value: { en: ['x'] } } }, { env: DB, now: () => T });
-  assert.equal(out.status, 403);
+  const viewer = confirmed('v', 'v@yycadvisors.com');
+  authTest.cache.set('viewer', { at: T, user: viewer });
+  authTest.setClient({ auth: { getUser: async () => ({ data: { user: viewer } }) } }); // admin-only actions ask Supabase again; this stands in for it
+  try {
+    const out = await handleDb({ method: 'POST', headers: { authorization: 'Bearer viewer' }, body: { op: 'suggestions_set', value: { en: ['x'] } } }, { env: DB, now: () => T });
+    assert.equal(out.status, 403);
+  } finally { authTest.setClient(null); }
 });
 
 test('SEC-05 repeated wrong tokens from one address are slowed down', async () => {
