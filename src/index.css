@@ -14,7 +14,8 @@
   --brand-rgb: 154, 0, 0;                   /* the brand colour as r, g, b, for shadows */
   --gold: #B8860B; --gold-dark: #8A6508; --gold-soft: #FFF6DC; --gold-text: #7A5906;
   --green: #0E7C4A; --green-soft: #E6F5EC; --green-text: #0B6B40;
-  --red: #B42318; --red-soft: #FDECEC; --red-text: #A61F15;
+  /* DANGER (errors, delete): a warmer vermilion, deliberately NOT the brand crimson above, so "something is wrong" never looks like "our colour". White on --red is 4.8:1. */
+  --red: #D4380D; --red-soft: #FFEEE8; --red-text: #B02A08; --danger-rgb: 212, 56, 13;
   --blue: #3D4B6E; --blue-soft: #EEF0F5; --blue-text: #3D4B6E;
 
   --on-fill: #FFFFFF;                 /* text on a crimson / maroon / red fill */
@@ -58,7 +59,7 @@
     --brand-rgb: 194, 47, 40;
     --gold: #C9981C; --gold-dark: #E0B648; --gold-soft: #33290F; --gold-text: #EDC865;
     --green: #2E9F69; --green-soft: #15301F; --green-text: #7FDCAA;
-    --red: #C73E34; --red-soft: #3A1B19; --red-text: #FF9A91;
+    --red: #CF3A14; --red-soft: #3D1E15; --red-text: #FF9A78; --danger-rgb: 232, 96, 60;
     --blue: #7E8EC0; --blue-soft: #222739; --blue-text: #B4C0EA;
 
     --on-fill: #FFFFFF;

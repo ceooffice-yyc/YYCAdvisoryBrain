@@ -6,6 +6,9 @@ import { leverTag, sortByLever } from "../lib/levers.js";
 import { P, S } from "../theme.js";
 import { T } from "../i18n.js";
 import { Icon } from "../ui/Icon.jsx";
+import { CopyButton } from "../ui/CopyButton.jsx";
+import { formatStrategy } from "../lib/copy.js";
+import { docLink } from "../lib/route.js";
 import { SkeletonLines } from "../ui/Skeleton.jsx";
 import { ClaimText, ImpactBox } from "../ui/ClaimView.jsx";
 
@@ -29,6 +32,12 @@ export function PreviewModal({ t, lang, data, levers, onClose }) {
     return () => clearTimeout(id);
   }, [view]);
 
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const tabs = [
     ...(hasHtml ? [["document", t.docView]] : []),
     ["summary", t.sumView],
@@ -46,7 +55,10 @@ export function PreviewModal({ t, lang, data, levers, onClose }) {
               {doc.problem_signature ? ` · ${doc.problem_signature}` : ""}
             </div>
           </div>
-          <button className="yyc-icon-btn yyc-preview-close" onClick={onClose} aria-label="Close"><Icon name="close" size={14} /></button>
+          <div className="yyc-preview-tools">
+            <CopyButton label="Copy link to this document" done="Link copied" icon="link" getText={() => docLink(doc.id, null)} />
+            <button className="yyc-icon-btn yyc-preview-close" onClick={onClose} aria-label="Close"><Icon name="close" size={14} /></button>
+          </div>
           {tabs.length > 1 && (
             <div className="yyc-seg" role="group" aria-label="What to show">
               {tabs.map(([k, label]) => (
@@ -90,6 +102,9 @@ export function PreviewModal({ t, lang, data, levers, onClose }) {
                     </div>
                     <ImpactBox record={r} style={{ marginTop: 10, padding: "10px 14px", borderRadius: 9 }} />
                     {r.section && <div style={{ fontSize: 11.5, color: P.faint, marginTop: 8, fontWeight: 600 }}>{r.section}</div>}
+                  </div>
+                  <div className="yyc-rec-actions">
+                    <CopyButton label="Copy this strategy" done="Strategy copied" getText={() => formatStrategy(r, { leverName: t.levers[r.lever] || r.lever, docTitle: doc.title })} />
                   </div>
                 </div>
               </div>

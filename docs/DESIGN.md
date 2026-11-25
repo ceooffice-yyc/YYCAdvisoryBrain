@@ -62,3 +62,13 @@ The security headers are a few lines of our own code, not a library, so the Expr
 - **Brand:** YYC maroon and gold on warm neutrals; a dark theme that follows the system setting.
 - **Motion:** small and quick (transform only), none when the system asks for reduced motion.
 - **Where delight is welcome:** the first-run empty state and the moment an extraction finishes. Nowhere else.
+
+
+## Phase 4: easier to use (design notes)
+
+- **The address is the source of truth for "where am I".** `src/lib/route.js` holds one value (tab, open document and section, library filters, Explorer filters) that the whole app reads with `useRoute()` and changes with `navigate()`. It lives after the `#`, so no server setting is needed and unknown addresses still get the real 404. Tab changes and opening a document add a Back step; filters and typing replace the current step (rewritten at once for a single change, at most every 0.2 s while typing). Closing a document that was opened with a Back step goes back one step, so Back never reopens it.
+- **Everything read from the address is untrusted.** It is checked against a whitelist (tab names, sort names, an id pattern, length limits, no control characters); anything else falls back to the default. Text is only ever shown through React, never as HTML.
+- **Colour roles.** Brand crimson = identity and primary actions. Vermilion (`--red`) = errors and destructive actions only, shown as a light card with an icon (toast) or the dedicated danger button. Gold = highlights and notes. Green = success. A confirm button for a destructive action is the danger button, never the brand button.
+- **Copying never fails silently.** Modern clipboard, then the older hidden-box method, then a window with the text selected. Copy buttons stop the click, so pressing one does not open the card it sits on.
+- **Recently deleted is possible because nothing is hard-deleted.** Deleting a material marks its strategies deleted in the same moment, so restoring it brings back exactly those; a strategy deleted earlier on its own stays listed until restored by itself, and a strategy cannot come back before its material.
+- **The not-found page is static** (it must work when the app cannot start): its own styles, an external script (the security policy blocks inline scripts) and a `<noscript>` meta refresh as the no-JavaScript fallback.

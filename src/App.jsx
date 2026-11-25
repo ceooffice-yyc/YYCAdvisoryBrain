@@ -6,6 +6,8 @@ import { P, fontStack } from "./theme.js";
 import { Icon } from "./ui/Icon.jsx";
 import { GlobalStyles } from "./ui/GlobalStyles.jsx";
 import { BrandMark } from "./ui/BrandMark.jsx";
+import { CopyFallback } from "./ui/CopyFallback.jsx";
+import { closeDoc, navigate, useRoute } from "./lib/route.js";
 import { SkeletonLines, SkeletonPage } from "./ui/Skeleton.jsx";
 import { ConfirmModal } from "./ui/ConfirmModal.jsx";
 import { lazyScreen } from "./lazyScreen.js";
@@ -21,11 +23,14 @@ const PreviewModal = lazyScreen(() => import("./screens/PreviewModal.jsx"), "Pre
 const AdminGate = lazyScreen(() => import("./ui/AdminGate.jsx"), "AdminGate");
 const CommandPalette = lazyScreen(() => import("./ui/CommandPalette.jsx"), "CommandPalette");
 const ProfileModal = lazyScreen(() => import("./ui/ProfileModal.jsx"), "ProfileModal");
+const SEARCH_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "") ? "⌘K" : "Ctrl K";
 const PRELOAD = { chat: ChatPanel, explorer: ExplorerPanel, gap: GapPanel, users: UsersPanel }; // started when the pointer is over a tab
 
 export default function App() {
   const [lang] = useState("en"); // [ZH disabled for now] was: const [lang, setLang] = useState("en");
-  const [tabRaw, setTab] = useState("kb");
+  const route = useRoute(); // the tab, the open document and the filters live in the address (src/lib/route.js): Back works, a refresh keeps the place, links can be shared
+  const tabRaw = route.tab;
+  const setTab = useCallback((k) => navigate({ tab: k, doc: null, section: null }, { push: true }), []);
   useEffect(() => { // once the page is up and the browser is idle, fetch the small document window so opening a card is instant (not on a slow or data-saving connection)
     const c = navigator.connection;
     if (c && (c.saveData || /2g/.test(c.effectiveType || ""))) return undefined;
@@ -42,17 +47,19 @@ export default function App() {
   const [adminOn, setIsAdmin] = useState(!!(window.storage?.remote && window.storage.user?.isAdmin)); // with sign-in, admin accounts are admins as soon as they log in
   // Admin now = the role says so, unless a demotion is being held back while unsaved work is open. An admin-only tab that is no longer allowed shows the Knowledge Base.
   const isAdmin = adminOn && !(demoteHeld && !kbWorking);
-  const tab = !isAdmin && (tabRaw === "gap" || tabRaw === "users") ? "kb" : tabRaw;
-  useEffect(() => { window.scrollTo(0, 0); }, [tab]); // a newly opened tab starts at its top, not where the last one was scrolled to
   const [config, setConfig] = useState(null);
   const [index, setIndex] = useState([]);
   const [levers, setLevers] = useState([]);
   const [ready, setReady] = useState(false);
   const [loadErr, setLoadErr] = useState(false);
-  const [previewDoc, setPreviewDoc] = useState(null);
+  const [previewDoc, setPreviewDoc] = useState(null); // the document that was loaded for route.doc: { doc, targetRecordId }
+  const recordTarget = useRef(null);
   const [gateOpen, setGateOpen] = useState(false);
   const signedUser = window.storage?.remote ? window.storage.user : null; // { id, email, isAdmin } when the shared database is on
   const isGuest = !!(window.storage?.remote && !window.storage.user); // "continue as guest": may only browse the knowledge base and lever records
+  // a tab the person may not use (an address typed or shared by someone with more access) shows the Knowledge Base instead
+  const tab = (!isAdmin && (tabRaw === "gap" || tabRaw === "users")) || (isGuest && tabRaw === "chat") ? "kb" : tabRaw;
+  useEffect(() => { window.scrollTo(0, 0); }, [tab]); // a newly opened tab starts at its top, not where the last one was scrolled to
   const [toasts, setToasts] = useState([]); // up to 3, oldest first: { id, msg, kind: "ok" | "error", leaving }
   const toastTimers = useRef(new Map());
   const toastSeq = useRef(0);
@@ -73,7 +80,6 @@ export default function App() {
   }), []);
   const [adminLocked, setAdminLocked] = useState(false);
   const [palette, setPalette] = useState(false);
-  const [paletteLever, setPaletteLever] = useState(null);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -174,7 +180,7 @@ export default function App() {
     if (window.storage?.remote) { if (isGuest) window.dispatchEvent(new Event("yyc-show-login")); else window.storage.signOut(); return; }
     if (isAdmin) setIsAdmin(false); else setGateOpen(true);
   };
-  const exitBlocked = isAdmin && (adminLocked || confirm !== null || previewDoc !== null);
+  const exitBlocked = isAdmin && (adminLocked || confirm !== null || !!route.doc);
   const profileBlocked = exitBlocked || kbWorking || confirm !== null; // nothing in progress may be disturbed by opening the profile, changing the password or logging out
   const profileInitial = ((signedUser && signedUser.email) || "?").charAt(0).toUpperCase();
 
@@ -220,10 +226,27 @@ export default function App() {
   // [ZH disabled for now — English only] language switcher handler
   // const switchLang = (l) => { setLang(l); sset("ui:lang", l, false).catch(() => { }); };
 
-  const openPreview = useCallback(async (docId, targetSection, targetRecordId) => {
-    const doc = await window.db.getDocument(docId);
-    if (doc) setPreviewDoc({ doc, targetSection: targetSection || null, targetRecordId: targetRecordId || null });
+  // Opening a document adds a Back step; the window itself is drawn from the address (route.doc), so a shared link, a refresh and Back all work.
+  const openPreview = useCallback((docId, targetSection, targetRecordId) => {
+    recordTarget.current = targetRecordId || null;
+    navigate({ doc: docId, section: targetSection || null }, { push: true });
   }, []);
+  const closePreview = useCallback(() => closeDoc(), []);
+  useEffect(() => {
+    const id = route.doc;
+    if (!id) return undefined;
+    let live = true;
+    window.db.getDocument(id).then((doc) => {
+      if (!live) return;
+      if (doc) setPreviewDoc({ doc, targetRecordId: recordTarget.current });
+      else { flash("That document could not be found. It may have been deleted.", "error"); navigate({ doc: null, section: null }); }
+    }).catch(() => {
+      if (!live) return;
+      flash("The document could not be opened. Check your connection and try again.", "error");
+      navigate({ doc: null, section: null });
+    });
+    return () => { live = false; };
+  }, [route.doc, flash]);
 
   const refreshKB = async () => {
     const kb = await window.db.loadKB();
@@ -277,6 +300,10 @@ export default function App() {
               <div className="yyc-brand-sub">{t.appSub}</div>
             </div>
           </div>
+
+          <button type="button" className="yyc-search-btn" onClick={() => setPalette(true)} aria-keyshortcuts="Control+K Meta+K">
+            <Icon name="search" size={15} /><span className="yyc-search-btn-text">Search the library</span><kbd className="yyc-kbd">{SEARCH_KEY}</kbd>
+          </button>
 
           <nav className="yyc-nav">
             <div className="yyc-nav-label">{t.workspace}</div>
@@ -344,6 +371,7 @@ export default function App() {
               </div>
             </div>
             <div className="yyc-topbar-actions">
+              <button type="button" className="yyc-icon-btn yyc-topbar-search" onClick={() => setPalette(true)} aria-label="Search the library"><Icon name="search" size={18} /></button>
               {/* [ZH disabled for now — English only] language switcher
               <div className="yyc-lang">
                 {["en", "zh"].map((l) => (
@@ -393,7 +421,6 @@ export default function App() {
                     refreshKB={refreshKB} openPreview={openPreview} flash={flash}
                     config={config} setConfig={setConfig} setConfirm={setConfirm}
                     setAdminLocked={setAdminLocked}
-                    paletteLever={paletteLever} clearPaletteLever={() => setPaletteLever(null)}
                   />
                   </Suspense></ScreenBoundary>
                 </div>
@@ -436,11 +463,15 @@ export default function App() {
         </main>
       </div>
 
-      {previewDoc && (
-        <ScreenBoundary><Suspense fallback={<div className="yyc-modal-backdrop"><div className="yyc-modal" style={{ width: 840, maxWidth: "100%", padding: 24 }}><SkeletonLines rows={8} label="Opening the document" /></div></div>}>
-          <PreviewModal t={t} lang={lang} data={previewDoc} levers={levers} index={index} onClose={() => setPreviewDoc(null)} />
-        </Suspense></ScreenBoundary>
-      )}
+      {/* The document window is drawn from the address. While the document is being fetched a plain placeholder shows; once it is here the window (which loads its own code) takes over,
+          with the same placeholder while that code arrives. They are never on the page together. */}
+      {route.doc && (previewDoc && previewDoc.doc.id === route.doc
+        ? (
+          <ScreenBoundary><Suspense fallback={<div className="yyc-modal-backdrop"><div className="yyc-modal" style={{ width: 840, maxWidth: "100%", padding: 24 }}><SkeletonLines rows={8} label="Opening the document" /></div></div>}>
+            <PreviewModal key={`${route.doc}|${route.section || ""}`} t={t} lang={lang} data={{ doc: previewDoc.doc, targetSection: route.section, targetRecordId: previewDoc.targetRecordId }} levers={levers} index={index} onClose={closePreview} />
+          </Suspense></ScreenBoundary>
+        )
+        : <div className="yyc-modal-backdrop"><div className="yyc-modal" style={{ width: 840, maxWidth: "100%", padding: 24 }}><SkeletonLines rows={8} label="Opening the document" /></div></div>)}
       {gateOpen && <ScreenBoundary><Suspense fallback={null}><AdminGate t={t} config={config} onOk={() => { setIsAdmin(true); setGateOpen(false); }} onClose={() => setGateOpen(false)} /></Suspense></ScreenBoundary>}
       {palette && (
         <ScreenBoundary><Suspense fallback={null}>
@@ -449,17 +480,18 @@ export default function App() {
             onClose={() => setPalette(false)}
             onTab={(id) => setTab(id)}
             onDoc={(id) => openPreview(id)}
-            onLever={(id) => { setTab("kb"); setPaletteLever(id); }}
+            onLever={(id) => navigate({ tab: "kb", doc: null, section: null, kb: { lever: id } }, { push: true })}
           />
         </Suspense></ScreenBoundary>
       )}
       {profileOpen && signedUser && <ScreenBoundary><Suspense fallback={null}><ProfileModal user={signedUser} onClose={() => setProfileOpen(false)} /></Suspense></ScreenBoundary>}
       {confirm && <ConfirmModal {...confirm} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.onConfirm(); setConfirm(null); }} />}
+      <CopyFallback />
       {toasts.length > 0 && (
         <div className="yyc-toasts">
           {toasts.map((x) => (
             <div key={x.id} className={`yyc-toast${x.kind === "error" ? " is-error" : ""}${x.leaving ? " is-leaving" : ""}`} role={x.kind === "error" ? "alert" : "status"}>
-              <div className="yyc-toast-dot" /><span className="yyc-toast-msg">{x.msg}</span>
+              {x.kind === "error" ? <span className="yyc-toast-ico" aria-hidden="true"><Icon name="alert" size={14} /></span> : <div className="yyc-toast-dot" />}<span className="yyc-toast-msg">{x.msg}</span>
               {x.kind === "error" && <button type="button" className="yyc-toast-x" onClick={() => removeToast(x.id)} aria-label="Dismiss this message"><Icon name="close" size={13} /></button>}
             </div>
           ))}

@@ -21,6 +21,10 @@ export function GlobalStyles() {
       .yyc-brand-text { min-width: 0; }
       .yyc-brand-name { font-size: 16px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; color: ${P.title}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .yyc-brand-sub { color: ${P.faint}; font-size: 12px; line-height: 1.3; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .yyc-search-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 0 0 18px; padding: 8px 12px; border-radius: 13px; border: 1px solid ${P.lineDark}; background: ${P.paper}; color: ${P.sub}; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; text-align: left; }
+      .yyc-search-btn:hover { border-color: ${P.ink}; color: ${P.ink}; background: ${P.card}; }
+      .yyc-search-btn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .yyc-kbd { font-family: inherit; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.faint}; }
       .yyc-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
       .yyc-nav-label { font-size: 11.5px; font-weight: 700; color: ${P.faint}; text-transform: uppercase; letter-spacing: 0.09em; padding: 0 10px 8px; }
       .yyc-nav-item { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 7px 10px 7px 7px; border-radius: 14px; background: transparent; border: none; cursor: pointer; font-size: 14px; font-weight: 600; color: ${P.sub}; text-align: left; font-family: inherit; transition: background .15s, color .15s; position: relative; }
@@ -95,7 +99,11 @@ export function GlobalStyles() {
       .yyc-search input { padding-left: 38px !important; }
       .yyc-search-icon { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: ${P.faint}; pointer-events: none; }
       .yyc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-      .yyc-doc { background: ${P.card}; border: 1px solid ${P.line}; border-radius: 14px; padding: 18px; cursor: pointer; box-shadow: ${P.s1}; display: flex; flex-direction: column; gap: 12px; transition: box-shadow .2s, transform .2s, border-color .2s; }
+      .yyc-doc, .yyc-skel-card { background: ${P.card}; border: 1px solid ${P.line}; border-radius: 14px; padding: 18px; cursor: pointer; box-shadow: ${P.s1}; display: flex; flex-direction: column; gap: 12px; transition: box-shadow .2s, transform .2s, border-color .2s; }
+      .yyc-doc-open { display: block; width: 100%; background: none; border: 0; padding: 0; margin: 0; color: inherit; text-align: left; cursor: pointer; font-family: inherit; border-radius: 6px; }
+      .yyc-doc-open:focus-visible { outline: 3px solid var(--ring); outline-offset: 3px; }
+      .yyc-lever-record-hit { display: flex; flex-direction: column; gap: 9px; outline: none; border-radius: 8px; }
+      .yyc-lever-record-hit:focus-visible { outline: 3px solid var(--ring); outline-offset: 4px; }
       .yyc-doc:hover { box-shadow: ${P.s3}; transform: translateY(-2px); border-color: ${P.lineDark}; }
       .yyc-doc:focus-visible { outline: none; box-shadow: ${P.focus}; border-color: ${P.crimsonText}; }
       .yyc-doc:focus-within .yyc-doc-actions { opacity: 1; }
@@ -133,7 +141,7 @@ export function GlobalStyles() {
       @media (max-width: 899px) { .yyc-doc-actions { opacity: 1; } }
       .yyc-icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; cursor: pointer; }
       .yyc-icon-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
-      .yyc-icon-btn.is-danger { border-color: rgba(180,35,24,0.35); color: ${P.redText}; }
+      .yyc-icon-btn.is-danger { border-color: rgba(var(--danger-rgb), 0.4); color: ${P.redText}; }
       .yyc-icon-btn.is-danger:hover { background: ${P.redSoft}; border-color: ${P.redText}; }
       .yyc-empty { background: ${P.card}; border: 1px dashed ${P.lineDark}; border-radius: 14px; padding: 56px 32px; text-align: center; color: ${P.sub}; font-size: 13.5px; line-height: 1.6; }
       .yyc-empty-icon { width: 52px; height: 52px; border-radius: 14px; background: ${P.wash}; color: ${P.faint}; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
@@ -142,7 +150,9 @@ export function GlobalStyles() {
       .yyc-lever-chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px; font-weight: 650; border-radius: 999px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; cursor: pointer; font-family: inherit; transition: all .15s; }
       .yyc-lever-chip:hover:not(:disabled) { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
       .yyc-lever-chip.is-active { background: ${P.crimsonSoft}; border-color: ${P.crimsonText}; color: ${P.crimsonText}; }
+      .yyc-lever-chip.is-active:hover:not(:disabled) { background: ${P.crimsonSoft}; border-color: ${P.crimsonText}; color: ${P.crimsonText}; } /* a tap leaves the hover style stuck on a phone: the selected look must win over it */
       .yyc-lever-chip:disabled { opacity: 0.4; cursor: default; }
+      .yyc-lever-chip.is-empty { color: ${P.faint}; border-style: dashed; } /* no records: muted but still readable (fading with opacity failed the contrast check) */
       .yyc-lever-chip-count { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: ${P.wash}; color: ${P.sub}; }
       .yyc-lever-chip.is-active .yyc-lever-chip-count { background: ${P.crimson}; color: #fff; }
       .yyc-filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
@@ -264,16 +274,19 @@ export function GlobalStyles() {
       .yyc-toast.is-leaving { animation: yycToastOut .22s ease-in forwards; pointer-events: none; }
       .yyc-toast { max-width: min(560px, calc(100vw - 32px)); }
       .yyc-toast-msg { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
-      .yyc-toast.is-error { background: var(--red); color: var(--on-fill); align-items: flex-start; padding: 12px 10px 12px 18px; }
-      .yyc-toast.is-error .yyc-toast-dot { background: var(--on-fill); box-shadow: 0 0 0 3px rgba(255,255,255,0.3); margin-top: 6px; flex-shrink: 0; }
+      .yyc-toast.is-error { background: var(--card); color: var(--ink); border: 1px solid rgba(var(--danger-rgb), 0.55); border-left: 5px solid var(--red); align-items: flex-start; padding: 11px 6px 11px 14px; }
+      .yyc-toast-ico { width: 24px; height: 24px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: var(--red); color: var(--on-fill); margin-top: -1px; }
       .yyc-toast-x { flex-shrink: 0; width: 44px; height: 44px; margin: -12px 0 -12px 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: inherit; border: 0; border-radius: 10px; cursor: pointer; }
-      .yyc-toast-x:hover { background: rgba(255,255,255,0.16); }
+      .yyc-toast-x:hover { background: rgba(128,128,128,0.16); }
       .yyc-toast-dot { width: 6px; height: 6px; border-radius: 50%; background: ${P.green}; box-shadow: 0 0 0 3px rgba(14,124,74,0.25); }
       .yyc-btn-primary { ${Object.entries(btnP(false)).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
       .yyc-btn-primary, .yyc-btn-secondary { gap: 8px; }
       .yyc-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .yyc-draft-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 14px 16px; margin-bottom: 18px; background: ${P.goldSoft}; border: 1px solid ${P.gold}; border-radius: 14px; }
       .yyc-draft-ico { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; background: ${P.card}; color: ${P.goldText}; }
+      .yyc-btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 10px 20px; border-radius: 20px; border: 1px solid transparent; background: var(--red); color: var(--on-fill); font-family: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; box-shadow: 0 1px 3px rgba(var(--danger-rgb), 0.3); }
+      .yyc-btn-danger:hover:not(:disabled) { filter: brightness(0.9); box-shadow: 0 3px 10px rgba(var(--danger-rgb), 0.3); }
+      .yyc-btn-danger:disabled { opacity: 0.6; cursor: default; }
       .yyc-btn-primary:hover:not(:disabled) { background: ${P.crimsonDark} !important; box-shadow: 0 3px 10px rgba(var(--brand-rgb), 0.3) !important; }
       .yyc-btn-primary:active:not(:disabled) { transform: translateY(1px); }
       .yyc-btn-primary:disabled { cursor: default; }
@@ -305,11 +318,31 @@ export function GlobalStyles() {
       .yyc-preview-title { grid-area: title; min-width: 0; }
       .yyc-preview-h { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; line-height: 1.3; overflow-wrap: anywhere; }
       .yyc-preview-meta { font-size: 12.5px; color: ${P.sub}; margin-top: 5px; line-height: 1.5; overflow-wrap: anywhere; }
-      .yyc-preview-close { grid-area: close; width: 36px; height: 36px; }
+      .yyc-preview-tools { grid-area: close; display: flex; gap: 6px; align-items: flex-start; }
+      .yyc-preview-tools .yyc-icon-btn { width: 36px; height: 36px; }
       .yyc-seg { grid-area: tabs; display: flex; border: 1px solid ${P.lineDark}; border-radius: 10px; overflow: hidden; background: ${P.card}; }
       .yyc-seg-btn { flex: 1 1 0; min-width: 0; padding: 8px 14px; font-size: 12.5px; font-weight: 650; font-family: inherit; line-height: 1.2; text-align: center; background: transparent; color: ${P.sub}; border: 0; cursor: pointer; }
       .yyc-seg-btn + .yyc-seg-btn { border-left: 1px solid ${P.line}; }
       .yyc-seg-btn.is-active { background: ${P.ink}; color: ${P.paper}; }
+      .yyc-trash-h { font-size: 15px; font-weight: 800; margin: 0 0 10px; color: ${P.title}; }
+      .yyc-trash-h span { color: ${P.faint}; font-weight: 700; }
+      .yyc-trash-list { display: grid; gap: 8px; }
+      .yyc-trash-row { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; padding: 12px 14px; background: ${P.card}; border: 1px solid ${P.line}; border-radius: 14px; }
+      .yyc-trash-main { flex: 1 1 260px; min-width: 0; }
+      .yyc-trash-title { font-weight: 700; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+      .yyc-trash-meta { font-size: 12.5px; color: ${P.sub}; margin-top: 3px; line-height: 1.5; overflow-wrap: anywhere; }
+      .yyc-trash-note { font-size: 12.5px; color: ${P.goldText}; margin-top: 4px; font-weight: 650; }
+      .yyc-trash-btn { padding: 8px 16px; font-size: 13px; }
+      .yyc-results-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin: 2px 0 16px; }
+      .yyc-results-count { font-size: 12.5px; font-weight: 700; color: ${P.sub}; margin-right: 4px; }
+      .yyc-filter-tag { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 4px 11px; border-radius: 999px; border: 1px solid ${P.crimsonText}; background: ${P.crimsonSoft}; color: ${P.crimsonText}; font-family: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; max-width: 100%; }
+      .yyc-filter-tag:hover { background: ${P.card}; }
+      .yyc-linkbtn-soft { background: none; border: 0; padding: 6px 4px; min-height: 32px; font-family: inherit; font-size: 12.5px; font-weight: 700; color: ${P.crimsonText}; text-decoration: underline; cursor: pointer; }
+      .yyc-copy-btn.is-done { color: ${P.greenText}; border-color: ${P.green}; }
+      .yyc-msg-actions { margin-top: 8px; }
+      .yyc-chip-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 13px; border-radius: 999px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; font-family: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+      .yyc-chip-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
+      .yyc-chip-btn.is-done { color: ${P.greenText}; border-color: ${P.green}; }
       .yyc-rec-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .yyc-rec-label { font-size: 11.5px; font-weight: 700; color: ${P.sub}; text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 -2px; }
 
@@ -337,7 +370,8 @@ export function GlobalStyles() {
         .yyc-preview-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title close" "tabs tabs"; padding: 12px 14px; gap: 10px 10px; }
         .yyc-preview-h { font-size: 16px; }
         .yyc-preview-meta { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .yyc-preview-close { width: 44px; height: 44px; margin: -4px -4px 0 0; }
+        .yyc-preview-tools { margin: -4px -4px 0 0; }
+        .yyc-preview-tools .yyc-icon-btn { width: 44px; height: 44px; }
         .yyc-seg-btn { min-height: 44px; padding: 8px 6px; }
         .yyc-preview-body { padding: 12px !important; }
         .yyc-paper { padding: 18px 16px !important; }
@@ -354,7 +388,7 @@ export function GlobalStyles() {
         .yyc-rec-top .yyc-icon-btn { grid-column: 2; grid-row: 1; }
         .yyc-rec-top .yyc-rec-section { grid-column: 1 / -1; min-width: 0 !important; }
       }
-      @media (max-width: 899px) { .yyc-pillbtn { min-height: 44px; } .yyc-linkbtn { min-height: 44px; display: inline-flex; align-items: center; } }
+      @media (max-width: 899px) { .yyc-filter-tag, .yyc-linkbtn-soft { min-height: 44px; } .yyc-chip-btn { min-height: 44px; } .yyc-linkbtn { min-height: 44px; display: inline-flex; align-items: center; } }
       @media (max-width: 899px) {
         .yyc-topbar { padding: 10px 14px; }
         .yyc-topbar .yyc-brand-mark { width: 38px; height: 38px; border-radius: 11px; }
@@ -371,6 +405,10 @@ export function GlobalStyles() {
         .yyc-chip-row { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px 6px; }
         .yyc-chip-row::-webkit-scrollbar { display: none; }
         .yyc-chip-row > * { flex-shrink: 0; }
+        /* a soft fade on the side where more chips are hidden (src/ui/useChipRow.js sets has-more / has-less), so people know the row scrolls */
+        .yyc-chip-row.has-more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+        .yyc-chip-row.has-less { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); }
+        .yyc-chip-row.has-more.has-less { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
         .yyc-lever-chip { min-height: 44px; padding: 8px 14px; font-size: 13.5px; }
         .yyc-grid { grid-template-columns: 1fr; }
         .yyc-stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }

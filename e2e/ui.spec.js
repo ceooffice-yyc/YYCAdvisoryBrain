@@ -17,7 +17,11 @@ const SCREENS = {
   'empty library': async (page) => { await seed(page, { empty: true }); await page.goto('/'); await page.getByRole('heading', { level: 1, name: 'Knowledge Base' }).waitFor(); },
   'sign in': async (page) => { await showSignIn(page); await page.goto('/'); await page.getByRole('heading', { level: 1, name: 'Sign in' }).waitFor(); },
   'request access': async (page) => { await showSignIn(page); await page.goto('/'); await page.getByRole('button', { name: 'Request access' }).click(); await page.getByRole('heading', { level: 1, name: 'Request access' }).waitFor(); },
-  'not found': async (page) => { await page.goto('/no-such-page'); await page.getByRole('heading', { level: 1, name: 'Page not found' }).waitFor(); },
+  'library with filters': async (page) => { await seed(page); await page.goto('/#/library?lever=price&industry=Trading%20%2F%20Retail&sort=az'); await page.locator('.yyc-results-bar').waitFor(); await page.getByRole('button', { name: 'Clear all' }).waitFor(); },
+  'recently deleted': async (page) => { await seed(page); await page.goto('/'); await unlockAdmin(page); await page.locator('.yyc-doc').filter({ hasText: 'Acme Bakery' }).locator('.yyc-icon-btn.is-danger').click(); await page.locator('.yyc-modal .yyc-btn-danger').click(); await page.getByRole('button', { name: 'Recently deleted' }).click(); await page.locator('.yyc-trash-row').waitFor(); },
+  'delete question': async (page) => { await seed(page); await page.goto('/'); await unlockAdmin(page); await page.locator('.yyc-doc').filter({ hasText: 'Acme Bakery' }).locator('.yyc-icon-btn.is-danger').click(); await page.locator('.yyc-modal .yyc-btn-danger').waitFor(); },
+  'search window': async (page) => { await seed(page); await page.goto('/'); await page.getByText('Acme Bakery').first().waitFor(); await page.getByRole('button', { name: 'Search the library' }).locator('visible=true').first().click(); await page.getByPlaceholder(/Jump to a material/).waitFor(); },
+  'not found': async (page) => { await page.goto('/no-such-page?stay'); await page.getByRole('heading', { level: 1, name: 'Page not found' }).waitFor(); },
 };
 
 /* Nothing may stick out sideways: not the page, and no visible element past the right edge of the window. */
@@ -298,7 +302,7 @@ test('UI-02 selected text uses the brand colour (a soft wash, readable), not the
 
 /* Errors appear as a toast at the bottom of the screen, wherever the person has scrolled to (like "Account enabled"), instead of a line at the top of the page. */
 for (const [w, h] of [[375, 667], [1280, 800]]) {
-  test(`UI-03 ${w}px: an error shows as a red toast in view (not at the top of the page), with a dismiss button`, async ({ browser }) => {
+  test(`UI-03 ${w}px: an error shows as a danger-coloured toast in view (not at the top of the page), with a dismiss button`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: w < 900, hasTouch: w < 900 });
     const page = await ctx.newPage();
     await seed(page); await page.goto('/');
@@ -311,9 +315,11 @@ for (const [w, h] of [[375, 667], [1280, 800]]) {
     await expect(toast).toContainText(/backup/i);
     const g = await toast.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: innerHeight, vw: innerWidth, bg: getComputedStyle(e).backgroundColor }; });
     expect(g.top).toBeGreaterThan(0); expect(g.bottom).toBeLessThanOrEqual(g.vh); expect(g.left).toBeGreaterThanOrEqual(0); expect(g.right).toBeLessThanOrEqual(g.vw);
-    const [r, gr, b] = g.bg.match(/\d+/g).map(Number); expect(r).toBeGreaterThan(gr + 50); expect(r).toBeGreaterThan(b + 50); // red, not the dark success toast
+    // the danger look: a light card with a vermilion edge and an icon, NOT the brand crimson and NOT a solid red block like the primary button
+    const look = await toast.evaluate((e) => { const probe = (v) => { const p = document.createElement('i'); p.style.color = getComputedStyle(document.documentElement).getPropertyValue(v); document.body.appendChild(p); const c = getComputedStyle(p).color; p.remove(); return c; }; const cs = getComputedStyle(e); return { edge: cs.borderLeftColor, bg: cs.backgroundColor, danger: probe('--red'), brand: probe('--crimson'), icon: !!e.querySelector('.yyc-toast-ico svg') }; });
+    expect(look.edge).toBe(look.danger); expect(look.edge).not.toBe(look.brand); expect(look.bg).not.toBe(look.danger); expect(look.bg).not.toBe(look.brand); expect(look.icon).toBe(true);
     const x = toast.getByRole('button', { name: 'Dismiss this message' });
-    const xb = await x.boundingBox(); expect(xb.width).toBeGreaterThanOrEqual(44); expect(xb.height).toBeGreaterThanOrEqual(44);
+    await expect.poll(async () => { const b = await x.boundingBox(); return Math.min(b.width, b.height); }).toBeGreaterThanOrEqual(43.99); // measured once the toast has finished growing in (it scales from 97%)
     await x.click();
     await expect(toast).toHaveCount(0);
     await ctx.close();
@@ -563,4 +569,108 @@ test('UI-01 the brand mark shows on the phone top bar, the sign-in screen and th
   const p3 = await ctx.newPage(); await p3.route('**/assets/**', (r) => r.abort()); await p3.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(p3.locator('.boot svg')).toBeVisible(); // the very first screen, before any script, carries the mark inline
   await ctx.close();
+});
+
+/* The Lever Explorer's lever filter is the shared chip row (like the Knowledge Base): one swipeable line on phones with a fade hint and the selected chip kept in view; wrapped on desktop. */
+const openExplorer = async (page) => {
+  await page.locator('.yyc-nav-item:visible, .yyc-botnav-item:visible').filter({ hasText: 'Lever Explorer' }).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Lever Explorer' })).toBeVisible({ timeout: 15_000 });
+};
+const leverRow = (page) => page.getByRole('group', { name: 'Filter by lever' });
+const inView = (row, chip) => row.evaluate((r, c) => { const el = r.querySelector(c); if (!el) return false; const a = r.getBoundingClientRect(), b = el.getBoundingClientRect(); return b.width > 0 && b.left >= a.left - 2 && b.right <= a.right + 2; }, chip); // looked up INSIDE this row (the hidden Knowledge Base has a selected chip too)
+
+test('UI-04 phone: the Explorer lever filter is one swipeable line, with a fade hint, not a tall stack of buttons', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  await openExplorer(page);
+  const row = leverRow(page);
+  const g = await row.evaluate((r) => { const cs = getComputedStyle(r); const chips = [...r.querySelectorAll('.yyc-lever-chip')]; return { wrap: cs.flexWrap, ox: cs.overflowX, h: r.getBoundingClientRect().height, sw: r.scrollWidth, cw: r.clientWidth, n: chips.length, minChip: Math.min(...chips.map((c) => c.getBoundingClientRect().height)), more: r.classList.contains('has-more'), less: r.classList.contains('has-less'), mask: cs.maskImage || cs.webkitMaskImage }; });
+  expect(g.wrap).toBe('nowrap'); expect(g.ox).toBe('auto');
+  expect(g.n).toBeGreaterThanOrEqual(10);
+  expect(g.sw).toBeGreaterThan(g.cw + 40); // more chips than fit: it scrolls sideways
+  expect(g.h).toBeLessThan(80); // one line (it was about 300 px tall when the buttons wrapped)
+  expect(g.minChip).toBeGreaterThanOrEqual(44); // easy to tap
+  expect(g.more).toBe(true); expect(g.less).toBe(false);
+  expect(g.mask).toContain('gradient'); // the soft fade on the right
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375); // the page itself does not scroll sideways
+  // scrolled to the end: the fade moves to the left side
+  await row.evaluate((r) => { r.scrollLeft = r.scrollWidth; });
+  await expect.poll(() => row.evaluate((r) => [r.classList.contains('has-more'), r.classList.contains('has-less')])).toEqual([false, true]);
+  await ctx.close();
+});
+
+test('UI-04 phone: choosing a lever keeps the selected chip in view, marks it for screen readers, and the other-categories row for Others', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  await openExplorer(page);
+  const row = leverRow(page);
+  const others = row.getByRole('button', { name: /^Others/ });
+  await others.dispatchEvent('click'); // the last chip, far to the right: selected WITHOUT Playwright scrolling to it first, so only the app's own scrolling can bring it into view
+  await expect(others).toHaveAttribute('aria-pressed', 'true');
+  await expect(row.getByRole('button', { name: /^Price/ })).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => inView(row, '.yyc-lever-chip.is-active'), { timeout: 5000 }).toBe(true);
+  await expect(page.getByRole('group', { name: 'Category', exact: true })).toBeVisible(); // Others has its own second row of chips
+  // back to the first chip: the row scrolls back so it is in view
+  await row.getByRole('button', { name: /^Price/ }).dispatchEvent('click');
+  await expect.poll(() => inView(row, '.yyc-lever-chip.is-active'), { timeout: 5000 }).toBe(true);
+  await expect.poll(() => row.evaluate((r) => r.scrollLeft)).toBeLessThan(40);
+  // a chip reached with the keyboard is scrolled into view by the browser
+  await row.getByRole('button', { name: /^Others/ }).focus();
+  await expect.poll(() => row.evaluate((r) => { const c = document.activeElement.getBoundingClientRect(), a = r.getBoundingClientRect(); return c.left >= a.left - 2 && c.right <= a.right + 2; })).toBe(true);
+  await ctx.close();
+});
+
+test('UI-04 desktop: the Explorer lever filter wraps onto a few rows, like the Knowledge Base, with nothing hidden or faded', async ({ page }) => {
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  await openExplorer(page);
+  const row = leverRow(page);
+  const g = await row.evaluate((r) => { const cs = getComputedStyle(r); return { wrap: cs.flexWrap, sw: r.scrollWidth, cw: r.clientWidth, h: r.getBoundingClientRect().height, more: r.classList.contains('has-more'), mask: cs.maskImage || cs.webkitMaskImage }; });
+  expect(g.wrap).toBe('wrap');
+  expect(g.sw).toBeLessThanOrEqual(g.cw + 1); // nothing scrolls sideways
+  expect(g.h).toBeGreaterThan(60); // more than one row: every lever is visible at once
+  expect(g.more).toBe(false); expect(g.mask === 'none' || g.mask === '' || g.mask === undefined).toBe(true); // no fade
+  await row.getByRole('button', { name: /^Volume/ }).click();
+  await expect(row.getByRole('button', { name: /^Volume/ })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('UI-02 a selected filter chip keeps its selected look while the pointer is on it (a tap leaves the hover style stuck on phones)', async ({ page }) => {
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  await openExplorer(page);
+  const chip = leverRow(page).getByRole('button', { name: /^Volume/ });
+  await chip.click(); // the pointer stays on the chip, so it is also being hovered
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  const look = () => chip.evaluate((e) => { const s = getComputedStyle(e), r = document.createElement('i'); r.style.background = getComputedStyle(document.documentElement).getPropertyValue('--crimson-soft'); document.body.appendChild(r); const soft = getComputedStyle(r).backgroundColor; r.remove(); return { bg: s.backgroundColor, soft }; });
+  await expect.poll(async () => { const c = await look(); return c.bg === c.soft; }, { timeout: 3000 }).toBe(true); // the soft crimson of "selected", not the beige of "hovered" (the colour eases in over a fraction of a second)
+});
+
+/* UX-06: danger (errors, delete) has its own colour and look, never the brand crimson. */
+test('UX-06 the confirm button of a destructive action is the danger colour, with an icon, and stays so under the pointer', async ({ page }) => {
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  await unlockAdmin(page);
+  await page.locator('.yyc-doc').first().locator('.yyc-icon-btn.is-danger').click(); // delete a material: asks first
+  const btn = page.locator('.yyc-modal .yyc-btn-danger');
+  await expect(btn).toBeVisible();
+  await expect(btn.locator('svg')).toBeVisible();
+  const colours = (e) => { const probe = (v) => { const p = document.createElement('i'); p.style.color = getComputedStyle(document.documentElement).getPropertyValue(v); document.body.appendChild(p); const c = getComputedStyle(p).color; p.remove(); return c; }; return { bg: getComputedStyle(e).backgroundColor, danger: probe('--red'), brand: probe('--crimson'), brandDark: probe('--crimson-dark') }; };
+  const before = await btn.evaluate(colours);
+  expect(before.bg).toBe(before.danger); expect(before.bg).not.toBe(before.brand);
+  await btn.hover();
+  const during = await btn.evaluate(colours);
+  expect(during.bg, 'hovering must not turn it into the brand colour').toBe(during.danger);
+  expect(during.bg).not.toBe(during.brandDark);
+  // and the safe choice is not styled as danger
+  await expect(page.locator('.yyc-modal .yyc-btn-secondary').first()).toBeVisible();
+});
+
+test('UX-06 the danger and brand colours are clearly different hues in both themes', async ({ page }) => {
+  await seed(page); await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  const hue = (rgb) => { const [r, g, b] = rgb.match(/\d+/g).map(Number).map((v) => v / 255); const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min; if (!d) return 0; let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; return h < 0 ? h + 360 : h; };
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    const c = await page.evaluate(() => { const probe = (v) => { const p = document.createElement('i'); p.style.color = getComputedStyle(document.documentElement).getPropertyValue(v); document.body.appendChild(p); const x = getComputedStyle(p).color; p.remove(); return x; }; return { danger: probe('--red'), brand: probe('--crimson') }; });
+    const gap = Math.abs(hue(c.danger) - hue(c.brand));
+    expect(gap, `${scheme}: danger ${c.danger} vs brand ${c.brand}`).toBeGreaterThanOrEqual(8); // visibly warmer, not the same red
+  }
 });

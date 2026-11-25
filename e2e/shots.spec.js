@@ -10,7 +10,7 @@ const SCHEMES = (process.env.SHOT_SCHEMES || 'light,dark').split(',');
 for (const scheme of SCHEMES) for (const v of VIEWS) {
   const tag = `${scheme}-${v.w}`;
   test(`shots ${tag}`, async ({ browser }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(300_000); // a long walk through every screen: slow computers need time
     const ctx = await browser.newContext({ colorScheme: scheme, viewport: { width: v.w, height: v.h } });
     const page = await ctx.newPage();
     const snap = (name) => page.screenshot({ path: `${DIR}/${name}-${tag}.png`, fullPage: false });

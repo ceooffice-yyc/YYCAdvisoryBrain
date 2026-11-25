@@ -44,7 +44,7 @@ test('ERR-01 an unknown address is a real 404 with the not-found page; an unknow
   expect(api.status()).toBe(404);
   expect(await api.json()).toEqual({ error: 'Not found' });
   const problems = watch(page);
-  const nav = await page.goto('/some/old/link');
+  const nav = await page.goto('/some/old/link?stay'); // ?stay: no automatic redirect while the test looks at the page
   expect(nav.status()).toBe(404);
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Go to YYC Advisory Brain' })).toHaveAttribute('href', '/');

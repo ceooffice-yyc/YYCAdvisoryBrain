@@ -18,6 +18,8 @@ const buildCompilationItems = async (...args) => (await import("../pipeline/extr
 import { OTHER_CATS, leverTag, normalizeMainCategory, normalizeOther, parseIndustry, sortByLever } from "../lib/levers.js";
 import { T } from "../i18n.js";
 import { Icon } from "../ui/Icon.jsx";
+import { SkeletonLines } from "../ui/Skeleton.jsx";
+import { navigate, useRoute } from "../lib/route.js";
 import { ageLabel, clearDraft, describeDraft, loadDraft, restoreItems, saveDraft } from "../lib/drafts.js";
 import { LeverPickerModal, LeverRecordCard } from "../ui/LeverParts.jsx";
 
@@ -160,14 +162,8 @@ const DocCard = memo(function DocCard({ d, i, t, lang, isAdmin, lc, main, sub, o
     <div
       className="yyc-doc"
       onMouseEnter={() => on.warm(d.id)}
-      role="button"
-      tabIndex={0}
       style={{ animationDelay: `${Math.min(i * 30, 300)}ms` }}
-      onClick={() => on.open(d.id)}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on.open(d.id); }
-      }}
+      onClick={() => on.open(d.id)} /* a click anywhere on the card opens it (mouse and touch); the keyboard and screen readers use the title, which is a real button */
     >
       <div className="yyc-doc-top">
         <span className="yyc-chip" style={{ background: tc.bg, color: tc.fg }}>
@@ -179,7 +175,7 @@ const DocCard = memo(function DocCard({ d, i, t, lang, isAdmin, lc, main, sub, o
       </div>
 
       <div>
-        <div className="yyc-doc-title">{d.title}</div>
+        <button type="button" className="yyc-doc-title yyc-doc-open" aria-label={`Open: ${d.title}`}>{d.title}</button>
         {d.problem_signature && <div className="yyc-doc-sig" style={{ marginTop: 6 }}>{d.problem_signature}</div>}
       </div>
 
@@ -207,7 +203,7 @@ const DocCard = memo(function DocCard({ d, i, t, lang, isAdmin, lc, main, sub, o
 
 export function KnowledgePanel({
   t, lang, isAdmin, index, levers, refreshKB, openPreview, flash, config, setConfig, setConfirm, setAdminLocked,
-  paletteLever, clearPaletteLever, onWorking,
+  onWorking,
 }) {
   const leverKeys = Object.keys(t.levers);
   const [mode, setMode] = useState("list");
@@ -293,6 +289,25 @@ export function KnowledgePanel({
     flash(draftOffer.light ? "Draft restored. The formatted view of the documents was too big to keep, so they show as plain text." : "Draft restored");
     setDraftOffer(null);
   };
+  // ── Recently deleted (UX-04) ──
+  const [trash, setTrash] = useState(null);        // null | { state: "loading" } | { state: "error", message } | { state: "ready", docs, records }
+  const [restoringId, setRestoringId] = useState(null);
+  const loadTrash = async (quiet = false) => {
+    if (!quiet) setTrash({ state: "loading" });
+    try { const r = await window.db.trashList(); setTrash({ state: "ready", docs: r.docs || [], records: r.records || [] }); }
+    catch (e) { setTrash({ state: "error", message: String((e && e.message) || "The list could not be loaded.") }); }
+  };
+  const openTrash = () => { setMode("trash"); loadTrash(); };
+  const restoreOne = async (kind, id) => {
+    setRestoringId(id);
+    try {
+      if (kind === "doc") await window.db.restoreDocument(id); else await window.db.restoreRecord(id);
+      try { await refreshKB(); } catch { /* it is restored; the library list refreshes on the next load */ }
+      flash(kind === "doc" ? "Material restored" : "Strategy restored");
+      await loadTrash(true);
+    } catch (e) { setErrMsg(String((e && e.message) || "It could not be restored. Try again.")); await loadTrash(true); }
+    setRestoringId(null);
+  };
   const askDiscardDraft = () => setConfirm({
     title: "Discard the saved draft?", message: "The unsaved work kept in this browser is deleted. This cannot be undone.",
     confirmLabel: "Discard draft", onConfirm: () => { clearDraft(draftOwner); setDraftOffer(null); },
@@ -301,19 +316,18 @@ export function KnowledgePanel({
   const [editLevers, setEditLevers] = useState([]);
   const [editLeverRecord, setEditLeverRecord] = useState(null);
   const [newPass, setNewPass] = useState("");
-  const [search, setSearch] = useState("");
-  const [leverFilter, setLeverFilter] = useState("all");
-
-  useEffect(() => {
-    if (paletteLever && clearPaletteLever) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot request from the command palette
-      setLeverFilter(paletteLever);
-      setMode("list");
-      clearPaletteLever();
-    }
-  }, [paletteLever, clearPaletteLever]);
-  const [mainCat, setMainCat] = useState("all");
-  const [subCat, setSubCat] = useState("all");
+  // The filters live in the address (src/lib/route.js): they survive a refresh, work with the Back button, and can be shared as a link.
+  const kbF = useRoute().kb;
+  const search = kbF.q;
+  const leverFilter = kbF.lever === "all" || leverKeys.includes(kbF.lever) ? kbF.lever : "all"; // a lever that does not exist (an old or hand-typed link) shows everything
+  const mainCat = kbF.industry;
+  const subCat = kbF.sub;
+  const sortKey = kbF.sort;
+  const setSearch = (v) => navigate({ kb: { q: v } });
+  const setLeverFilter = (v) => navigate({ kb: { lever: v } });
+  const setMainCat = (v) => navigate({ kb: { industry: v, sub: "all" } });
+  const setSubCat = (v) => navigate({ kb: { sub: v } });
+  const setSortKey = (v) => navigate({ kb: { sort: v } });
   const [pickerRecord, setPickerRecord] = useState(null);
   const [statPicker, setStatPicker] = useState(false);
   const fileRef = useRef(null);
@@ -675,9 +689,14 @@ export function KnowledgePanel({
   const deleteDoc = (docId) => {
     setConfirm({
       message: t.delConfirm,
+      details: ["You can bring it back from Recently deleted."],
+      confirmLabel: "Delete",
       onConfirm: async () => {
-        await window.db.deleteDocument(docId); // soft delete: the document and its lever records stay in storage, marked deleted
-        await refreshKB();
+        try {
+          await window.db.deleteDocument(docId); // soft delete: the document and its lever records stay in storage, marked deleted
+          await refreshKB();
+          flash("Deleted. You can restore it from Recently deleted.");
+        } catch (e) { setErrMsg(`The material could not be deleted. ${String((e && e.message) || "")}`.trim()); }
       },
     });
   };
@@ -707,10 +726,15 @@ export function KnowledgePanel({
 
   const deleteLeverRecord = (record) => {
     setConfirm({
-      message: t.delConfirm,
+      message: "Delete this strategy?",
+      details: ["You can bring it back from Recently deleted."],
+      confirmLabel: "Delete",
       onConfirm: async () => {
-        await window.db.deleteRecord(record.id); // soft delete
-        await refreshKB();
+        try {
+          await window.db.deleteRecord(record.id); // soft delete
+          await refreshKB();
+          flash("Deleted. You can restore it from Recently deleted.");
+        } catch (e) { setErrMsg(`The strategy could not be deleted. ${String((e && e.message) || "")}`.trim()); }
       },
     });
   };
@@ -858,16 +882,99 @@ export function KnowledgePanel({
     return grouped;
   }, [levers, metaById, leverFilter, mainCat, subCat]);
 
+  // Sorting (UX-05): the order of the cards, and of the materials inside a lever list. The default, "oldest", is the order the library has always had.
+  const docRank = useMemo(() => {
+    const title = (a, b) => String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base", numeric: true });
+    const by = {
+      oldest: (a, b) => (a.created || 0) - (b.created || 0),
+      newest: (a, b) => (b.created || 0) - (a.created || 0),
+      az: title,
+      levers: (a, b) => (leverCountById.get(b.id) || 0) - (leverCountById.get(a.id) || 0) || title(a, b),
+    }[sortKey] || ((a, b) => (a.created || 0) - (b.created || 0));
+    return new Map([...index].sort(by).map((d, i) => [d.id, i]));
+  }, [index, sortKey, leverCountById]);
+  const sortedIndex = useMemo(() => [...filteredIndex].sort((a, b) => docRank.get(a.id) - docRank.get(b.id)), [filteredIndex, docRank]);
+  const groupedEntries = useMemo(() => Object.entries(groupedLevers).sort((a, b) => (docRank.get(a[0]) ?? 1e9) - (docRank.get(b[0]) ?? 1e9)), [groupedLevers, docRank]);
+
   // The cards are memoised, so a keystroke only redraws the cards that really changed. They get stable handlers that always call the latest functions.
   const latestHandlers = useRef({});
   useEffect(() => { latestHandlers.current = { openPreview, startEdit, deleteDoc }; });
   const cardHandlers = useMemo(() => ({ open: (id) => latestHandlers.current.openPreview?.(id), warm: (id) => window.db?.warmDocuments([id]), edit: (id) => latestHandlers.current.startEdit?.(id), del: (id) => latestHandlers.current.deleteDoc?.(id) }), []);
 
-  const clearAllFilters = () => {
-    setSearch(""); setLeverFilter("all"); setMainCat("all"); setSubCat("all");
-  };
-  const anyFilterActive =
-    search.trim() || leverFilter !== "all" || mainCat !== "all" || subCat !== "all";
+  const clearAllFilters = () => navigate({ kb: { q: "", lever: "all", industry: "all", sub: "all" } }); // the sort stays
+  const anyFilterActive = !!(search.trim() || leverFilter !== "all" || mainCat !== "all" || subCat !== "all");
+  const many = (n, one, other) => `${n} ${n === 1 ? one : other}`;
+  const docsShown = leverFilter !== "all" ? groupedEntries.length : sortedIndex.length;
+  const resultsText = leverFilter !== "all"
+    ? `${many(groupedEntries.reduce((n, [, recs]) => n + recs.length, 0), "strategy", "strategies")} in ${many(docsShown, "material", "materials")}`
+    : anyFilterActive ? `Showing ${docsShown} of ${many(index.length, "material", "materials")}` : many(index.length, "material", "materials");
+  const activeTags = [
+    ...(search.trim() ? [{ key: "q", label: `Search: “${search.trim().slice(0, 24)}${search.trim().length > 24 ? "…" : ""}”`, remove: () => setSearch("") }] : []),
+    ...(leverFilter !== "all" ? [{ key: "lever", label: `Lever: ${t.levers[leverFilter] || leverFilter}`, remove: () => setLeverFilter("all") }] : []),
+    ...(mainCat !== "all" ? [{ key: "industry", label: `Industry: ${mainCat}`, remove: () => setMainCat("all") }] : []),
+    ...(subCat !== "all" ? [{ key: "sub", label: `Sub-industry: ${subCat}`, remove: () => setSubCat("all") }] : []),
+  ];
+
+  if (mode === "trash" && isAdmin) {
+    const when = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? ageLabel(ms) : "earlier"; };
+    const by = (x) => (x.deleted_by ? ` by ${x.deleted_by}` : "");
+    const docs = trash && trash.state === "ready" ? trash.docs : [], recs = trash && trash.state === "ready" ? trash.records : [];
+    return (
+      <div>
+        <div className="yyc-section-head">
+          <div>
+            <button className="yyc-btn-secondary" onClick={() => setMode("list")} style={{ padding: "7px 12px", marginBottom: 10 }}><Icon name="arrowLeft" size={13} /> Back to the library</button>
+            <h1 className="yyc-section-title">Recently deleted</h1>
+            <div className="yyc-section-sub">Nothing you delete is lost. Restore a material (with the strategies that were deleted with it) or a single strategy.</div>
+          </div>
+        </div>
+        {(!trash || trash.state === "loading") && <SkeletonLines rows={6} label="Loading the deleted items" />}
+        {trash && trash.state === "error" && (
+          <div role="alert" className="yyc-empty">
+            <div className="yyc-empty-icon"><Icon name="alert" size={22} /></div>
+            The list could not be loaded. {trash.message}
+            <div style={{ marginTop: 12 }}><button className="yyc-btn-primary" onClick={() => loadTrash()}>Try again</button></div>
+          </div>
+        )}
+        {trash && trash.state === "ready" && !docs.length && !recs.length && (
+          <div className="yyc-empty"><div className="yyc-empty-icon"><Icon name="check" size={22} /></div>Nothing has been deleted.</div>
+        )}
+        {docs.length > 0 && (
+          <section aria-labelledby="trash-docs" style={{ marginBottom: 26 }}>
+            <h2 id="trash-docs" className="yyc-trash-h">Materials <span>({docs.length})</span></h2>
+            <div className="yyc-trash-list">
+              {docs.map((d) => (
+                <div key={d.id} className="yyc-trash-row">
+                  <div className="yyc-trash-main">
+                    <div className="yyc-trash-title">{d.title || "Untitled"}</div>
+                    <div className="yyc-trash-meta">{[t.docTypes[d.doc_type] || d.doc_type, d.industry].filter(Boolean).join(" · ")}{d.industry || d.doc_type ? " · " : ""}Deleted {when(d.deleted_at)}{by(d)}</div>
+                  </div>
+                  <button className="yyc-btn-primary yyc-trash-btn" disabled={restoringId === d.id} onClick={() => restoreOne("doc", d.id)} aria-label={`Restore the material: ${d.title || "Untitled"}`}><Icon name="undo" size={14} /> {restoringId === d.id ? "Restoring…" : "Restore"}</button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {recs.length > 0 && (
+          <section aria-labelledby="trash-recs">
+            <h2 id="trash-recs" className="yyc-trash-h">Strategies <span>({recs.length})</span></h2>
+            <div className="yyc-trash-list">
+              {recs.map((r) => (
+                <div key={r.id} className="yyc-trash-row">
+                  <div className="yyc-trash-main">
+                    <div className="yyc-trash-title">{r.claim || "(empty strategy)"}</div>
+                    <div className="yyc-trash-meta">{t.levers[r.lever] || r.lever} · from {r.doc_title || "a material"} · Deleted {when(r.deleted_at)}{by(r)}</div>
+                    {r.docDeleted && <div className="yyc-trash-note">Its material is deleted too. Restore the material first.</div>}
+                  </div>
+                  <button className="yyc-btn-primary yyc-trash-btn" disabled={restoringId === r.id || r.docDeleted} onClick={() => restoreOne("record", r.id)} aria-label={`Restore the strategy: ${r.claim || "empty strategy"}`}><Icon name="undo" size={14} /> {restoringId === r.id ? "Restoring…" : "Restore"}</button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
 
   if (mode === "edit" && editDoc) {
     const setD = (patch) => setEditDoc((d) => ({ ...d, ...patch }));
@@ -1435,6 +1542,9 @@ export function KnowledgePanel({
             <button className="yyc-btn-secondary yyc-iconify" onClick={exportBackup} title={t.exportKB}>
               <Icon name="download" size={15} /> <span className="yyc-btn-label">{t.exportKB}</span>
             </button>
+            <button className="yyc-btn-secondary yyc-iconify" onClick={openTrash} title="Recently deleted">
+              <Icon name="undo" size={15} /> <span className="yyc-btn-label">Recently deleted</span>
+            </button>
             <button className="yyc-btn-primary yyc-iconify" onClick={() => setMode("add")} title={t.upload}>
               <Icon name="plus" size={16} /> <span className="yyc-btn-label">{t.upload}</span>
             </button>
@@ -1539,11 +1649,12 @@ export function KnowledgePanel({
             {subCategories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          {anyFilterActive && (
-            <button className="yyc-btn-secondary" onClick={clearAllFilters} style={{ padding: "8px 12px", fontSize: 12.5 }}>
-              <Icon name="close" size={12} /> {t.clearFilters}
-            </button>
-          )}
+          <select className="yyc-filter-select" aria-label="Sort by" value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
+            <option value="oldest">Oldest first</option>
+            <option value="newest">Newest first</option>
+            <option value="az">A to Z</option>
+            <option value="levers">Most strategies</option>
+          </select>
         </div>
 
         <div className="yyc-chip-row">
@@ -1572,6 +1683,18 @@ export function KnowledgePanel({
         </div>
       </div>
 
+      {index.length > 0 && (
+        <div className="yyc-results-bar">
+          <span className="yyc-results-count" role="status" aria-live="polite">{resultsText}</span>
+          {activeTags.map((tg) => (
+            <button key={tg.key} type="button" className="yyc-filter-tag" onClick={tg.remove} aria-label={`Remove filter: ${tg.label}`}>
+              {tg.label}<Icon name="close" size={11} />
+            </button>
+          ))}
+          {anyFilterActive && <button type="button" className="yyc-linkbtn-soft" onClick={clearAllFilters}>Clear all</button>}
+        </div>
+      )}
+
       {index.length === 0 ? (
         <div className="yyc-empty">
           <div className="yyc-empty-icon"><Icon name="book" size={22} /></div>
@@ -1588,7 +1711,7 @@ export function KnowledgePanel({
             <div style={{ fontSize: 12.5, color: P.sub, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="file" size={13} /> {t.jumpToSection}
             </div>
-            {Object.entries(groupedLevers).map(([docId, records]) => {
+            {groupedEntries.map(([docId, records]) => {
               const meta = index.find((d) => d.id === docId);
               const { main, sub } = meta ? docMeta(meta) : { main: "General", sub: "" };
               return (
@@ -1628,7 +1751,7 @@ export function KnowledgePanel({
         </div>
       ) : (
         <div className="yyc-grid">
-          {filteredIndex.map((d, i) => {
+          {sortedIndex.map((d, i) => {
             const { main, sub } = docMeta(d);
             return <DocCard key={d.id} d={d} i={i} t={t} lang={lang} isAdmin={isAdmin} lc={leverCount(d.id)} main={main} sub={sub} on={cardHandlers} />;
           })}

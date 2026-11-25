@@ -3,6 +3,8 @@
 import { leverTag, parseIndustry } from "../lib/levers.js";
 import { P } from "../theme.js";
 import { Icon } from "./Icon.jsx";
+import { CopyButton } from "./CopyButton.jsx";
+import { formatStrategy } from "../lib/copy.js";
 import { ClaimText, ImpactBox } from "./ClaimView.jsx";
 
 export function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, onEdit, onDelete }) {
@@ -13,18 +15,19 @@ export function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, 
   const { main, sub } = parseIndustry(meta?.industry || "", meta);
 
   return (
-    <div
-      className="yyc-lever-record"
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpenPicker(record)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpenPicker(record);
-        }
-      }}
-    >
+    <div className="yyc-lever-record" onClick={() => onOpenPicker(record)} /* a click anywhere on the card opens the choices; the keyboard and screen readers use the button area below */>
+      <div
+        className="yyc-lever-record-hit"
+        role="button"
+        tabIndex={0}
+        aria-haspopup="dialog"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenPicker(record);
+          }
+        }}
+      >
       <div className="yyc-lever-record-head">
         <span
           className="yyc-lever-pill"
@@ -46,17 +49,20 @@ export function LeverRecordCard({ record, meta, t, lang, onOpenPicker, isAdmin, 
       <ImpactBox record={record} />
 
 
+      </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div className="yyc-lever-record-meta" style={{ flex: 1 }}>
           {sub ? `${main} · ${sub}` : main}
           {record.section ? ` · ${record.section}` : ""}
         </div>
-        {isAdmin && (
-          <div className="yyc-doc-actions" style={{ opacity: 1 }} onClick={(e) => e.stopPropagation()}>
+        <div className="yyc-doc-actions" style={{ opacity: 1 }} onClick={(e) => e.stopPropagation()}>
+          <CopyButton label="Copy this strategy" done="Strategy copied" getText={() => formatStrategy(record, { leverName: t.levers[record.lever] || record.lever, docTitle: meta?.title })} />
+          {isAdmin && (<>
             <button className="yyc-icon-btn" onClick={() => onEdit(record)} title={t.edit} aria-label={t.edit}><Icon name="edit" size={13} /></button>
             <button className="yyc-icon-btn is-danger" onClick={() => onDelete(record)} title={t.del} aria-label={t.del}><Icon name="trash" size={13} /></button>
-          </div>
-        )}
+          </>)}
+        </div>
       </div>
     </div>
   );

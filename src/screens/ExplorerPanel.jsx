@@ -1,21 +1,34 @@
 // The Lever Explorer screen.
 // Split out of src/App.jsx (PERF-02): the code is unchanged, only moved.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { tokenizeQuery } from "../../server/ask/text.js";
 import { P, S } from "../theme.js";
 import { OTHER_CATS } from "../lib/levers.js";
 import { LeverManagerModal } from "./LeverManagerModal.jsx";
 import { ClaimText, ImpactBox } from "../ui/ClaimView.jsx";
+import { useChipRow } from "../ui/useChipRow.js";
+import { CopyButton } from "../ui/CopyButton.jsx";
+import { navigate, useRoute } from "../lib/route.js";
+import { formatStrategy } from "../lib/copy.js";
 
 export function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, setConfig, setConfirm, setAdminLocked, flash, refreshKB }) {
   const [showMgr, setShowMgr] = useState(false);
-  const [sel, setSel] = useState("price");
-  const [cat, setCat] = useState("all");
-  const [oc, setOc] = useState("all");
-  const [q, setQ] = useState("");
+  const leverKeys = Object.keys(t.levers);
+  // The filters live in the address (src/lib/route.js), so they survive a refresh, work with the Back button, and can be shared as a link.
+  // In the address: lever = the lever, industry = the industry, cat = the "Others" category, q = the search words.
+  const f = useRoute().explorer;
+  const sel = leverKeys.includes(f.lever) ? f.lever : (leverKeys.includes("price") ? "price" : leverKeys[0]);
+  const cat = f.industry, oc = f.cat, q = f.q;
+  const setSel = (l) => navigate({ explorer: { lever: l, cat: "all" } });
+  const setCat = (v) => navigate({ explorer: { industry: v } });
+  const setOc = (v) => navigate({ explorer: { cat: v } });
+  const setQ = (v) => navigate({ explorer: { q: v } });
+  const leverRowRef = useRef(null);
+  const otherRowRef = useRef(null);
+  useChipRow(leverRowRef, sel);
+  useChipRow(otherRowRef, oc, sel === "others");
 
   const metaById = useMemo(() => Object.fromEntries(index.map((d) => [d.id, d])), [index]);
-  const leverKeys = Object.keys(t.levers);
   const counts = useMemo(() => leverKeys.reduce((a, l) => { a[l] = levers.filter((r) => r.lever === l).length; return a; }, {}), [levers, leverKeys]);
   const cats = useMemo(
     () => Array.from(new Set(levers.map((r) => metaById[r.doc_id]?.industry_main).filter(Boolean))).sort(),
@@ -60,32 +73,23 @@ export function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, 
       </div>
       {showMgr && isAdmin && <LeverManagerModal t={t} config={config} setConfig={setConfig} setConfirm={setConfirm} setAdminLocked={setAdminLocked} flash={flash} refreshKB={refreshKB} onClose={() => setShowMgr(false)} />}
 
-      {/* lever pills */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+      {/* lever filter: the same chip row as the Knowledge Base (wraps on desktop, one swipeable line on phones) */}
+      <div ref={leverRowRef} className="yyc-chip-row" role="group" aria-label={t.filterByLever} style={{ marginBottom: 16 }}>
+        <span className="yyc-chip-row-label">{t.filterByLever}</span>
         {leverKeys.map((l) => {
           const active = sel === l;
           const n = counts[l] || 0;
           return (
-            <button key={l} className="yyc-pillbtn" onClick={() => { setSel(l); setOc("all"); }}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 999,
-                border: `1px solid ${active ? P.crimson : P.lineDark}`, cursor: "pointer",
-                background: active ? P.crimson : P.card, color: active ? "#fff" : n ? P.ink : P.faint,
-                fontFamily: "inherit", fontSize: 13, fontWeight: active ? 700 : 600, transition: "all .15s",
-              }}>
+            <button key={l} type="button" className={`yyc-lever-chip${active ? " is-active" : ""}${n === 0 && !active ? " is-empty" : ""}`} aria-pressed={active} onClick={() => { setSel(l); setOc("all"); }}>
               {t.levers[l] || l}
-              <span style={{
-                fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: "1px 7px", fontVariantNumeric: "tabular-nums",
-                background: active ? "rgba(255,255,255,0.22)" : n ? P.goldSoft : P.wash,
-                color: active ? "#fff" : n ? P.goldText : P.faint,
-              }}>{n}</span>
+              <span className="yyc-lever-chip-count">{n}</span>
             </button>
           );
         })}
       </div>
 
       {sel === "others" && Object.keys(otherCounts).length > 0 && (
-        <div className="yyc-chip-row" style={{ marginBottom: 16 }}>
+        <div ref={otherRowRef} className="yyc-chip-row" role="group" aria-label={t.otherCat} style={{ marginBottom: 16 }}>
           <span className="yyc-chip-row-label">{t.otherCat}</span>
           <button className={`yyc-lever-chip ${oc === "all" ? "is-active" : ""}`} onClick={() => setOc("all")}>{t.allOtherCats}</button>
           {OTHER_CATS.filter((k) => otherCounts[k]).map((k) => (
@@ -138,12 +142,15 @@ export function ExplorerPanel({ t, levers, index, openPreview, isAdmin, config, 
                   )}
                   <div style={{ fontSize: 13.5, lineHeight: 1.6 }}><ClaimText text={r.claim_en || r.claim_zh} stacked /></div>
                   <ImpactBox record={r} style={{ marginTop: 6 }} />
-                  {r.section && (
-                    <button className="yyc-linkbtn" onClick={() => openPreview(docId, r.section)}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 5, flexWrap: "wrap" }}>
+                    {r.section ? (
+                      <button className="yyc-linkbtn" onClick={() => openPreview(docId, r.section)}
                       style={{ background: "none", border: "none", padding: 0, marginTop: 5, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: P.crimsonText, textDecoration: "underline" }}>
                       {r.section} →
                     </button>
-                  )}
+                    ) : <span />}
+                    <CopyButton label="Copy this strategy" done="Strategy copied" getText={() => formatStrategy(r, { leverName: t.levers[r.lever] || r.lever, docTitle: meta.title })} />
+                  </div>
                 </div>
               ))}
             </div>

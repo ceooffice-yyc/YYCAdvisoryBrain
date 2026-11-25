@@ -17,7 +17,7 @@ export function SkeletonCards({ n = 6, label = "Loading" }) {
   return (
     <div role="status" aria-busy="true" aria-label={label} className="yyc-grid">
       {Array.from({ length: n }, (_, i) => (
-        <div key={i} className="yyc-doc" style={{ cursor: "default", boxShadow: "none" }}>
+        <div key={i} className="yyc-skel-card" style={{ cursor: "default", boxShadow: "none" }}>
           <div className="yyc-doc-top"><Skeleton w={84} h={22} r={999} /><Skeleton w={96} h={12} /></div>
           <div style={{ display: "grid", gap: 8 }}><Skeleton h={16} /><Skeleton w="70%" h={16} /><Skeleton w="85%" h={12} style={{ marginTop: 4 }} /></div>
           <div className="yyc-doc-foot"><Skeleton w={110} h={22} r={999} /><Skeleton w={70} h={12} /></div>

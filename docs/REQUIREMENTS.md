@@ -40,6 +40,18 @@ This file is also the traceability table: each requirement names the code that o
 | UI-05 | Accessible | Must | WCAG 2.2 AA: keyboard use, visible focus, labels, contrast, reduced motion. |
 | UI-06 | Clear states | Should | Empty, loading, error and success states for each screen, with feedback on every action. |
 
+## Phase 4: easier to use (built 2026-11-26; evidence in `docs/VERIFICATION.md`)
+
+| ID | Requirement | Priority | Acceptance criteria | Status |
+|---|---|---|---|---|
+| UX-01 | Copy what you find | Should | A strategy (Explorer, library list, document window), a whole Ask the Brain answer with its sources, and a document link can each be copied with one button. The copied text reads well in an email (plain text, impact, lever, source, link). If the browser refuses, the older copy method is tried, then a window shows the text selected for Ctrl+C. | Built |
+| UX-02 | A visible Search button | Should | The jump-anywhere search (Ctrl+K) opens from a button on every screen size: in the left panel on desktop (with its shortcut), in the top bar on phones (44 px). | Built |
+| UX-03 | Real links and a working Back button | Should | The tab, the open document (and section) and the filters are in the address after #. Back and Forward move between tabs and documents; typing adds no Back steps; a refresh keeps the place; a link opens the same view. Unknown, over-long or hostile addresses fall back to the library; a missing document says so; a tab the person may not use opens the library. | Built |
+| UX-04 | Recently deleted | Should | Admins can list deleted materials and strategies and restore them (a material comes back with the strategies deleted with it, not those deleted earlier on their own; a strategy needs its material). Deleting asks first and says where to restore from. Loading and restoring failures show a message, and the list can be reloaded. Viewers do not see it. | Built |
+| UX-05 | Smarter library filters | Should | A sort (oldest first, the existing order, newest first, A to Z, most strategies); a result count; a removable tag for each active filter; one "Clear all" that keeps the sort. The filters and sort are in the address. | Built |
+| UX-06 | Danger is not the brand colour | Should | Errors and destructive actions use their own colour (a warmer vermilion) and look (a light card with an icon for errors, a dedicated danger button that never turns brand crimson). | Built |
+| ERR-02 | A friendlier "not found" page | Should | The not-found page keeps its 404 status, shows a countdown and goes back to the first page after 3 seconds; "Stay on this page" or Escape stops it; ?stay switches it off; without JavaScript a meta refresh does the same; Back is not trapped. | Built |
+
 ## Assumptions (not blocking; correct me if wrong)
 
 - English only; the Chinese text in the code stays switched off.

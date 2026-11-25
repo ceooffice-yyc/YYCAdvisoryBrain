@@ -10,7 +10,12 @@
 const isLive = (x) => !x || x.status !== "deleted";
 const live = (arr) => (Array.isArray(arr) ? arr.filter(isLive) : []);
 const me = (storage) => (storage.user && storage.user.email) || undefined;
-const markDeleted = (storage, x) => ({ ...x, status: "deleted", deleted_at: Date.now(), deleted_by: me(storage) });
+const markDeleted = (storage, x, at = Date.now()) => ({ ...x, status: "deleted", deleted_at: at, deleted_by: me(storage) });
+// Deleting a material stamps it and its strategies with ONE time, so "deleted together" is exact. Older data was stamped a few milliseconds apart, so a tiny tolerance covers it.
+const TOGETHER_MS = 50;
+const unmarkDeleted = (x) => { const y = { ...x, status: "active" }; delete y.deleted_at; delete y.deleted_by; return y; };
+const asIso = (v) => (typeof v === "number" ? new Date(v).toISOString() : v || null);
+const newestFirst = (a, b) => (Date.parse(asIso(b.deleted_at)) || 0) - (Date.parse(asIso(a.deleted_at)) || 0);
 const META_FIELDS = ["id", "status", "created_by", "title", "doc_type", "industry", "industry_main", "industry_sub", "language", "problem_signature", "created"];
 const metaOf = (doc) => Object.fromEntries(META_FIELDS.filter((k) => doc[k] !== undefined).map((k) => [k, doc[k]]));
 
@@ -57,13 +62,43 @@ export function makeLocalDb(storage) {
       await wr("kb:levers", [...others, ...gone, ...records]);
     },
     async deleteDocument(id) {
+      const at = Date.now(), delAt = (x) => markDeleted(storage, x, at); // one time for the material and every strategy deleted with it
       const doc = await rd("kb:doc:" + id);
-      if (doc && isLive(doc)) await wr("kb:doc:" + id, del(doc));
-      await wr("kb:index", ((await rd("kb:index")) || []).map((d) => (d.id === id && isLive(d) ? del(d) : d)));
-      await wr("kb:levers", ((await rd("kb:levers")) || []).map((l) => (l.doc_id === id && isLive(l) ? del(l) : l)));
+      if (doc && isLive(doc)) await wr("kb:doc:" + id, delAt(doc));
+      await wr("kb:index", ((await rd("kb:index")) || []).map((d) => (d.id === id && isLive(d) ? delAt(d) : d)));
+      await wr("kb:levers", ((await rd("kb:levers")) || []).map((l) => (l.doc_id === id && isLive(l) ? delAt(l) : l)));
     },
     async saveRecord(rec) { await wr("kb:levers", ((await rd("kb:levers")) || []).map((r) => (r.id === rec.id ? { ...rec } : r))); }, // the full record: fields the app removed (e.g. other_category) must go
     async deleteRecord(id) { await wr("kb:levers", ((await rd("kb:levers")) || []).map((r) => (r.id === id && isLive(r) ? del(r) : r))); },
+    /* Recently deleted (UX-04): the same answers as the shared database gives. Deleting a material marks its strategies with the same time. */
+    async trashList() {
+      const index = (await rd("kb:index")) || [], levers = (await rd("kb:levers")) || [];
+      const byId = new Map(index.map((d) => [d.id, d]));
+      const docs = index.filter((d) => !isLive(d)).map((d) => ({ id: d.id, title: d.title, doc_type: d.doc_type, industry: d.industry, deleted_at: asIso(d.deleted_at), deleted_by: d.deleted_by })).sort(newestFirst);
+      const records = levers.filter((r) => !isLive(r)).filter((r) => { const d = byId.get(r.doc_id); return !(d && !isLive(d) && Math.abs((d.deleted_at || 0) - (r.deleted_at || 0)) <= TOGETHER_MS); })
+        .map((r) => { const d = byId.get(r.doc_id); return { id: r.id, doc_id: r.doc_id, doc_title: (d && d.title) || r.doc_title, lever: r.lever, claim: String(r.claim_en || r.claim_zh || "").slice(0, 300), deleted_at: asIso(r.deleted_at), deleted_by: r.deleted_by, docDeleted: !!(d && !isLive(d)) }; }).sort(newestFirst);
+      return { docs, records };
+    },
+    async restoreDocument(id) {
+      const index = (await rd("kb:index")) || [], doc = await rd("kb:doc:" + id), row = index.find((d) => d.id === id);
+      if (!row && !doc) throw new Error("That material was not found.");
+      if (isLive(row) && isLive(doc)) return { restored: false, records: 0 };
+      const when = (row && row.deleted_at) || (doc && doc.deleted_at) || 0;
+      if (doc) await wr("kb:doc:" + id, unmarkDeleted(doc));
+      await wr("kb:index", index.map((d) => (d.id === id ? unmarkDeleted(d) : d)));
+      let records = 0;
+      await wr("kb:levers", ((await rd("kb:levers")) || []).map((l) => { if (l.doc_id === id && !isLive(l) && Math.abs((l.deleted_at || 0) - when) <= TOGETHER_MS) { records++; return unmarkDeleted(l); } return l; }));
+      return { restored: true, records };
+    },
+    async restoreRecord(id) {
+      const levers = (await rd("kb:levers")) || [], rec = levers.find((r) => r.id === id);
+      if (!rec) throw new Error("That strategy was not found.");
+      if (isLive(rec)) return { restored: false };
+      const d = ((await rd("kb:index")) || []).find((x) => x.id === rec.doc_id);
+      if (!d || !isLive(d)) throw new Error("Restore its material first, then this strategy.");
+      await wr("kb:levers", levers.map((r) => (r.id === id ? unmarkDeleted(r) : r)));
+      return { restored: true };
+    },
     async recategorize(from, to) {
       await wr("kb:levers", ((await rd("kb:levers")) || []).map((r) => (r.lever === "others" && r.other_category === from ? { ...r, other_category: to } : r)));
     },
@@ -230,6 +265,9 @@ export function makeRemoteDb(storage) {
     async deleteDocument(id) { await call("doc_delete", { id }); forgetDoc(id); },
     async saveRecord(rec) { pre = null; await call("record_save", { record: rec }); },
     async deleteRecord(id) { pre = null; await call("record_delete", { id }); },
+    async trashList() { return call("trash_list"); },
+    async restoreDocument(id) { pre = null; const out = await call("doc_restore", { id }); forgetDoc(id); return out; },
+    async restoreRecord(id) { pre = null; return call("record_restore", { id }); },
     async recategorize(from, to) { pre = null; await call("recategorize", { from, to }); },
     async saveConfig(cfg) { pre = null; await call("config_save", { config: cfg }); return cfg; },
 

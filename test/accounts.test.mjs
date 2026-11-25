@@ -174,7 +174,7 @@ test('database API: admin-only operations refuse no sign-in (401) and viewers (4
   authTest.cache.set('viewer', { at: T, user: viewerUser });
   authTest.setClient({ auth: { getUser: async (tok) => (tok === 'viewer' ? { data: { user: viewerUser } } : { data: { user: null }, error: { message: 'bad token' } }) } }); // stands in for Supabase
   const adminOps = ['doc_save', 'doc_update', 'doc_delete', 'record_save', 'record_delete', 'config_save', 'import_docs', 'ask_log_list', 'gap_list', 'gap_clear',
-    'users_list', 'user_invite', 'user_create', 'user_temp_password', 'user_set_role', 'user_set_disabled', 'user_send_reset', 'requests_list', 'request_decide', 'account_events'];
+    'trash_list', 'doc_restore', 'record_restore', 'users_list', 'user_invite', 'user_create', 'user_temp_password', 'user_set_role', 'user_set_disabled', 'user_send_reset', 'requests_list', 'request_decide', 'account_events'];
   for (const op of adminOps) {
     const none = await handleDb({ method: 'POST', headers: {}, body: { op } }, { env, now: () => T });
     assert.equal(none.status, 401, `${op} with no sign-in`);

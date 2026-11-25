@@ -153,6 +153,45 @@ async function replaceLevers(ctx, cfg) {
   for (const part of chunks(gone)) must(await sb.from('levers').update({ status: 'deleted', deleted_at: nowIso(), deleted_by: user.email, updated_by: user.email, updated_at: nowIso() }).in('id', part), 'delete levers');
 }
 
+// ── Recently deleted (UX-04) ──
+// Nothing is ever hard-deleted (see the top of this file), so deleted materials and strategies can be listed and brought back.
+// Deleting a material marks its strategies deleted with the SAME time stamp, so restoring the material brings back exactly those, not strategies that were deleted earlier on their own.
+const short = (v, n) => String(v === undefined || v === null ? '' : v).slice(0, n);
+async function trashList(sb) {
+  const docs = must(await sb.from('documents').select('id,title,doc_type,industry,created,deleted_at,deleted_by').eq('status', 'deleted').order('deleted_at', { ascending: false }).limit(200), 'read deleted documents');
+  const recs = must(await sb.from('records').select('*').eq('status', 'deleted').order('deleted_at', { ascending: false }).limit(400), 'read deleted records');
+  const info = new Map();
+  for (const part of chunks([...new Set(recs.map((r) => r.doc_id))])) for (const d of must(await sb.from('documents').select('id,status,deleted_at,title').in('id', part), 'read documents')) info.set(d.id, d);
+  const records = [];
+  for (const r of recs) {
+    const d = info.get(r.doc_id);
+    if (d && d.status === 'deleted' && d.deleted_at && d.deleted_at === r.deleted_at) continue; // deleted together with its material: it comes back with the material
+    records.push({ id: r.id, doc_id: r.doc_id, doc_title: short((d && d.title) || r.doc_title, 200), lever: r.lever, claim: short(r.claim_en || r.claim_zh, 300), deleted_at: r.deleted_at, deleted_by: r.deleted_by, docDeleted: !!(d && d.status === 'deleted') });
+  }
+  return { docs: docs.map((d) => ({ id: d.id, title: short(d.title, 200), doc_type: d.doc_type, industry: short(d.industry, 120), deleted_at: d.deleted_at, deleted_by: d.deleted_by })), records };
+}
+async function restoreDoc(sb, user, env, id) {
+  const doc = must(await sb.from('documents').select('*').eq('id', id).limit(1), 'read document')[0];
+  if (!doc) throw new HttpError(404, 'That material was not found.');
+  if (doc.status !== 'deleted') return { restored: false, records: 0 }; // already back (someone else restored it)
+  const patch = { status: 'active', deleted_at: null, deleted_by: null, updated_by: user.email, updated_at: nowIso() };
+  must(await sb.from('documents').update(patch).eq('id', id).eq('status', 'deleted'), 'restore document');
+  const records = doc.deleted_at ? must(await sb.from('records').update(patch).eq('doc_id', id).eq('status', 'deleted').eq('deleted_at', doc.deleted_at).select('id'), 'restore records').length : 0;
+  dirty();
+  const indexed = await reindexDocSafe(sb, env, { ...doc, ...patch }); // search finds it again
+  return { restored: true, records, indexed };
+}
+async function restoreRecord(sb, user, id) {
+  const rec = must(await sb.from('records').select('*').eq('id', id).limit(1), 'read record')[0];
+  if (!rec) throw new HttpError(404, 'That strategy was not found.');
+  if (rec.status !== 'deleted') return { restored: false };
+  const doc = must(await sb.from('documents').select('id,status').eq('id', rec.doc_id).limit(1), 'read document')[0];
+  if (!doc || doc.status !== 'active') throw new HttpError(409, 'Restore its material first, then this strategy.');
+  must(await sb.from('records').update({ status: 'active', deleted_at: null, deleted_by: null, updated_by: user.email, updated_at: nowIso() }).eq('id', id).eq('status', 'deleted'), 'restore record');
+  dirty();
+  return { restored: true };
+}
+
 const OPS = {
   // ── guest-readable ──
   library: { level: 'guest', run: async ({ sb }) => { const [config, index, records] = await Promise.all([loadLevers(sb), loadIndex(sb), loadRecords(sb)]); return { config, index, records }; } },
@@ -278,6 +317,9 @@ const OPS = {
       return {};
     },
   },
+  trash_list: { level: 'admin', run: async ({ sb }) => trashList(sb) },
+  doc_restore: { level: 'admin', run: async ({ sb, user, env }, a) => { const id = trim(a.id, 100); if (!id) throw bad('Bad id'); return restoreDoc(sb, user, env, id); } },
+  record_restore: { level: 'admin', run: async ({ sb, user }, a) => { const id = trim(a.id, 100); if (!id) throw bad('Bad id'); return restoreRecord(sb, user, id); } },
   recategorize: { // an Others sub-category was deleted: its records move to another one
     level: 'admin',
     run: async ({ sb, user }, a) => {
@@ -432,4 +474,4 @@ export async function handleDb(req, { env = process.env, now = Date.now } = {}) 
   }
 }
 
-export const _test = { configFromRows, rowsFromConfig, recordToRow, recordFromRow };
+export const _test = { configFromRows, rowsFromConfig, recordToRow, recordFromRow, trashList, restoreDoc, restoreRecord };

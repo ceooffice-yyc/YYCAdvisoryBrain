@@ -25,7 +25,7 @@ export function ConfirmModal({ message, title, details, confirmLabel = "Confirm"
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button className="yyc-btn-secondary" onClick={onCancel}>{cancelLabel}</button>
-          <button className="yyc-btn-primary" style={danger ? { background: P.red } : undefined} onClick={onConfirm} autoFocus>{confirmLabel}</button>
+          <button className={danger ? "yyc-btn-danger" : "yyc-btn-primary"} onClick={onConfirm} autoFocus>{danger && <Icon name="alert" size={14} />}{confirmLabel}</button>
         </div>
       </div>
     </div>

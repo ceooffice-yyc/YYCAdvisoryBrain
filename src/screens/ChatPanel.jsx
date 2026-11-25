@@ -9,6 +9,8 @@ import { P } from "../theme.js";
 import { citationLabel } from "../lib/levers.js";
 import { Icon } from "../ui/Icon.jsx";
 import { Skeleton } from "../ui/Skeleton.jsx";
+import { CopyButton } from "../ui/CopyButton.jsx";
+import { formatAnswer } from "../lib/copy.js";
 
 /* Minimal, injection-safe renderer for model answers: paragraphs, headings, bullet/numbered lists, **bold**.
    Builds React elements only (never innerHTML), so model output can't inject markup. */
@@ -323,6 +325,12 @@ export function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+                  {m.role === "ai" && !m.refused && m.text && (
+                    <div className="yyc-msg-actions">
+                      <CopyButton className="yyc-chip-btn" showLabel label="Copy answer" done="Answer copied, with its sources"
+                        getText={() => formatAnswer({ question: msgs[i - 1] && msgs[i - 1].role === "user" ? msgs[i - 1].text : "", answer: m.text, citations: m.citations, titleOf: (id) => (index.find((d) => d.id === id) || {}).title })} />
                     </div>
                   )}
                   {m.role === "ai" && m.logId && (
