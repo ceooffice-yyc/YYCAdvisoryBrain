@@ -7,8 +7,9 @@ import { Icon } from "./ui/Icon.jsx";
 import { GlobalStyles } from "./ui/GlobalStyles.jsx";
 import { BrandMark } from "./ui/BrandMark.jsx";
 import { CopyFallback } from "./ui/CopyFallback.jsx";
+import { DocLoading } from "./ui/DocLoading.jsx";
 import { closeDoc, navigate, useRoute } from "./lib/route.js";
-import { SkeletonLines, SkeletonPage } from "./ui/Skeleton.jsx";
+import { SkeletonPage } from "./ui/Skeleton.jsx";
 import { ConfirmModal } from "./ui/ConfirmModal.jsx";
 import { lazyScreen } from "./lazyScreen.js";
 import { ScreenBoundary } from "./ui/ScreenBoundary.jsx";
@@ -232,6 +233,12 @@ export default function App() {
     navigate({ doc: docId, section: targetSection || null }, { push: true });
   }, []);
   const closePreview = useCallback(() => closeDoc(), []);
+  useEffect(() => {
+    if (!route.doc) return undefined;
+    const onKey = (e) => { if (e.key === "Escape" && !e.defaultPrevented) closePreview(); }; // not when another pop-up (the search) already used the key
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [route.doc, closePreview]);
   useEffect(() => {
     const id = route.doc;
     if (!id) return undefined;
@@ -467,11 +474,11 @@ export default function App() {
           with the same placeholder while that code arrives. They are never on the page together. */}
       {route.doc && (previewDoc && previewDoc.doc.id === route.doc
         ? (
-          <ScreenBoundary><Suspense fallback={<div className="yyc-modal-backdrop"><div className="yyc-modal" style={{ width: 840, maxWidth: "100%", padding: 24 }}><SkeletonLines rows={8} label="Opening the document" /></div></div>}>
+          <ScreenBoundary><Suspense fallback={<DocLoading onClose={closePreview} />}>
             <PreviewModal key={`${route.doc}|${route.section || ""}`} t={t} lang={lang} data={{ doc: previewDoc.doc, targetSection: route.section, targetRecordId: previewDoc.targetRecordId }} levers={levers} index={index} onClose={closePreview} />
           </Suspense></ScreenBoundary>
         )
-        : <div className="yyc-modal-backdrop"><div className="yyc-modal" style={{ width: 840, maxWidth: "100%", padding: 24 }}><SkeletonLines rows={8} label="Opening the document" /></div></div>)}
+        : <DocLoading onClose={closePreview} />)}
       {gateOpen && <ScreenBoundary><Suspense fallback={null}><AdminGate t={t} config={config} onOk={() => { setIsAdmin(true); setGateOpen(false); }} onClose={() => setGateOpen(false)} /></Suspense></ScreenBoundary>}
       {palette && (
         <ScreenBoundary><Suspense fallback={null}>

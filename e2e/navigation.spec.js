@@ -186,3 +186,43 @@ test('UX-03 pressing Escape on a document and clicking a tab in the same instant
   await expect(kbHeading(page)).toBeVisible();
   await expect(page.locator('.yyc-modal-sheet')).toHaveCount(0);
 });
+
+/* The "Opening the document" window must never trap the person, even if the code of the document window never arrives (a stalled connection). */
+const stallWindowCode = (page) => page.route('**/assets/PreviewModal-*.js', () => { /* never answered: the request just hangs */ });
+
+test('UX-03 if the document window never finishes loading, Escape closes the loading window and the app stays usable', async ({ page }) => {
+  await stallWindowCode(page);
+  await start(page);
+  await page.getByText('Acme Bakery').first().click();
+  const loading = page.getByRole('status', { name: 'Opening the document' });
+  await expect(loading).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(loading).toHaveCount(0);
+  await expect.poll(() => hash(page)).toBe('');
+  await tabBtn(page, 'Lever Explorer').click(); // nothing is covering the page
+  await expect(page.getByRole('heading', { level: 1, name: 'Lever Explorer' })).toBeVisible({ timeout: 10_000 });
+});
+
+test('UX-03 the loading window can also be closed with its Close button or by clicking outside it', async ({ page }) => {
+  await stallWindowCode(page);
+  await start(page);
+  await page.getByText('Acme Bakery').first().click();
+  await page.getByRole('button', { name: 'Cancel opening the document' }).click();
+  await expect(page.getByRole('status', { name: 'Opening the document' })).toHaveCount(0);
+  await page.getByText('Acme Bakery').first().click();
+  await expect(page.getByRole('status', { name: 'Opening the document' })).toBeVisible();
+  await page.mouse.click(5, 5); // outside the window (on the dimmed page)
+  await expect(page.getByRole('status', { name: 'Opening the document' })).toHaveCount(0);
+});
+
+test('UX-03 after 8 seconds the loading window says it is slow and offers Reload and Close', async ({ page }) => {
+  test.setTimeout(60_000);
+  await stallWindowCode(page);
+  await start(page);
+  await page.getByText('Acme Bakery').first().click();
+  await expect(page.getByRole('status', { name: 'Opening the document' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'This is taking longer than usual.' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Reload the page' })).toBeVisible();
+  await page.getByRole('alert').getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('status', { name: 'Opening the document' })).toHaveCount(0);
+});

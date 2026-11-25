@@ -21,7 +21,7 @@ for (const scheme of SCHEMES) for (const v of VIEWS) {
     await page.getByText('Acme Bakery').first().waitFor();
     await snap('01-knowledge-base');
     await page.getByText('Acme Bakery').first().click();
-    await page.locator('.yyc-modal').waitFor();
+    await page.locator('.yyc-modal-sheet').waitFor(); // the finished window, not the loading placeholder
     await snap('02-document');
     await page.keyboard.press('Escape');
     await nav('Lever Explorer');

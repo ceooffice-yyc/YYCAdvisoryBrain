@@ -324,6 +324,7 @@ export function GlobalStyles() {
       .yyc-seg-btn { flex: 1 1 0; min-width: 0; padding: 8px 14px; font-size: 12.5px; font-weight: 650; font-family: inherit; line-height: 1.2; text-align: center; background: transparent; color: ${P.sub}; border: 0; cursor: pointer; }
       .yyc-seg-btn + .yyc-seg-btn { border-left: 1px solid ${P.line}; }
       .yyc-seg-btn.is-active { background: ${P.ink}; color: ${P.paper}; }
+      .yyc-docload-slow { margin-top: 18px; padding: 14px 16px; border-radius: 12px; background: ${P.goldSoft}; border: 1px solid ${P.gold}; font-size: 13.5px; }
       .yyc-trash-h { font-size: 15px; font-weight: 800; margin: 0 0 10px; color: ${P.title}; }
       .yyc-trash-h span { color: ${P.faint}; font-weight: 700; }
       .yyc-trash-list { display: grid; gap: 8px; }

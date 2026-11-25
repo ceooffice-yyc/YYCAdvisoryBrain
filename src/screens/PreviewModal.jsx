@@ -32,12 +32,6 @@ export function PreviewModal({ t, lang, data, levers, onClose }) {
     return () => clearTimeout(id);
   }, [view]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const tabs = [
     ...(hasHtml ? [["document", t.docView]] : []),
     ["summary", t.sumView],

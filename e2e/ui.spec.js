@@ -9,7 +9,7 @@ const tabBtn = (page, label) => page.locator('.yyc-nav-item:visible, .yyc-botnav
 /* The screens a person actually visits. Each returns when the screen is ready. */
 const SCREENS = {
   'knowledge base': async (page) => { await seed(page); await page.goto('/'); await page.getByText('Acme Bakery').first().waitFor(); },
-  'document': async (page) => { await seed(page); await page.goto('/'); await page.getByText('Acme Bakery').first().click(); await page.locator('.yyc-modal').waitFor(); },
+  'document': async (page) => { await seed(page); await page.goto('/'); await page.getByText('Acme Bakery').first().click(); await page.locator('.yyc-modal-sheet').waitFor(); },
   'lever explorer': async (page) => { await seed(page); await page.goto('/'); await tabBtn(page, 'Lever Explorer').click(); await page.getByRole('heading', { level: 1, name: 'Lever Explorer' }).waitFor(); },
   'ask the brain': async (page) => { await seed(page); await page.goto('/'); await tabBtn(page, 'Ask the Brain').click(); await page.getByRole('heading', { level: 1, name: 'Ask the Brain' }).waitFor(); },
   'add material': async (page) => { await seed(page); await page.goto('/'); await unlockAdmin(page); await page.getByRole('button', { name: 'Add material' }).first().click(); await page.getByRole('heading', { level: 1, name: 'Add material' }).waitFor(); },
