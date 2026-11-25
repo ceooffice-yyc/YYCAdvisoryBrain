@@ -13,34 +13,39 @@ export function GlobalStyles() {
       .yyc-brandbar { height: 3px; background: linear-gradient(90deg, ${P.crimson} 0%, ${P.maroon} 60%, ${P.gold} 100%); position: sticky; top: 0; z-index: 50; }
       .yyc-shell { display: flex; min-height: calc(100vh - 3px); max-width: 1560px; margin: 0 auto; }
       @media (min-width: 1580px) { .yyc-shell { border-left: 1px solid ${P.line}; border-right: 1px solid ${P.line}; } }
-      .yyc-sidebar { width: 248px; flex-shrink: 0; background: ${P.card}; border-right: 1px solid ${P.line}; display: none; flex-direction: column; padding: 22px 14px 16px; position: sticky; top: 3px; height: calc(100vh - 3px); overflow-y: auto; }
+      .yyc-sidebar { width: 256px; flex-shrink: 0; background: linear-gradient(180deg, rgba(var(--brand-rgb), 0.07) 0, rgba(var(--brand-rgb), 0) 220px), ${P.card}; border-right: 1px solid ${P.line}; display: none; flex-direction: column; padding: 22px 14px 16px; position: sticky; top: 3px; height: calc(100vh - 3px); overflow-y: auto; }
       @media (min-width: 900px) { .yyc-sidebar { display: flex; } }
-      .yyc-brand { display: flex; align-items: center; gap: 5px; padding: 0 8px 22px; }
-      .yyc-brand-mark { background: transparent; padding: 0; display: flex; align-items: center; justify-content: center; }
-      .yyc-brand-mark img { width: 60px; height: 50px; object-fit: contain; display: block; }
+      .yyc-brand { display: flex; align-items: center; gap: 12px; padding: 2px 6px 24px; }
+      .yyc-brand-mark { width: 42px; height: 42px; flex-shrink: 0; display: block; border-radius: 12px; box-shadow: 0 8px 16px -8px rgba(var(--brand-rgb), 0.6), 0 1px 2px rgba(0, 0, 0, 0.1); }
+      .yyc-brand-mark svg { display: block; width: 100%; height: 100%; }
       .yyc-brand-text { min-width: 0; }
-      .yyc-brand-name { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .yyc-brand-sub { color: ${P.faint}; font-size: 12px; line-height: 1.3; margin-top: 1px; }
-      .yyc-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; }
+      .yyc-brand-name { font-size: 16px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; color: ${P.title}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .yyc-brand-sub { color: ${P.faint}; font-size: 12px; line-height: 1.3; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .yyc-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
       .yyc-nav-label { font-size: 11.5px; font-weight: 700; color: ${P.faint}; text-transform: uppercase; letter-spacing: 0.09em; padding: 0 10px 8px; }
-      .yyc-nav-item { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 9px 11px; border-radius: 10px; background: transparent; border: none; cursor: pointer; font-size: 13.5px; font-weight: 600; color: ${P.sub}; text-align: left; font-family: inherit; transition: background .15s, color .15s; position: relative; }
+      .yyc-nav-item { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 7px 10px 7px 7px; border-radius: 14px; background: transparent; border: none; cursor: pointer; font-size: 14px; font-weight: 600; color: ${P.sub}; text-align: left; font-family: inherit; transition: background .15s, color .15s; position: relative; }
+      .yyc-nav-ico { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; background: ${P.wash}; color: ${P.sub}; transition: background .15s, color .15s, box-shadow .15s; }
+      .yyc-nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .yyc-nav-item:hover { background: ${P.wash}; color: ${P.ink}; }
+      .yyc-nav-item:hover:not(.is-active) .yyc-nav-ico { background: ${P.card}; box-shadow: inset 0 0 0 1px ${P.lineDark}; color: ${P.ink}; }
       .yyc-nav-item.is-active { background: ${P.crimsonSoft}; color: ${P.crimsonText}; font-weight: 700; }
-      .yyc-nav-item.is-active::before { content: ""; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px; background: ${P.crimson}; border-radius: 0 3px 3px 0; }
-      .yyc-sidebar-foot { padding-top: 16px; border-top: 1px solid ${P.line}; margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+      .yyc-nav-item.is-active .yyc-nav-ico { background: ${P.crimson}; color: var(--on-fill); box-shadow: 0 6px 12px -6px rgba(var(--brand-rgb), 0.6); }
+
+      .yyc-sidebar-foot { padding-top: 14px; border-top: 1px solid ${P.line}; margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
       .yyc-lang { display: flex; border: 1px solid ${P.lineDark}; border-radius: 8px; overflow: hidden; background: ${P.card}; }
       .yyc-lang-btn { flex: 1; padding: 6px 8px; font-size: 12px; font-weight: 650; background: transparent; color: ${P.sub}; border: none; cursor: pointer; font-family: inherit; }
       .yyc-lang-btn:hover { background: ${P.wash}; }
       .yyc-lang-btn.is-active { background: ${P.ink}; color: ${P.paper}; }
       .yyc-admin-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.sub}; font-size: 12.5px; font-weight: 650; cursor: pointer; font-family: inherit; }
-      .yyc-profile-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid ${P.lineDark}; background: ${P.card}; color: ${P.ink}; cursor: pointer; font-family: inherit; text-align: left; }
+      .yyc-profile-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 13px; border: 1px solid ${P.line}; background: ${P.wash}; color: ${P.ink}; cursor: pointer; font-family: inherit; text-align: left; }
       .yyc-profile-btn:hover:not(:disabled) { background: ${P.wash}; border-color: ${P.ink}; }
       .yyc-profile-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .yyc-profile-compact { width: auto; padding: 3px; border-radius: 999px; }
       .yyc-avatar { width: 30px; height: 30px; border-radius: 50%; background: ${P.maroon}; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; flex-shrink: 0; }
       .yyc-admin-btn:hover { background: ${P.wash}; border-color: ${P.ink}; color: ${P.ink}; }
       .yyc-admin-btn.is-on { background: ${P.maroon}; border-color: ${P.maroonText}; color: #fff; }
-      .yyc-foot-note { font-size: 11.5px; color: ${P.faint}; line-height: 1.5; padding: 0 4px; }
+      .yyc-foot-note { display: flex; gap: 9px; align-items: flex-start; font-size: 11.5px; color: ${P.faint}; line-height: 1.5; padding: 2px 6px 0; }
+      .yyc-foot-note::before { content: ""; flex-shrink: 0; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: ${P.crimson}; box-shadow: 0 0 0 3px rgba(var(--brand-rgb), 0.16); }
       .yyc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: ${P.paper}; }
       .yyc-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; background: var(--glass); backdrop-filter: blur(10px); border-bottom: 1px solid ${P.line}; position: sticky; top: 3px; z-index: 30; }
       @media (min-width: 900px) { .yyc-topbar { display: none; } }
@@ -184,7 +189,7 @@ export function GlobalStyles() {
       .yyc-md ul, .yyc-md ol { margin: 4px 0 8px; padding-left: 22px; }
       .yyc-md li { margin-bottom: 4px; }
       .yyc-md-h { font-weight: 750; margin: 10px 0 4px; }
-      .yyc-bubble.is-user { background: linear-gradient(135deg, ${P.crimson}, ${P.maroon}); color: #fff; border-radius: 16px 4px 16px 16px; box-shadow: 0 2px 8px rgba(154,0,0,0.18); }
+      .yyc-bubble.is-user { background: linear-gradient(135deg, ${P.crimson}, ${P.maroon}); color: #fff; border-radius: 16px 4px 16px 16px; box-shadow: 0 2px 8px rgba(var(--brand-rgb), 0.22); }
       .yyc-bubble.is-ai { background: ${P.card}; color: ${P.ink}; border: 1px solid ${P.line}; border-left: 3px solid ${P.crimson}; border-radius: 4px 16px 16px 16px; box-shadow: ${P.s2}; }
       .yyc-bubble.is-refused { background: ${P.wash}; color: ${P.sub}; border: 1px solid ${P.lineDark}; border-left: 3px solid ${P.faint}; font-style: italic; box-shadow: none; }
       .yyc-cites { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; align-items: center; }
@@ -267,7 +272,9 @@ export function GlobalStyles() {
       .yyc-btn-primary { ${Object.entries(btnP(false)).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
       .yyc-btn-primary, .yyc-btn-secondary { gap: 8px; }
       .yyc-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-      .yyc-btn-primary:hover:not(:disabled) { background: ${P.crimsonDark} !important; box-shadow: 0 3px 10px rgba(154,0,0,0.25) !important; }
+      .yyc-draft-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 14px 16px; margin-bottom: 18px; background: ${P.goldSoft}; border: 1px solid ${P.gold}; border-radius: 14px; }
+      .yyc-draft-ico { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; background: ${P.card}; color: ${P.goldText}; }
+      .yyc-btn-primary:hover:not(:disabled) { background: ${P.crimsonDark} !important; box-shadow: 0 3px 10px rgba(var(--brand-rgb), 0.3) !important; }
       .yyc-btn-primary:active:not(:disabled) { transform: translateY(1px); }
       .yyc-btn-primary:disabled { cursor: default; }
       .yyc-btn-secondary { ${Object.entries(btnG).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`).join(" ")} ; border-radius: 20px; }
@@ -350,7 +357,7 @@ export function GlobalStyles() {
       @media (max-width: 899px) { .yyc-pillbtn { min-height: 44px; } .yyc-linkbtn { min-height: 44px; display: inline-flex; align-items: center; } }
       @media (max-width: 899px) {
         .yyc-topbar { padding: 10px 14px; }
-        .yyc-topbar .yyc-brand-mark img { width: 44px; height: 38px; }
+        .yyc-topbar .yyc-brand-mark { width: 38px; height: 38px; border-radius: 11px; }
         .yyc-topbar .yyc-brand-sub { display: none; }
         .yyc-section-head { margin-bottom: 18px; padding-bottom: 14px; }
         .yyc-section-head > .yyc-btn-primary, .yyc-section-head > .yyc-btn-secondary { flex: 1 1 auto; }

@@ -11,6 +11,7 @@
 
   --crimson: #C00000; --crimson-dark: #9A0000; --crimson-soft: #FDEDED; --crimson-text: #B00000;
   --maroon: #7A0A0A; --maroon-text: #7A0A0A; --title: #2A0505;
+  --brand-rgb: 154, 0, 0;                   /* the brand colour as r, g, b, for shadows */
   --gold: #B8860B; --gold-dark: #8A6508; --gold-soft: #FFF6DC; --gold-text: #7A5906;
   --green: #0E7C4A; --green-soft: #E6F5EC; --green-text: #0B6B40;
   --red: #B42318; --red-soft: #FDECEC; --red-text: #A61F15;
@@ -54,6 +55,7 @@
 
     --crimson: #C22F28; --crimson-dark: #A3241E; --crimson-soft: #3A1B1A; --crimson-text: #FF9A91;
     --maroon: #8E1F1F; --maroon-text: #F2B0A8; --title: #FBEDEA;
+    --brand-rgb: 194, 47, 40;
     --gold: #C9981C; --gold-dark: #E0B648; --gold-soft: #33290F; --gold-text: #EDC865;
     --green: #2E9F69; --green-soft: #15301F; --green-text: #7FDCAA;
     --red: #C73E34; --red-soft: #3A1B19; --red-text: #FF9A91;
@@ -106,7 +108,7 @@ textarea { resize: none !important; }
 .auth-card { position: relative; width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 32px 28px 26px; box-shadow: var(--s3); overflow: hidden; }
 .auth-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: linear-gradient(90deg, var(--crimson) 0%, var(--maroon) 60%, var(--gold) 100%); }
 .auth-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
-.auth-brand img { width: 48px; height: 48px; object-fit: contain; flex-shrink: 0; }
+.auth-brand svg { width: 48px; height: 48px; flex-shrink: 0; border-radius: 13px; box-shadow: 0 8px 16px -8px rgba(var(--brand-rgb), 0.6), 0 1px 2px rgba(0, 0, 0, 0.1); }
 .auth-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--gold-text); }
 .auth-title { margin: 2px 0 0; font-size: clamp(1.35rem, 1.1rem + 1.2vw, 1.6rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; color: var(--title); }
 .auth-sub { font-size: 14px; color: var(--sub); margin: 0 0 18px; line-height: 1.5; }
@@ -117,7 +119,7 @@ textarea.auth-field { min-height: 76px; line-height: 1.5; }
 .auth-hint { font-size: 13px; color: var(--sub); line-height: 1.55; margin: -6px 0 14px; }
 .auth-btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 46px; padding: 12px 16px; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; border: 1px solid transparent; transition: background .15s, transform .08s, box-shadow .15s, border-color .15s; }
 .auth-btn + .auth-btn { margin-top: 10px; }
-.auth-btn.is-primary { background: var(--crimson); color: var(--on-fill); box-shadow: 0 1px 3px rgba(154, 0, 0, 0.25); margin-top: 6px; }
+.auth-btn.is-primary { background: var(--crimson); color: var(--on-fill); box-shadow: 0 1px 3px rgba(var(--brand-rgb), 0.3); margin-top: 6px; }
 .auth-btn.is-primary:hover:not(:disabled) { background: var(--crimson-dark); }
 .auth-btn.is-quiet { background: var(--card); color: var(--ink); border-color: var(--line-dark); }
 .auth-btn.is-quiet:hover:not(:disabled) { background: var(--wash); border-color: var(--ink); }
@@ -130,4 +132,4 @@ textarea.auth-field { min-height: 76px; line-height: 1.5; }
 
 /* The first screen, before the app has loaded (index.html) and while it checks who is signed in (src/main.jsx) */
 .boot { min-height: 100vh; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; color: var(--sub); font-weight: 600; text-align: center; }
-.boot img { width: 56px; height: 56px; object-fit: contain; }
+.boot svg { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 10px 20px -10px rgba(var(--brand-rgb), 0.6); }

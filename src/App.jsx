@@ -5,6 +5,7 @@ import { T } from "./i18n.js";
 import { P, fontStack } from "./theme.js";
 import { Icon } from "./ui/Icon.jsx";
 import { GlobalStyles } from "./ui/GlobalStyles.jsx";
+import { BrandMark } from "./ui/BrandMark.jsx";
 import { SkeletonLines, SkeletonPage } from "./ui/Skeleton.jsx";
 import { ConfirmModal } from "./ui/ConfirmModal.jsx";
 import { lazyScreen } from "./lazyScreen.js";
@@ -265,12 +266,12 @@ export default function App() {
     <div className="yyc-root" style={{ fontFamily: fontStack }}>
       <a className="skip-link" href="#yyc-main">Skip to the content</a>
       <GlobalStyles />
-      <div className="yyc-brandbar" />
+      {/* <div className="yyc-brandbar" /> */}
 
       <div className="yyc-shell">
         <aside className="yyc-sidebar">
           <div className="yyc-brand">
-            <div className="yyc-brand-mark"><img src="/logo.png" alt="YYC Logo" /></div>
+            <div className="yyc-brand-mark"><BrandMark size={42} /></div>
             <div className="yyc-brand-text">
               <div className="yyc-brand-name">{t.appTitle}</div>
               <div className="yyc-brand-sub">{t.appSub}</div>
@@ -283,7 +284,7 @@ export default function App() {
               const active = tab === item.key;
               return (
                 <button key={item.key} className={`yyc-nav-item ${active ? "is-active" : ""}`} onClick={() => setTab(item.key)} onPointerEnter={() => PRELOAD[item.key]?.preload()} onFocus={() => PRELOAD[item.key]?.preload()}>
-                  <Icon name={item.icon} size={16} /><span>{item.label}</span>{item.badge > 0 && <span className="yyc-nav-badge" aria-label={`${item.badge} waiting`}>{item.badge}</span>}{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: "auto", width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
+                  <span className="yyc-nav-ico"><Icon name={item.icon} size={17} /></span><span className="yyc-nav-text">{item.label}</span>{item.badge > 0 && <span className="yyc-nav-badge" aria-label={`${item.badge} waiting`}>{item.badge}</span>}{item.key === "kb" && kbWorking && <span className="yyc-spin" title="Extracting in the background…" style={{ marginLeft: "auto", width: 11, height: 11, borderRadius: "50%", border: "2px solid rgba(128,0,0,.25)", borderTopColor: P.maroon, display: "inline-block", flexShrink: 0 }} />}
                 </button>
               );
             })}
@@ -336,7 +337,7 @@ export default function App() {
         <main className="yyc-main" id="yyc-main" tabIndex={-1}>
           <header className="yyc-topbar">
             <div className="yyc-brand">
-              <div className="yyc-brand-mark"><img src="/logo.png" alt="YYC Logo" /></div>
+              <div className="yyc-brand-mark"><BrandMark size={42} /></div>
               <div className="yyc-brand-text">
                 <div className="yyc-brand-name">{t.appTitle}</div>
                 <div className="yyc-brand-sub">{t.appSub}</div>

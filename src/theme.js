@@ -37,13 +37,13 @@ const btnBase = {
 export const btnP = (disabled) => ({
   ...btnBase, padding: "10px 20px", fontSize: 13.5,
   background: disabled ? P.faint : P.crimson, color: "#fff",
-  boxShadow: disabled ? "none" : "0 1px 3px rgba(154,0,0,0.2)",
+  boxShadow: disabled ? "none" : "0 1px 3px rgba(var(--brand-rgb), 0.25)",
   cursor: disabled ? "default" : "pointer",
 });
 export const btnG = { ...btnBase, padding: "9px 15px", fontSize: 13, fontWeight: 600, border: `1px solid ${P.lineDark}`, background: P.card, color: P.sub };
 
 export const TYPE_COLORS = {
-  case_study: { bg: "#FDEDED", fg: "#9A0000" },
+  case_study: { bg: P.crimsonSoft, fg: P.crimsonText }, // follows the brand colour
   playbook: { bg: "#FFF6DC", fg: "#8A6508" },
   framework: { bg: "#E6F5EC", fg: "#0E7C4A" },
   notes: { bg: "#EEF0F5", fg: "#3D4B6E" },

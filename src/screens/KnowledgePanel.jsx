@@ -18,6 +18,7 @@ const buildCompilationItems = async (...args) => (await import("../pipeline/extr
 import { OTHER_CATS, leverTag, normalizeMainCategory, normalizeOther, parseIndustry, sortByLever } from "../lib/levers.js";
 import { T } from "../i18n.js";
 import { Icon } from "../ui/Icon.jsx";
+import { ageLabel, clearDraft, describeDraft, loadDraft, restoreItems, saveDraft } from "../lib/drafts.js";
 import { LeverPickerModal, LeverRecordCard } from "../ui/LeverParts.jsx";
 
 // Asked when the person's M&A tick and the document's section headings disagree: proceed either way, or skip the file
@@ -60,7 +61,7 @@ function MnaChoiceModal({ ask, onPick }) {
 
 /* Import Backup preview: every material found in the backup, with its status and strategies, and the lever settings found in it.
    Nothing is saved until "Import selected" is pressed; only what is ticked is imported. */
-const IMPORT_STATE = { new: ["New", P.greenText, P.greenSoft], exists: ["Already in the library: skipped", P.goldText, P.goldSoft], deleted: ["Was deleted: skipped", "#9A0000", "#FDEDED"] };
+const IMPORT_STATE = { new: ["New", P.greenText, P.greenSoft], exists: ["Already in the library: skipped", P.goldText, P.goldSoft], deleted: ["Was deleted: skipped", P.redText, P.redSoft] };
 function ImportPreviewModal({ t, plan, busy, onCancel, onConfirm }) {
   const [selDocs, setSelDocs] = useState(() => new Set(plan.docs.filter((d) => d.state === "new").map((d) => d.id)));
   const [selCfg, setSelCfg] = useState(() => new Set(plan.cfgItems.filter((c) => !c.exists).map((c) => c.key)));
@@ -245,6 +246,57 @@ export function KnowledgePanel({
   );
   const [extraction, setExtraction] = useState(null);
   const [reviewEpoch, setReviewEpoch] = useState(0);        // changes when a record is removed / restored, so the boxes below it are rebuilt from the data
+
+  // ── Drafts (DRAFT-01): unsaved Review / Bulk work is kept in this browser, so a refresh or crash does not lose it ──
+  const draftOwner = (window.storage?.remote && window.storage.user?.id) || "local";
+  const [draftOffer, setDraftOffer] = useState(() => loadDraft(draftOwner)); // a draft from before the page was opened, waiting for "Restore" or "Discard"
+  const draftWarned = useRef(false);
+  useEffect(() => {
+    if (draftOffer || !isAdmin) return undefined; // never overwrite a draft the person has not decided about yet
+    const build = () => {
+      if (bulkItems.length && (mode === "bulk" || mode === "review")) return { kind: "bulk", items: bulkItems, ticks: bulkTicks, reviewId: mode === "review" ? bulkReviewId : null, reviewExtraction: mode === "review" && bulkReviewId ? extraction : null };
+      if (mode === "review" && extraction && !bulkReviewId) return { kind: "single", title, text, html, extraction, mnaChoice };
+      return null; // nothing unsaved: no draft
+    };
+    const write = () => {
+      const d = build();
+      if (!d) { clearDraft(draftOwner); return; }
+      const r = saveDraft(draftOwner, d);
+      if ((r.state === "too-big" || r.state === "failed") && !draftWarned.current) { draftWarned.current = true; flash("This work is too big to keep as a draft in the browser: finish or save it before closing the page.", "error"); }
+    };
+    const timer = setTimeout(write, 800); // a moment after the last change, not on every keystroke
+    const flush = () => { clearTimeout(timer); write(); };
+    const onHide = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => { clearTimeout(timer); window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", onHide); };
+  }, [draftOffer, isAdmin, draftOwner, mode, extraction, title, text, html, mnaChoice, bulkItems, bulkTicks, bulkReviewId, flash]);
+  const restoreDraft = () => {
+    if (!draftOffer) return;
+    const d = draftOffer.draft;
+    if (d.kind === "single") {
+      setBulkItems([]); setBulkTicks({}); setBulkReviewId(null);
+      setTitle(d.title || ""); setText(d.text || ""); setHtml(d.html || ""); setMnaChoice(d.mnaChoice === undefined ? null : d.mnaChoice);
+      setExtraction(d.extraction); setReviewEpoch((n) => n + 1);
+      setMode("review");
+    } else {
+      const items = restoreItems(d.items);
+      setBulkItems(items); setBulkTicks(d.ticks || {});
+      const open = d.reviewId && d.reviewExtraction ? items.find((x) => x.id === d.reviewId) : null;
+      if (open) {
+        setTitle(open.title); setText(open.text); setHtml(open.html || "");
+        setExtraction(d.reviewExtraction); setBulkReviewId(open.id); setReviewEpoch((n) => n + 1);
+        setMode("review");
+      } else { setBulkReviewId(null); setMode("bulk"); }
+    }
+    setErrMsg("");
+    flash(draftOffer.light ? "Draft restored. The formatted view of the documents was too big to keep, so they show as plain text." : "Draft restored");
+    setDraftOffer(null);
+  };
+  const askDiscardDraft = () => setConfirm({
+    title: "Discard the saved draft?", message: "The unsaved work kept in this browser is deleted. This cannot be undone.",
+    confirmLabel: "Discard draft", onConfirm: () => { clearDraft(draftOwner); setDraftOffer(null); },
+  });
   const [editDoc, setEditDoc] = useState(null);
   const [editLevers, setEditLevers] = useState([]);
   const [editLeverRecord, setEditLeverRecord] = useState(null);
@@ -1389,6 +1441,22 @@ export function KnowledgePanel({
           </div>
         )}
       </div>
+
+      {isAdmin && draftOffer && (
+        <div role="region" aria-label="Unsaved draft" className="yyc-draft-banner">
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", minWidth: 0, flex: "1 1 260px" }}>
+            <span className="yyc-draft-ico" aria-hidden="true"><Icon name="file" size={16} /></span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 750, fontSize: 14, overflowWrap: "anywhere" }}>{describeDraft(draftOffer.draft)}</div>
+              <div style={{ fontSize: 12.5, color: P.sub, marginTop: 2, lineHeight: 1.5 }}>Saved in this browser {ageLabel(draftOffer.at)}. It was not saved to the library.</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="yyc-btn-primary" onClick={restoreDraft}>Restore</button>
+            <button className="yyc-btn-secondary" onClick={askDiscardDraft}>Discard</button>
+          </div>
+        </div>
+      )}
 
       <div className="yyc-stats">
         <div className="yyc-stat">

@@ -281,7 +281,7 @@ for (const [w, h] of [[320, 568], [375, 667], [768, 900], [1280, 800]]) {
   });
 }
 
-test('UI-02 selected text uses the theme colour (soft crimson, readable), not the browser blue, in light and dark', async ({ page }) => {
+test('UI-02 selected text uses the brand colour (a soft wash, readable), not the browser default, in light and dark', async ({ page }) => {
   await seed(page); await page.goto('/');
   await page.locator('.yyc-doc').first().waitFor();
   const lum = (rgb) => { const [r, g, b] = rgb.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
@@ -291,8 +291,8 @@ test('UI-02 selected text uses the theme colour (soft crimson, readable), not th
     expect(sel.bg, `${scheme}: not the default blue`).not.toMatch(/^rgb\(0, 120, 215\)|^rgba\(0, 0, 0, 0\)|^rgb\(51, 144, 255\)/);
     const [a, b] = [lum(sel.bg), lum(sel.fg)].sort((x, y) => y - x);
     expect((a + 0.05) / (b + 0.05), `${scheme}: selected text must stay readable`).toBeGreaterThanOrEqual(7);
-    const [r, , bl] = sel.bg.match(/\d+/g).map(Number);
-    expect(r, `${scheme}: warm (red) rather than blue`).toBeGreaterThan(bl);
+    const token = await page.evaluate(() => { const p = document.createElement('i'); p.style.color = getComputedStyle(document.documentElement).getPropertyValue('--select-bg'); document.body.appendChild(p); const c = getComputedStyle(p).color; p.remove(); return c; });
+    expect(sel.bg, `${scheme}: the highlight is the brand token (--select-bg), so a colour change is one place`).toBe(token);
   }
 });
 
@@ -501,5 +501,66 @@ test('SEC-07 the role is re-checked only now and then: once about every five min
   expect(afterBurst).toBe(afterFirst + 1);
   await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // coming back to the tab right after a check: nothing new
   expect(await settle()).toBe(afterBurst);
+  await ctx.close();
+});
+
+/* The site's own icon (a blue tile with an open book and a spark) and the redesigned left panel. */
+test('UI-01 the page declares its own icon files, and every one of them is served', async ({ page, request }) => {
+  await page.goto('/');
+  const links = await page.evaluate(() => [...document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]')].map((l) => ({ rel: l.rel, href: l.getAttribute('href'), type: l.type })));
+  const hrefs = links.map((l) => l.href);
+  for (const h of ['/favicon.svg', '/favicon-32.png', '/favicon.ico', '/apple-touch-icon.png', '/site.webmanifest']) expect(hrefs, h).toContain(h);
+  expect(hrefs).not.toContain('/logo.png'); // the old company logo is no longer the site icon
+  for (const h of hrefs) { const r = await request.get(h); expect(r.status(), h).toBe(200); expect((await r.body()).length, h).toBeGreaterThan(200); }
+  expect((await request.get('/favicon.svg')).headers()['content-type']).toContain('svg');
+  expect((await request.get('/favicon.svg')).headers()['content-type']).not.toContain('html'); // not the not-found page
+  const svg = await (await request.get('/favicon.svg')).text();
+  expect(svg.toLowerCase()).toContain('#c00000'); // the icon uses the site's crimson
+  expect(svg.toLowerCase()).not.toContain('#00aeef'); // not the old blue
+  expect(svg).not.toContain('863bff'); // and the default purple placeholder is gone
+});
+
+test('UI-01 the web app manifest is valid and its icons exist', async ({ request }) => {
+  const m = await (await request.get('/site.webmanifest')).json();
+  expect(m.name).toBeTruthy(); expect(m.start_url).toBe('/'); expect(m.theme_color).toBe('#C00000');
+  expect(m.icons.length).toBeGreaterThanOrEqual(3);
+  for (const i of m.icons) { const r = await request.get(i.src); expect(r.status(), i.src).toBe(200); expect(r.headers()['content-type'], i.src).toContain('image/png'); }
+  expect(m.icons.some((i) => i.purpose === 'maskable')).toBe(true);
+});
+
+test('UI-01 the left panel: a vector brand mark, name and subtitle each on one line, icon chips on the tabs, the active tab clearly marked', async ({ page }) => {
+  const images = [];
+  page.on('request', (r) => { if (/logo\.png/.test(r.url())) images.push(r.url()); });
+  await seed(page); await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor();
+  const side = page.locator('.yyc-sidebar');
+  await expect(side.locator('.yyc-brand-mark svg')).toBeVisible();
+  expect(images).toEqual([]); // nothing asks for the old logo image any more
+  const g = await side.evaluate((s) => {
+    const name = s.querySelector('.yyc-brand-name'), sub = s.querySelector('.yyc-brand-sub'), mark = s.querySelector('.yyc-brand-mark').getBoundingClientRect();
+    const one = (e) => e.getBoundingClientRect().height < parseFloat(getComputedStyle(e).fontSize) * 1.8; // a single line of text
+    const items = [...s.querySelectorAll('.yyc-nav-item')].map((e) => ({ h: e.getBoundingClientRect().height, chip: !!e.querySelector('.yyc-nav-ico svg'), active: e.classList.contains('is-active'), ico: getComputedStyle(e.querySelector('.yyc-nav-ico')).backgroundColor }));
+    return { nameOne: one(name), subOne: one(sub), subClipped: sub.scrollWidth > sub.clientWidth, markW: mark.width, items, overflow: s.scrollWidth > s.clientWidth };
+  });
+  expect(g.nameOne).toBe(true); expect(g.subOne).toBe(true); expect(g.subClipped).toBe(false);
+  expect(g.markW).toBeGreaterThanOrEqual(40);
+  expect(g.overflow).toBe(false);
+  for (const i of g.items) { expect(i.h).toBeGreaterThanOrEqual(44); expect(i.chip).toBe(true); }
+  const active = g.items.filter((i) => i.active); expect(active).toHaveLength(1);
+  expect(new Set(g.items.map((i) => i.ico)).size).toBeGreaterThan(1); // the active tab's chip is a different colour from the rest
+});
+
+test('UI-01 the brand mark shows on the phone top bar, the sign-in screen and the loading screen', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true });
+  const page = await ctx.newPage();
+  await seed(page); await page.goto('/');
+  await page.locator('.yyc-doc').first().waitFor();
+  await expect(page.locator('.yyc-topbar .yyc-brand-mark svg')).toBeVisible();
+  const w = await page.locator('.yyc-topbar .yyc-brand-mark').evaluate((e) => e.getBoundingClientRect().width);
+  expect(w).toBeGreaterThanOrEqual(34);
+  const p2 = await ctx.newPage(); await showSignIn(p2); await p2.goto('/');
+  await expect(p2.locator('.auth-brand svg')).toBeVisible();
+  const p3 = await ctx.newPage(); await p3.route('**/assets/**', (r) => r.abort()); await p3.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(p3.locator('.boot svg')).toBeVisible(); // the very first screen, before any script, carries the mark inline
   await ctx.close();
 });

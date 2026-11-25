@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import App from './App.jsx'
+import { BrandMark } from './ui/BrandMark.jsx'
 
 // Decides what to show before the app: with the shared database (Supabase) people must sign in first; without it the app opens directly.
 // Sign-in screen: sign in, "Request access" (an admin approves it), "Forgot password?". An invite or reset email leads to "Set your password".
@@ -13,7 +14,7 @@ function Shell({ title, sub, children, as: Tag = 'div', onSubmit }) {
     <main className="auth-page">
       <Tag className="auth-card" onSubmit={onSubmit} noValidate={Tag === 'form' ? true : undefined}>
         <div className="auth-brand">
-          <img src="/logo.png" alt="" />
+          <BrandMark size={48} />
           <div>
             <div className="auth-eyebrow">YYC Advisory Brain</div>
             <h1 className="auth-title">{title}</h1>

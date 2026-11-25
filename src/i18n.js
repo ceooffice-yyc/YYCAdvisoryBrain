@@ -3,7 +3,7 @@
 
 export const T = {
   en: {
-    appTitle: "Advisory Brain", appSub: "Internal knowledge · Closed-book",
+    appTitle: "Advisory Brain", appSub: "Internal knowledge base",
     workspace: "Workspace",
     tabs: { kb: "Knowledge Base", chat: "Ask the Brain", explorer: "Lever Explorer", gap: "Gap Log", users: "Users" },
     kbUser: "Browse the materials uploaded by the YYC team. Click any card to read the summary or full document.",

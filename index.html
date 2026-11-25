@@ -3,7 +3,13 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" sizes="any" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#151111" media="(prefers-color-scheme: dark)" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>YYC Advisory Brain</title>
   <!-- Critical styles, inline: the first screen is styled even before the main stylesheet arrives (the dev server adds it with JavaScript, a slow
@@ -14,14 +20,14 @@
     html, body { margin: 0; background: var(--b-paper); }
     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
     .boot { min-height: 100vh; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; color: var(--b-sub); font-weight: 600; text-align: center; }
-    .boot img { width: 56px; height: 56px; object-fit: contain; }
+    .boot svg { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 10px 20px -10px rgba(154, 0, 0, 0.6); }
     .boot p { margin: 0; }
   </style>
 </head>
 
 <body>
   <!-- Shown by the browser at once, before any script has arrived; the app replaces it (PERF-01). -->
-  <div id="root"><div class="boot" role="status"><img src="/logo.png" alt="" width="56" height="56" /><p>Loading YYC Advisory Brain…</p></div></div>
+  <div id="root"><div class="boot" role="status"><svg width="56" height="56" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs><linearGradient id="bmb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E0352D"/><stop offset=".5" stop-color="#C00000"/><stop offset="1" stop-color="#7A0A0A"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#bmb)"/><g transform="translate(0 5)"><g transform="translate(0 1.6)" fill="#3A0000" fill-opacity=".32"><path d="M31 27C25.5 23.6 18.5 23 12 24.6V44.6C18.5 43 25.5 43.6 31 47Z"/><path d="M33 27C38.5 23.6 45.5 23 52 24.6V44.6C45.5 43 38.5 43.6 33 47Z"/><path d="M32 7C32.8 11 35 13.2 39 14C35 14.8 32.8 17 32 21C31.2 17 29 14.8 25 14C29 13.2 31.2 11 32 7Z"/></g><path d="M31 27C25.5 23.6 18.5 23 12 24.6V44.6C18.5 43 25.5 43.6 31 47Z" fill="#fff"/><path d="M33 27C38.5 23.6 45.5 23 52 24.6V44.6C45.5 43 38.5 43.6 33 47Z" fill="#fff" fill-opacity=".9"/><path d="M32 7C32.8 11 35 13.2 39 14C35 14.8 32.8 17 32 21C31.2 17 29 14.8 25 14C29 13.2 31.2 11 32 7Z" fill="#FFD166"/></g></svg><p>Loading YYC Advisory Brain…</p></div></div>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

@@ -17,7 +17,8 @@
     "preview": "vite preview",
     "e2e": "playwright test",
     "budget": "node scripts/check-budget.mjs",
-    "perf": "playwright test e2e/perf.spec.js"
+    "perf": "playwright test e2e/perf.spec.js",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
