@@ -9,7 +9,8 @@ export default defineConfig({
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,
-  reporter: [['list']],
+  retries: process.env.CI ? 1 : 0, // a shared CI machine is slower and noisier than a PC: one retry for a timing hiccup (a real bug fails twice)
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   outputDir: 'e2e/.results',
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,

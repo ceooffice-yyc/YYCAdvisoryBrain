@@ -1,0 +1,69 @@
+# Continuous integration: runs on every push to main and on every pull request.
+# Nothing here uses real secrets, the real database or the real AI service:
+#   - unit tests use in-memory fakes,
+#   - browser tests start the built app in its browser-only mode with a made-up AI key (see playwright.config.js).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# a newer push to the same branch cancels the older run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Fast checks (about a minute): code style and bugs, unit tests, the production build, the size limit, known-vulnerable packages.
+  checks:
+    name: Lint, unit tests, build, size budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Size budget (first load must stay under the limit)
+        run: npm run budget
+      - name: Dependency audit (production packages, high severity and above)
+        run: npm audit --omit=dev --audit-level=high
+
+  # Slower checks (several minutes): the app in a real browser, including the accessibility scans (light and dark) and the responsive screenshots.
+  e2e:
+    name: Browser tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chrome for Playwright
+        run: npx playwright install --with-deps chrome
+      - name: Browser tests
+        run: npm run e2e
+        env:
+          CI: "true"
+      - name: Keep the failure report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: e2e/.results
+          retention-days: 7
+          if-no-files-found: ignore
