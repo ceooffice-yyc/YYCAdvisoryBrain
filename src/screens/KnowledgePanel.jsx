@@ -1589,7 +1589,7 @@ export function KnowledgePanel({
         >
           <div className="yyc-stat-inner">
             <div className="yyc-stat-icon is-gold"><Icon name="scale" size={18} /></div>
-            <div style={{ flex: "1 0 auto" }}>
+            <div className="yyc-stat-col">
               <div className="yyc-stat-label">{t.leverRecords}</div>
               <div className="yyc-stat-num">
                 {leverFilter !== "all" ? `${leverCounts[leverFilter] || 0}/${totalRecords}` : totalRecords}

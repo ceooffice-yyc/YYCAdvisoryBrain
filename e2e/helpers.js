@@ -26,6 +26,9 @@ export const library = () => {
 
 /* Put the invented library in place before the app starts (only once per browser context). `empty` = a brand-new, empty library. */
 export async function seed(page, { empty = false } = {}) {
+  // Opening Ask the Brain asks the AI for example questions. Tests must never reach the real AI service (it needs a key, costs tokens, and a made-up key gives a 401 error in the console
+  // that a slow or fast network turns into a flaky failure), so the call is answered here with an empty, valid reply. A test that needs its own AI answer can register its own route afterwards.
+  await page.route('**/api/groq/chat', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content: '{"en":[],"zh":[]}' } }] }) }));
   await page.addInitScript(({ lib, emptyLib }) => {
     if (localStorage.getItem('kb:config')) return;
     localStorage.setItem('kb:config', JSON.stringify({ adminPass: '12345' }));

@@ -93,6 +93,7 @@ export function GlobalStyles() {
       .yyc-stat-icon.is-gold { background: ${P.goldSoft}; color: ${P.goldText}; }
       .yyc-stat-icon.is-green { background: ${P.greenSoft}; color: ${P.greenText}; }
       .yyc-stat-label { font-size: 11.5px; color: ${P.sub}; font-weight: 650; letter-spacing: .00em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .yyc-stat-col { flex: 1 0 auto; }
       .yyc-stat-num { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 3px; white-space: nowrap; } /* a figure like 378/379 never breaks across lines */
       .yyc-toolbar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
       .yyc-search { position: relative; flex: 1; min-width: 220px; max-width: 380px; }
@@ -416,6 +417,9 @@ export function GlobalStyles() {
         .yyc-stat { padding: 14px; }
         .yyc-stat-hint-text { display: none; }
         .yyc-stat-num { font-size: clamp(20px, 6.2vw, 24px); }
+        /* the Lever records figure (e.g. 378/379) shrinks to the room beside the icon, so a wider font (Android, Linux) cannot push it past the card; browsers without container units keep the line above */
+        .yyc-stat-col { flex: 1 1 0; min-width: 0; container-type: inline-size; }
+        .yyc-stat-col .yyc-stat-num { font-size: clamp(15px, 21cqw, 24px); }
         .yyc-stat-label { white-space: normal; line-height: 1.25; }
         .yyc-modal-backdrop { padding: 0; align-items: flex-end; }
         .yyc-modal { width: 100% !important; max-width: 100% !important; max-height: 92dvh; border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom); }

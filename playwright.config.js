@@ -23,6 +23,6 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     // empty Supabase settings win over the ones in .env, so the test server never talks to the real database
-    env: { PORT: String(PORT), HOST: '127.0.0.1', GROQ_API_KEY: 'e2e-not-a-real-key', GROQ_API_KEYS: '', GROQ_API_KEY_2: '', GROQ_API_KEY_3: '', GROQ_API_KEY_4: '', SUPABASE_URL: '', SUPABASE_ANON_KEY: '', SUPABASE_SERVICE_ROLE_KEY: '', GEMINI_API_KEY: '' },
+    env: { PORT: String(PORT), HOST: '127.0.0.1', GROQ_API_KEY: 'e2e-not-a-real-key', GROQ_API_KEYS: '', GROQ_API_KEY_2: '', GROQ_API_KEY_3: '', GROQ_API_KEY_4: '', GROQ_API_KEY_5: '', GROQ_API_KEY_6: '', GROQ_API_KEY_7: '', GROQ_API_KEY_8: '', GROQ_API_KEY_9: '', SUPABASE_URL: '', SUPABASE_ANON_KEY: '', SUPABASE_SERVICE_ROLE_KEY: '', GEMINI_API_KEY: '' },
   },
 });
