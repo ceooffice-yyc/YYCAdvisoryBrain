@@ -13,7 +13,7 @@ export function GlobalStyles() {
       .yyc-brandbar { height: 0px; background: linear-gradient(90deg, ${P.crimson} 0%, ${P.maroon} 60%, ${P.gold} 100%); position: sticky; top: 0; z-index: 50; }
       .yyc-shell { display: flex; min-height: calc(100vh); max-width: 1560px; margin: 0 auto; }
       @media (min-width: 1580px) { .yyc-shell { border-left: 1px solid ${P.line}; border-right: 1px solid ${P.line}; } }
-      .yyc-sidebar { width: 256px; flex-shrink: 0; background: linear-gradient(180deg, rgba(var(--brand-rgb), 0.07) 0, rgba(var(--brand-rgb), 0) 220px), ${P.card}; border-right: 1px solid ${P.line}; display: none; flex-direction: column; padding: 22px 14px 16px; position: sticky; height: calc(100vh); overflow-y: auto; }
+      .yyc-sidebar { width: 256px; flex-shrink: 0; background: linear-gradient(180deg, rgba(var(--brand-rgb), 0.07) 0, rgba(var(--brand-rgb), 0) 220px), ${P.card}; border-right: 1px solid ${P.line}; display: none; flex-direction: column; padding: 22px 14px 16px; position: sticky; top: 0; height: 100vh; height: 100dvh; overflow-y: auto; } /* "top: 0" is what keeps it in place while the page scrolls */
       @media (min-width: 900px) { .yyc-sidebar { display: flex; } }
       .yyc-brand { display: flex; align-items: center; gap: 12px; padding: 2px 6px 24px; }
       .yyc-brand-mark { width: 42px; height: 42px; flex-shrink: 0; display: block; border-radius: 12px; box-shadow: 0 8px 16px -8px rgba(var(--brand-rgb), 0.6), 0 1px 2px rgba(0, 0, 0, 0.1); }

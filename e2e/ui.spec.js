@@ -674,3 +674,29 @@ test('UX-06 the danger and brand colours are clearly different hues in both them
     expect(gap, `${scheme}: danger ${c.danger} vs brand ${c.brand}`).toBeGreaterThanOrEqual(8); // visibly warmer, not the same red
   }
 });
+
+/* The left panel stays in place while a long page scrolls (it must have a "top" to stick to), . */
+const longLibrary = (page) => page.addInitScript(() => {
+  if (localStorage.getItem('kb:config')) return;
+  const index = Array.from({ length: 40 }, (_, i) => ({ id: 'd' + i, status: 'active', title: 'Case ' + i, doc_type: 'case_study', industry: 'Services (invented)', industry_main: 'Services', industry_sub: 'Test', language: 'en', problem_signature: 'A made-up problem', created: 1760000000000 + i }));
+  localStorage.setItem('kb:config', JSON.stringify({ adminPass: '12345' })); localStorage.setItem('kb:index', JSON.stringify(index)); localStorage.setItem('kb:levers', '[]');
+});
+
+test('UI-04 desktop: the left panel stays fixed in view while a long page scrolls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await longLibrary(page);
+  await page.goto('/'); await page.locator('.yyc-doc').first().waitFor();
+  const side = () => page.evaluate(() => { const e = document.querySelector('.yyc-sidebar'), r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), vh: innerHeight, scrolled: Math.round(scrollY), top_css: getComputedStyle(e).top }; });
+  expect((await side()).top_css).toBe('0px'); // a sticky panel needs a "top" to stick to
+  for (const y of [400, 1500, 99999]) {
+    await page.evaluate((to) => window.scrollTo(0, to), y);
+    await page.waitForTimeout(200);
+    const s = await side();
+    expect(s.scrolled).toBeGreaterThan(0);
+    expect(s.top, `at scroll ${s.scrolled}`).toBe(0);
+    expect(s.bottom).toBe(s.vh);
+  }
+  await expect(page.locator('.yyc-sidebar .yyc-brand-name')).toBeInViewport(); // the name and the tabs are still in view at the bottom of the page
+  await expect(page.locator('.yyc-sidebar .yyc-nav-item').first()).toBeInViewport();
+});
+
