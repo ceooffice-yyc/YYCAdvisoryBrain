@@ -136,7 +136,7 @@ export default function App() {
   useEffect(() => { kbWorkingRef.current = kbWorking; }, [kbWorking]);
 
   // Role changes while the page is open (an admin made someone a viewer, or the other way round, or disabled the account).
-  // The server already refuses anything the person may no longer do; this makes the SCREEN follow within minutes, with a message instead of a confusing refusal.
+  // The server already refuses anything the person may no longer do; this makes the SCREEN follow within about 20 seconds, with a message instead of a confusing refusal.
   const checkRole = useCallback(async (fresh) => {
     const W = window.storage;
     if (!W?.remote || !W.user) return; // guests and the browser-only mode have no account
@@ -157,9 +157,9 @@ export default function App() {
   }, [flash]);
   useEffect(() => {
     if (!(window.storage?.remote && window.storage.user)) return undefined;
-    const EVERY_MS = 5 * 60_000, MIN_GAP_MS = 2 * 60_000, FORCE_GAP_MS = 10_000;
-    // quiet moments only: the tab is visible, and not more often than every couple of minutes (a few requests an hour per person)
-    const maybe = () => { if (document.visibilityState === "visible" && Date.now() - lastRoleCheck.current > MIN_GAP_MS) checkRole(false); };
+    const EVERY_MS = 20_000, MIN_GAP_MS = 5_000, FORCE_GAP_MS = 5_000; // a role change shows within about 20 s (at once on refresh, on coming back to the tab, or when an admin action is refused)
+    // only while the tab is visible, and never more often than every few seconds (one small request; the server answers from Supabase's auth, not the database)
+    const maybe = () => { if (document.visibilityState === "visible" && Date.now() - lastRoleCheck.current > MIN_GAP_MS) checkRole(true); };
     const force = () => { if (Date.now() - lastRoleCheck.current > FORCE_GAP_MS) checkRole(true); }; // an admin-only action was refused: look at once, with a fresh answer
     const timer = setInterval(maybe, EVERY_MS);
     document.addEventListener("visibilitychange", maybe);

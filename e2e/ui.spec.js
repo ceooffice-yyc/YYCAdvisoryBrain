@@ -487,7 +487,7 @@ test('SEC-07 an account disabled while its page is open is sent to the sign-in s
   await ctx.close();
 });
 
-test('SEC-07 the role is re-checked only now and then: once about every five minutes while the page is visible, once for a burst of refusals, not again right after a focus', async ({ browser }) => {
+test('SEC-07 the role is re-checked only now and then: once about every 20 seconds while the page is visible, once for a burst of refusals, not again right after a focus', async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   const state = { admin: true, meCalls: 0 };
@@ -497,11 +497,12 @@ test('SEC-07 the role is re-checked only now and then: once about every five min
   await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
   const settle = async () => { let last = -1; while (last !== state.meCalls) { last = state.meCalls; await page.waitForTimeout(400); } return state.meCalls; }; // let in-flight requests finish
   const base = await settle(); // start-up requests are done
-  await page.clock.runFor('04:30'); // 4.5 minutes: too early for the five-minute check
+  await page.clock.runFor('00:15'); // 15 seconds: too early for the 20-second check
   expect(await settle()).toBe(base);
-  await page.clock.runFor('01:00'); // 5.5 minutes: one check has run
+  await page.clock.runFor('00:10'); // 25 seconds: one check has run
   const afterFirst = await settle();
   expect(afterFirst).toBe(base + 1);
+  await page.clock.runFor('00:06'); // a few seconds on, so a refusal may ask again
   await page.evaluate(() => { for (let i = 0; i < 10; i++) window.dispatchEvent(new Event('yyc-role-check')); }); // ten refusals in a burst: one look, with a fresh answer
   const afterBurst = await settle();
   expect(afterBurst).toBe(afterFirst + 1);

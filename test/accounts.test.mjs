@@ -265,7 +265,9 @@ test('a temporary password only opens the "choose a new password" door', async (
   assert.deepEqual([read.status, read.body.code], [403, 'must_change_password'], 'no library access yet');
   const chat = await handleDb({ method: 'POST', headers: { authorization: 'Bearer temp' }, body: { op: 'chat_get' } }, { env, now: () => T });
   assert.equal(chat.status, 403);
+  authTest.setClient({ auth: { getUser: async () => ({ data: { user: { id: 't', email: 't@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z', app_metadata: { must_change_password: true } } } }) } }); // "who am I" asks Supabase every time
   const who = await handleDb({ method: 'GET', headers: { authorization: 'Bearer temp' }, query: { action: 'me' } }, { env, now: () => T });
+  authTest.setClient(null);
   assert.deepEqual([who.status, who.body.mustChangePassword], [200, true], '"who am I" works so the app knows to ask');
   const change = await handleDb({ method: 'POST', headers: { authorization: 'Bearer temp' }, body: { op: 'set_password', password: 'short' } }, { env, now: () => T });
   assert.equal(change.status, 400, 'set_password is let through and checked (a too-short password is refused)');
@@ -610,7 +612,7 @@ test('a demoted admin is stopped on the very next admin action, even while the o
   } finally { authTest.setClient(null); authTest.cache.clear(); }
 });
 
-test('"who am I" with fresh=1 reads the role again; without it the memory may answer', async () => {
+test('"who am I" always reads the role again (a refresh or a check sees a role change at once, never the one-minute memory)', async () => {
   const T = 1_700_000_000_000;
   const env = { SUPABASE_URL: 'http://127.0.0.1:9', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_ANON_KEY: 'y', ALLOWED_EMAIL_DOMAINS: 'yycadvisors.com' };
   const base = { id: 'a2', email: 'someone@yycadvisors.com', email_confirmed_at: '2026-01-01T00:00:00Z' };
@@ -619,10 +621,10 @@ test('"who am I" with fresh=1 reads the role again; without it the memory may an
   authTest.setClient({ auth: { getUser: async () => ({ data: { user: { ...base, app_metadata: {} } } }) } }); // now a viewer
   try {
     const cached = await handleDb({ method: 'GET', query: { action: 'me' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 1000 });
-    assert.equal(cached.body.isAdmin, true, 'the one-minute memory answers an ordinary "me"');
+    assert.equal(cached.body.isAdmin, false, 'an ordinary "me" is not answered from the one-minute memory');
     const fresh = await handleDb({ method: 'GET', query: { action: 'me', fresh: '1' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 1000 });
     assert.equal(fresh.body.isAdmin, false, 'fresh=1 sees the demotion at once');
     const again = await handleDb({ method: 'GET', query: { action: 'me' }, headers: { authorization: 'Bearer tok2' } }, { env, now: () => T + 2000 });
-    assert.equal(again.body.isAdmin, false, 'and the memory is corrected for the next ordinary request');
+    assert.equal(again.body.isAdmin, false, 'and stays correct for the next request');
   } finally { authTest.setClient(null); authTest.cache.clear(); }
 });
