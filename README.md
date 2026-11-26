@@ -248,7 +248,7 @@ The repo is Vercel-ready: the static site is built by Vite and `api/groq/chat.js
 
 There  is an **available deployed web site** that you might get reach on: 
 
-👉 [Click here to visit YYC Advisory Brain](https://yyc-advisory-brain.vercel.app/)
+👉 [Click here to visit YYC Advisory Brain](https://yyc-brain.vercel.app/)
 
 1. Push to GitHub and import the repo in Vercel (framework preset: **Vite**).
 2. **Project -> Settings -> Environment Variables:** add `GROQ_API_KEY` (and optionally `GROQ_API_KEY_2`, `GROQ_API_KEY_3`, `GROQ_API_KEY_4`) for Production + Preview.
