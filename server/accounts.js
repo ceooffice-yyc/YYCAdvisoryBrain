@@ -385,8 +385,22 @@ export async function rejectAllRequests(sb, actor) {
   return { rejected: closed.length };
 }
 
+/* The trail, newest first. Each row also says WHO acted as a name and an id (looked up from the accounts by the email the trail stores), so the Activity table can show "Name - id".
+   If the accounts cannot be read, or the person no longer has an account, the row still comes back with the email only: reading the trail never fails because of the lookup. */
 export async function listEvents(sb, limit = 100) {
-  return must(await sb.from('account_events').select('id,at,actor,action,target,detail').order('at', { ascending: false }).limit(Math.min(Math.max(Number(limit) || 100, 1), 300)), 'Reading the account trail');
+  const events = must(await sb.from('account_events').select('id,at,actor,action,target,detail').order('at', { ascending: false }).limit(Math.min(Math.max(Number(limit) || 100, 1), 300)), 'Reading the account trail');
+  if (!events.length) return events;
+  let people = new Map();
+  try {
+    people = new Map((await rawUsers(sb)).map((u) => {
+      const meta = u.user_metadata || {};
+      return [normEmail(u.email), { id: u.id, name: String(meta.full_name || meta.name || '').trim().replace(/\s+/g, ' ').slice(0, 120) }];
+    }));
+  } catch (e) { console.error('could not look up the names for the trail:', e.message); }
+  return events.map((e) => {
+    const who = people.get(normEmail(e.actor));
+    return { ...e, actorName: (who && who.name) || '', actorId: (who && who.id) || '' };
+  });
 }
 
 export const _test = { recentRequests, resetLimits: () => { recentRequests.clear(); totalHits = []; } };

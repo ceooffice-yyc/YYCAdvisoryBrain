@@ -701,3 +701,45 @@ test('UI-04 desktop: the left panel stays fixed in view while a long page scroll
   await expect(page.locator('.yyc-sidebar .yyc-nav-item').first()).toBeInViewport();
 });
 
+
+/* The Activity table on the Users screen: who (name - id), what, when. All names are invented. */
+for (const [w, h] of [[375, 667], [1280, 800]]) {
+  test(`AUD-01 ${w}px: the Activity table shows the admin as "name - id", the action and the date`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: w < 900, hasTouch: w < 900 });
+    const page = await ctx.newPage();
+    await signedInAs(page);
+    const events = [
+      { id: 'e1', at: '2026-11-25T10:15:00.000Z', actor: 'amira.tan@yyc-example.test', actorName: 'Amira Tan', actorId: 'aaaa1111-2222-3333-4444-555566667777', action: 'role', target: 'lee@yyc-example.test', detail: { role: 'admin' } },
+      { id: 'e2', at: '2026-11-24T09:00:00.000Z', actor: 'amira.tan@yyc-example.test', actorName: 'Amira Tan', actorId: 'aaaa1111-2222-3333-4444-555566667777', action: 'doc_delete', target: 'Acme Bakery turnaround', detail: { id: 'd1' } },
+      { id: 'e3', at: '2026-11-23T08:00:00.000Z', actor: 'old.admin@yyc-example.test', actorName: '', actorId: '', action: 'disable', target: 'sam@yyc-example.test', detail: {} },
+    ];
+    await page.route('**/api/db', async (route) => {
+      if (route.request().method() === 'POST' && (route.request().postDataJSON() || {}).op === 'account_events') return route.fulfill({ json: { events } });
+      return route.fallback();
+    });
+    await page.goto('/');
+    await page.locator('.yyc-doc').first().waitFor({ timeout: 15_000 });
+    await page.locator('.yyc-botnav-item:visible, .yyc-nav-item:visible').filter({ hasText: 'Users' }).first().click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: /^Activity \(3\)/ }).click();
+    const table = page.locator('table.yyc-audit');
+    await expect(table.locator('thead th')).toHaveText(['Admin (name - id)', 'Action', 'Details', 'Date']);
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0).locator('td').nth(0)).toHaveText('Amira Tan - aaaa1111');
+    await expect(rows.nth(0).locator('td').nth(1)).toHaveText('Changed a role');
+    await expect(rows.nth(0).locator('td').nth(2)).toHaveText('lee@yyc-example.test as admin');
+    await expect(rows.nth(1).locator('td').nth(1)).toHaveText('Deleted a material');
+    await expect(rows.nth(1).locator('td').nth(2)).toHaveText('Acme Bakery turnaround');
+    await expect(rows.nth(2).locator('td').nth(0)).toHaveText('old.admin@yyc-example.test'); // no account any more: the email only
+    expect(await rows.nth(0).locator('td').nth(3).innerText()).toMatch(/2026|25/); // a real date, not "never"
+    expect(await rows.nth(0).locator('td').nth(0).getAttribute('title')).toContain('aaaa1111-2222-3333-4444-555566667777'); // the full id is in the tooltip
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(w); // the table scrolls inside its own box, never the page
+    for (const theme of ['light', 'dark']) { // readable and usable by keyboard and screen reader in both themes
+      await page.emulateMedia({ colorScheme: theme });
+      const scan = await new AxeBuilder({ page }).include('.yyc-audit-wrap').analyze();
+      expect(scan.violations.map((v) => `${v.id}: ${v.nodes.length}`), theme).toEqual([]);
+    }
+    await ctx.close();
+  });
+}

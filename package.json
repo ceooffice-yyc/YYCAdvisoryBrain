@@ -14,6 +14,7 @@
     "reindex": "node scripts/reindex.mjs",
     "eval": "node scripts/eval.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",
+    "test:staging": "node --test \"test/staging/*.staging.mjs\"",
     "preview": "vite preview",
     "e2e": "playwright test",
     "budget": "node scripts/check-budget.mjs",

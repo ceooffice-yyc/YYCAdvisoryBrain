@@ -178,6 +178,7 @@ async function restoreDoc(sb, user, env, id) {
   must(await sb.from('documents').update(patch).eq('id', id).eq('status', 'deleted'), 'restore document');
   const records = doc.deleted_at ? must(await sb.from('records').update(patch).eq('doc_id', id).eq('status', 'deleted').eq('deleted_at', doc.deleted_at).select('id'), 'restore records').length : 0;
   dirty();
+  await acct.logEvent(sb, user.email, 'doc_restore', String(doc.title || id).slice(0, 200), { id, records });
   const indexed = await reindexDocSafe(sb, env, { ...doc, ...patch }); // search finds it again
   return { restored: true, records, indexed };
 }
@@ -189,6 +190,7 @@ async function restoreRecord(sb, user, id) {
   if (!doc || doc.status !== 'active') throw new HttpError(409, 'Restore its material first, then this strategy.');
   must(await sb.from('records').update({ status: 'active', deleted_at: null, deleted_by: null, updated_by: user.email, updated_at: nowIso() }).eq('id', id).eq('status', 'deleted'), 'restore record');
   dirty();
+  await acct.logEvent(sb, user.email, 'record_restore', String(rec.claim_en || rec.claim || id).slice(0, 200), { id, doc_id: rec.doc_id });
   return { restored: true };
 }
 
@@ -290,10 +292,12 @@ const OPS = {
     level: 'admin',
     run: async ({ sb, user }, a) => {
       const id = trim(a.id, 100); if (!id) throw bad('Bad id');
+      const was = must(await sb.from('documents').select('title,status').eq('id', id).limit(1), 'read document')[0];
       const patch = { status: 'deleted', deleted_at: nowIso(), deleted_by: user.email, updated_by: user.email, updated_at: nowIso() };
       must(await sb.from('documents').update(patch).eq('id', id).eq('status', 'active'), 'delete document');
       must(await sb.from('records').update(patch).eq('doc_id', id).eq('status', 'active'), 'delete records');
       dirty();
+      if (was && was.status === 'active') await acct.logEvent(sb, user.email, 'doc_delete', String(was.title || id).slice(0, 200), { id });
       try { await deleteDocChunks(sb, id); } catch (e) { console.error(`removing search chunks of ${id} failed:`, e.message); } // search also ignores deleted documents
       return {};
     },

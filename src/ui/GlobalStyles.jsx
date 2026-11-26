@@ -94,6 +94,12 @@ export function GlobalStyles() {
       .yyc-stat-icon.is-green { background: ${P.greenSoft}; color: ${P.greenText}; }
       .yyc-stat-label { font-size: 11.5px; color: ${P.sub}; font-weight: 650; letter-spacing: .00em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .yyc-stat-col { flex: 1 0 auto; }
+      .yyc-audit-wrap { overflow-x: auto; border-top: 1px solid ${P.line}; }
+      .yyc-audit { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.45; min-width: 640px; }
+      .yyc-audit th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: ${P.sub}; background: ${P.wash}; padding: 9px 14px; white-space: nowrap; }
+      .yyc-audit td { padding: 9px 14px; border-top: 1px solid ${P.line}; vertical-align: top; overflow-wrap: anywhere; }
+      .yyc-audit tbody tr:first-child td { border-top: 0; }
+      .yyc-audit-date { white-space: nowrap; color: ${P.sub}; }
       .yyc-stat-num { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 3px; white-space: nowrap; } /* a figure like 378/379 never breaks across lines */
       .yyc-toolbar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
       .yyc-search { position: relative; flex: 1; min-width: 220px; max-width: 380px; }

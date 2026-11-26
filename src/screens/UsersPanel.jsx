@@ -6,20 +6,21 @@ import { SkeletonPage } from "../ui/Skeleton.jsx";
 
 /* Admin: who can use the library. Nobody registers on their own: people ask for access, an admin approves, and the account is created either
    with an emailed link (EMAIL_INVITES=on) or with a one-time temporary password that the admin hands over (the default, no email needed). */
-const TRAIL_TEXT = {
-  request: (e) => `${e.target} asked for access`,
-  invite: (e) => `${e.actor} invited ${e.target} as ${(e.detail && e.detail.role) || "viewer"}`,
-  create: (e) => `${e.actor} created an account for ${e.target} as ${(e.detail && e.detail.role) || "viewer"}`,
-  approve: (e) => `${e.actor} approved ${e.target}${e.detail && e.detail.role ? ` as ${e.detail.role}` : ""}`,
-  reject: (e) => `${e.actor} rejected the request of ${e.target}`,
-  role: (e) => `${e.actor} made ${e.target} ${(e.detail && e.detail.role) || "viewer"}`,
-  disable: (e) => `${e.actor} disabled ${e.target}`,
-  enable: (e) => `${e.actor} enabled ${e.target}`,
-  reset: (e) => `${e.actor} sent a password reset email to ${e.target}`,
-  reject_all: (e) => `${e.actor} rejected all ${(e.detail && e.detail.count) || 0} waiting requests`,
-  temp_password: (e) => `${e.actor} set a temporary password for ${e.target}`,
-  password_changed: (e) => `${e.target} chose a new password`,
+
+// The Activity table: what each kind of entry is called, and what the "Details" column says about it.
+const ACTION_LABEL = {
+  request: "Asked for access", invite: "Invited a person", create: "Created an account", approve: "Approved a request", reject: "Rejected a request", reject_all: "Rejected all requests",
+  role: "Changed a role", disable: "Disabled an account", enable: "Enabled an account", reset: "Sent a password reset", temp_password: "Set a temporary password", password_changed: "Chose a new password",
+  doc_delete: "Deleted a material", doc_restore: "Restored a material", record_restore: "Restored a strategy",
 };
+const trailDetail = (e) => {
+  const d = e.detail || {};
+  if (e.action === "reject_all") return `${d.count || 0} waiting requests`;
+  if (e.action === "doc_restore" && d.records) return `${e.target || ""} (with ${d.records} ${d.records === 1 ? "strategy" : "strategies"})`;
+  return [e.target, d.role ? `as ${d.role}` : ""].filter(Boolean).join(" ");
+};
+/* "Name - id": the name from the account (the email when there is none) and the first 8 characters of the account id; the full id is in the tooltip. */
+const adminLabel = (e) => (e.actorId ? `${e.actorName || e.actor} - ${String(e.actorId).slice(0, 8)}` : (e.actor || "unknown"));
 
 /* The temporary password is shown ONCE, here. It is not stored anywhere the admin can look it up again. */
 function TempPasswordModal({ info, onClose }) {
@@ -199,12 +200,23 @@ export function UsersPanel({ flash, setConfirm }) {
         </button>
         {showTrail && (events.length === 0
           ? <div style={{ padding: "0 18px 14px", fontSize: 13, color: P.sub }}>Nothing yet.</div>
-          : events.map((e) => (
-            <div key={e.id} style={{ padding: "9px 18px", borderTop: `1px solid ${P.line}`, fontSize: 13, lineHeight: 1.5 }}>
-              {(TRAIL_TEXT[e.action] || ((x) => `${x.actor} ${x.action} ${x.target}`))(e)}
-              <span style={{ color: P.faint }}> · {when(e.at)}</span>
+          : (
+            <div className="yyc-audit-wrap" tabIndex={0} role="region" aria-label="Activity table (scrolls sideways on a small screen)">
+              <table className="yyc-audit">
+                <thead><tr><th scope="col">Admin (name - id)</th><th scope="col">Action</th><th scope="col">Details</th><th scope="col">Date</th></tr></thead>
+                <tbody>
+                  {events.map((e) => (
+                    <tr key={e.id}>
+                      <td data-label="Admin" title={e.actorId ? `${e.actor} (id ${e.actorId})` : e.actor || ""}>{adminLabel(e)}</td>
+                      <td data-label="Action">{ACTION_LABEL[e.action] || e.action}</td>
+                      <td data-label="Details">{trailDetail(e) || "-"}</td>
+                      <td data-label="Date" className="yyc-audit-date">{when(e.at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )))}
+          ))}
       </div>
     </div>
   );
