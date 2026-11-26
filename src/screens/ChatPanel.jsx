@@ -226,8 +226,8 @@ export function ChatPanel({ t, lang, index, levers, openPreview, msgs, setMsgs }
       <div className="yyc-chat-wrap">
         <div className="yyc-chat-scroll">
           {msgs.length === 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", height: "100%", color: P.faint, textAlign: "left", padding: 20 }}>
-              <div style={{ width: 60, height: 60, borderRadius: 18, background: P.crimsonSoft, color: P.crimsonText, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", minHeight: "100%", flexShrink: 0, color: P.faint, textAlign: "left", padding: 20 }}>
+              <div style={{ width: 60, height: 60, flexShrink: 0, borderRadius: 18, background: P.crimsonSoft, color: P.crimsonText, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
                 <Icon name="brain" size={26} />
               </div>
               <div style={{ fontSize: 15, fontWeight: 700, color: P.ink, marginBottom: 6 }}>Ask the Brain</div>
